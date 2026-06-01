@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "twpa-full"
+version = "0.1.0"
+description = "TWPA/KITWPA harmonic-balance simulation tools"
+requires-python = ">=3.10"
+dependencies = [
+  "numpy",
+  "scipy",
+  "matplotlib",
+  "pytest",
+  "jax",
+  "jaxlib",
+]
+
+[project.scripts]
+twpa = "twpa.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["twpa*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"

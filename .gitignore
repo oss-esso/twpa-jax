@@ -1,0 +1,9 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.pytest_tmp/
+pytest-of-*/
+*.egg-info/
+outputs/
+industrial_completion_outputs/
+
