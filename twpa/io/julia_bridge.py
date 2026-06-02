@@ -34,7 +34,6 @@ import numpy as np
 
 from twpa.io.simulation_schema import (
     ALLOWED_STATUSES,
-    normalize_s_parameter_shape,
     optional_float,
     optional_int,
     read_json_object,
@@ -190,11 +189,30 @@ def read_simulation_h5(path: str | Path) -> tuple[np.ndarray | None, np.ndarray 
                 # (frequency, port_out, port_in). Normalize here so the Python side always sees
                 # the industrial contract: frequency first.
                 if frequency_hz is not None and s_parameters.ndim == 3:
-                    s_parameters = normalize_s_parameter_shape(
-                        s_parameters,
-                        n_frequency=int(frequency_hz.shape[0]),
-                        n_ports=2,
-                    )
+                    n_freq = int(frequency_hz.shape[0])
+
+                    # Python contract is always:
+                    #   (frequency, port_out, port_in)
+                    #
+                    # Julia/HDF5 may expose:
+                    #   (port_out, port_in, frequency)
+                    #
+                    # Support both 1-port and 2-port, and later N-port.
+                    if s_parameters.shape[0] == n_freq:
+                        pass
+                    elif s_parameters.shape[-1] == n_freq:
+                        s_parameters = np.transpose(s_parameters, (2, 0, 1))
+                    else:
+                        raise ValueError(
+                            "Unsupported S-parameter shape "
+                            f"{s_parameters.shape}; expected frequency axis first or last "
+                            f"with n_frequency={n_freq}."
+                        )
+
+                    if s_parameters.shape[1] != s_parameters.shape[2]:
+                        raise ValueError(
+                            f"S-parameter port dimensions must be square, got {s_parameters.shape}"
+                        )
 
         gain_db = None
         if "results" in h5 and "gain" in h5["results"]:

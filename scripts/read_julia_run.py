@@ -50,6 +50,7 @@ def build_summary(run_dir: Path) -> dict[str, Any]:
     s21_gain_db = None
     reciprocal_error = None
     match_max_abs = None
+    one_port_reflection_db = None
 
     if data.s_parameters is not None:
         s = data.s_parameters
@@ -61,9 +62,17 @@ def build_summary(run_dir: Path) -> dict[str, Any]:
             s11 = s[:, 0, 0]
             s22 = s[:, 1, 1]
 
-            s21_gain_db = (20.0 * np.log10(np.maximum(np.abs(s21), 1e-300))).tolist()
+            s21_gain_db = (
+                20.0 * np.log10(np.maximum(np.abs(s21), 1e-300))
+            ).tolist()
             reciprocal_error = float(np.max(np.abs(s21 - s12)))
             match_max_abs = float(max(np.max(np.abs(s11)), np.max(np.abs(s22))))
+
+        elif s.ndim == 3 and s.shape[1:] == (1, 1):
+            s11 = s[:, 0, 0]
+            one_port_reflection_db = (
+                20.0 * np.log10(np.maximum(np.abs(s11), 1e-300))
+            ).tolist()
 
     return {
         "run_dir": str(run_dir),
@@ -86,6 +95,7 @@ def build_summary(run_dir: Path) -> dict[str, Any]:
         "gain_db_min": float(np.min(data.gain_db)) if data.gain_db is not None else None,
         "gain_db_max": float(np.max(data.gain_db)) if data.gain_db is not None else None,
         "s21_gain_db": s21_gain_db,
+        "one_port_reflection_db": one_port_reflection_db,
         "reciprocal_error_max_abs": reciprocal_error,
         "match_max_abs": match_max_abs,
         "h5_attrs": data.h5_attrs,
@@ -112,11 +122,20 @@ def print_human(summary: dict[str, Any]) -> None:
     print(f"S shape:          {summary['s_parameters_shape']}")
     print(f"gain_db_shape:    {summary['gain_db_shape']}")
     print(f"gain_db_min/max:  {summary['gain_db_min']} / {summary['gain_db_max']}")
-    print()
-    print("2-port sanity")
-    print("-------------")
-    print(f"reciprocal_error_max_abs: {summary['reciprocal_error_max_abs']}")
-    print(f"match_max_abs:            {summary['match_max_abs']}")
+
+    if summary.get("reciprocal_error_max_abs") is not None or summary.get("match_max_abs") is not None:
+        print()
+        print("2-port sanity")
+        print("-------------")
+        print(f"reciprocal_error_max_abs: {summary['reciprocal_error_max_abs']}")
+        print(f"match_max_abs:            {summary['match_max_abs']}")
+
+    if summary.get("one_port_reflection_db") is not None:
+        vals = summary["one_port_reflection_db"]
+        print()
+        print("1-port sanity")
+        print("-------------")
+        print(f"reflection_db_min/max: {min(vals)} / {max(vals)}")
 
 
 def main() -> int:
