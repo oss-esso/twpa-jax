@@ -63,7 +63,7 @@ def test_pass_status_rejects_nonfinite_residual(tmp_path: Path) -> None:
         },
     )
 
-    with pytest.raises(ValueError, match="non-finite"):
+    with pytest.raises(ValueError, match="residual_norm"):
         read_status_json(status_path)
 
 

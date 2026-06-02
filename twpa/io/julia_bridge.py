@@ -32,8 +32,14 @@ import math
 import numpy as np
 
 
-ALLOWED_STATUSES = {"PASS", "PARTIAL", "FAIL", "UNKNOWN"}
-
+from twpa.io.simulation_schema import (
+    ALLOWED_STATUSES,
+    normalize_s_parameter_shape,
+    optional_float,
+    optional_int,
+    read_json_object,
+    validate_status_payload,
+)
 
 @dataclass(frozen=True)
 class JuliaSimulationStatus:
@@ -80,33 +86,12 @@ class JuliaSimulationData:
     h5_attrs: dict[str, Any]
 
 
-def _optional_float(value: Any) -> float | None:
-    if value is None:
-        return None
-    out = float(value)
-    return out
-
-
-def _optional_int(value: Any) -> int | None:
-    if value is None:
-        return None
-    return int(value)
-
 
 def _optional_path(value: Any) -> Path | None:
     if value is None:
         return None
     return Path(str(value))
 
-
-def _read_json(path: Path) -> dict[str, Any]:
-    with path.open("r", encoding="utf-8") as f:
-        obj = json.load(f)
-
-    if not isinstance(obj, dict):
-        raise ValueError(f"Expected JSON object in {path}, got {type(obj)!r}")
-
-    return obj
 
 
 def read_status_json(path_or_run_dir: str | Path) -> JuliaSimulationStatus:
@@ -121,28 +106,14 @@ def read_status_json(path_or_run_dir: str | Path) -> JuliaSimulationStatus:
     if not path.exists():
         raise FileNotFoundError(f"Missing status JSON: {path}")
 
-    raw = _read_json(path)
+    raw = validate_status_payload(read_json_object(path), context=str(path))
 
     status = str(raw.get("status", "UNKNOWN"))
-    if status not in ALLOWED_STATUSES:
-        raise ValueError(f"Invalid simulation status {status!r} in {path}")
-
-    residual_norm = _optional_float(raw.get("residual_norm"))
-    relative_residual_norm = _optional_float(raw.get("relative_residual_norm"))
-
-    # Industrial invariant: PASS may not carry NaN/Inf residuals.
-    # Null residual is allowed for schema-only or purely analytic smoke runs.
-    if status == "PASS":
-        for name, value in [
-            ("residual_norm", residual_norm),
-            ("relative_residual_norm", relative_residual_norm),
-        ]:
-            if value is not None and not math.isfinite(value):
-                raise ValueError(f"PASS run has non-finite {name}: {value}")
-
-    if status == "PASS" and raw.get("failure_reason") not in (None, "", "null"):
-        raise ValueError(f"PASS run has failure_reason={raw.get('failure_reason')!r}")
-
+    residual_norm = optional_float(raw.get("residual_norm"), field_name="residual_norm")
+    relative_residual_norm = optional_float(
+        raw.get("relative_residual_norm"),
+        field_name="relative_residual_norm",
+    )
     return JuliaSimulationStatus(
         schema_version=str(raw.get("schema_version", "")),
         run_id=str(raw.get("run_id", "")),
@@ -153,8 +124,8 @@ def read_status_json(path_or_run_dir: str | Path) -> JuliaSimulationStatus:
         residual_norm=residual_norm,
         relative_residual_norm=relative_residual_norm,
         failure_reason=raw.get("failure_reason"),
-        runtime_s=_optional_float(raw.get("runtime_s")),
-        random_seed=_optional_int(raw.get("random_seed")),
+        runtime_s=optional_float(raw.get("runtime_s"), field_name="runtime_s"),
+        random_seed=optional_int(raw.get("random_seed"), field_name="random_seed"),
         julia_version=raw.get("julia_version"),
         josephsoncircuits_version=raw.get("josephsoncircuits_version"),
         harmonia_commit=raw.get("harmonia_commit"),
@@ -219,18 +190,11 @@ def read_simulation_h5(path: str | Path) -> tuple[np.ndarray | None, np.ndarray 
                 # (frequency, port_out, port_in). Normalize here so the Python side always sees
                 # the industrial contract: frequency first.
                 if frequency_hz is not None and s_parameters.ndim == 3:
-                    n_freq = int(frequency_hz.shape[0])
-
-                    if s_parameters.shape == (n_freq, 2, 2):
-                        pass
-                    elif s_parameters.shape == (2, 2, n_freq):
-                        s_parameters = np.transpose(s_parameters, (2, 0, 1))
-                    else:
-                        raise ValueError(
-                            "Unsupported S-parameter shape "
-                            f"{s_parameters.shape}; expected ({n_freq}, 2, 2) "
-                            f"or (2, 2, {n_freq})."
-                        )
+                    s_parameters = normalize_s_parameter_shape(
+                        s_parameters,
+                        n_frequency=int(frequency_hz.shape[0]),
+                        n_ports=2,
+                    )
 
         gain_db = None
         if "results" in h5 and "gain" in h5["results"]:

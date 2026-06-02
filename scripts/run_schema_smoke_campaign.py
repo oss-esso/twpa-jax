@@ -36,9 +36,9 @@ if str(_REPO_ROOT) not in sys.path:
 
 from twpa.io.julia_runner import run_harmonia_simulation
 from twpa.io.run_registry import register_run_dir, registry_summary
+from twpa.io.simulation_schema import SCHEMA_VERSION, write_json
 
 
-SCHEMA_VERSION = "0.1.0"
 
 
 def make_schema_smoke_config(index: int, *, n_frequency: int = 5) -> dict[str, Any]:
@@ -82,16 +82,6 @@ def make_schema_smoke_config(index: int, *, n_frequency: int = 5) -> dict[str, A
         },
     }
 
-def assert_json_serializable(obj: Any, *, context: str = "object") -> None:
-    try:
-        json.dumps(obj)
-    except TypeError as exc:
-        raise TypeError(f"{context} is not JSON serializable: {exc}") from exc
-
-def write_json(path: Path, obj: dict[str, Any]) -> None:
-    assert_json_serializable(obj, context=str(path))
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(obj, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 def campaign_paths(campaign_dir: Path) -> dict[str, Path]:
     return {

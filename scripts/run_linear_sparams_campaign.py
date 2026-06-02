@@ -38,22 +38,12 @@ if str(_REPO_ROOT) not in sys.path:
 from twpa.io.julia_bridge import load_julia_simulation
 from twpa.io.julia_runner import run_harmonia_simulation
 from twpa.io.run_registry import register_run_dir, registry_summary
+from twpa.io.simulation_schema import (
+    SCHEMA_VERSION,
+    compute_two_port_metrics as schema_compute_two_port_metrics,
+    write_json,
+)
 
-
-SCHEMA_VERSION = "0.1.0"
-
-
-def assert_json_serializable(obj: Any, *, context: str = "object") -> None:
-    try:
-        json.dumps(obj)
-    except TypeError as exc:
-        raise TypeError(f"{context} is not JSON serializable: {exc}") from exc
-
-
-def write_json(path: Path, obj: dict[str, Any]) -> None:
-    assert_json_serializable(obj, context=str(path))
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(obj, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
 def make_linear_sparams_config(
@@ -130,41 +120,11 @@ def compute_2port_metrics(run_dir: Path) -> dict[str, Any]:
     if data.s_parameters is None:
         raise ValueError(f"Run has no S-parameters: {run_dir}")
 
-    s = data.s_parameters
-
-    if s.ndim != 3 or s.shape[1:] != (2, 2):
-        raise ValueError(f"Expected S shape (frequency, 2, 2), got {s.shape}")
-
-    s11 = s[:, 0, 0]
-    s12 = s[:, 0, 1]
-    s21 = s[:, 1, 0]
-    s22 = s[:, 1, 1]
-
-    singular_values = np.linalg.svd(s, compute_uv=False)
-    max_singular_value = float(np.max(singular_values))
-
-    return {
-        "frequency_points": int(data.frequency_hz.shape[0]),
-        "frequency_min_hz": float(np.min(data.frequency_hz)),
-        "frequency_max_hz": float(np.max(data.frequency_hz)),
-        "s_shape": list(s.shape),
-        "max_abs_s11": float(np.max(np.abs(s11))),
-        "max_abs_s22": float(np.max(np.abs(s22))),
-        "max_abs_s21": float(np.max(np.abs(s21))),
-        "min_abs_s21": float(np.min(np.abs(s21))),
-        "max_abs_s12": float(np.max(np.abs(s12))),
-        "min_abs_s12": float(np.min(np.abs(s12))),
-        "reciprocal_error_max_abs": float(np.max(np.abs(s21 - s12))),
-        "passivity_max_singular_value": max_singular_value,
-        "gain_db_min": float(np.min(data.gain_db)) if data.gain_db is not None else None,
-        "gain_db_max": float(np.max(data.gain_db)) if data.gain_db is not None else None,
-        "all_arrays_finite": bool(
-            np.all(np.isfinite(data.frequency_hz))
-            and np.all(np.isfinite(s.real))
-            and np.all(np.isfinite(s.imag))
-            and (data.gain_db is None or np.all(np.isfinite(data.gain_db)))
-        ),
-    }
+    return schema_compute_two_port_metrics(
+        frequency_hz=data.frequency_hz,
+        s_parameters=data.s_parameters,
+        gain_db=data.gain_db,
+    ).to_dict()
 
 
 def run_campaign(
