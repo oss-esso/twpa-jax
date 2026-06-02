@@ -69,6 +69,7 @@ DEFAULT_HARMONIA_JTL_LINEAR_PARAMETER_NAMES = [
     "n_pump_harmonics",
     "n_modulation_harmonics",
 ]
+DEFAULT_HARMONIA_RF_JTL_LINEAR_PARAMETER_NAMES = DEFAULT_HARMONIA_JTL_LINEAR_PARAMETER_NAMES + ["Lrf_H","Lp_H"]
 
 @dataclass(frozen=True)
 class BuiltDataset:
@@ -546,30 +547,11 @@ def build_harmonia_jtl_linear_dataset(
         if not np.all(np.isfinite(gain_db)):
             raise ValueError(f"gain_db contains non-finite values: {run_dir}")
 
-        s11 = s[:, 0, 0]
-        s21 = s[:, 1, 0]
-        s12 = s[:, 0, 1]
-        s22 = s[:, 1, 1]
-
-        one_run_metrics = {
-            "frequency_points": int(data.frequency_hz.shape[0]),
-            "frequency_min_hz": float(np.min(data.frequency_hz)),
-            "frequency_max_hz": float(np.max(data.frequency_hz)),
-            "s_shape": list(s.shape),
-            "gain_db_min": float(np.min(gain_db)),
-            "gain_db_max": float(np.max(gain_db)),
-            "max_abs_s11": float(np.max(np.abs(s11))),
-            "max_abs_s21": float(np.max(np.abs(s21))),
-            "max_abs_s12": float(np.max(np.abs(s12))),
-            "max_abs_s22": float(np.max(np.abs(s22))),
-            "reciprocal_error_max_abs": float(np.max(np.abs(s21 - s12))),
-            "all_arrays_finite": bool(
-                np.all(np.isfinite(data.frequency_hz))
-                and np.all(np.isfinite(s.real))
-                and np.all(np.isfinite(s.imag))
-                and np.all(np.isfinite(gain_db))
-            ),
-        }
+        one_run_metrics = compute_two_port_metrics(
+            frequency_hz=data.frequency_hz,
+            s_parameters=s,
+            gain_db=gain_db,
+        ).to_dict()
 
         run_ids.append(data.status.run_id)
         output_dirs.append(str(run_dir))
@@ -629,6 +611,26 @@ def build_harmonia_jtl_linear_dataset(
         parameter_names=parameter_names,
     )
 
+def build_harmonia_rf_jtl_linear_dataset(*, registry_csv, output_dir, parameter_names=DEFAULT_HARMONIA_RF_JTL_LINEAR_PARAMETER_NAMES, require_pass=True):
+    return build_two_port_dataset(registry_csv=registry_csv,output_dir=output_dir,simulation_type="harmonia_rf_jtl_linear_jc_smoke",
+        dataset_filename="harmonia_rf_jtl_linear_dataset.npz",parameter_names=parameter_names,require_pass=require_pass)
+
+def build_two_port_dataset(*, registry_csv, output_dir, simulation_type, dataset_filename, parameter_names, require_pass=True):
+    registry_csv=Path(registry_csv); output_dir=Path(output_dir); output_dir.mkdir(parents=True,exist_ok=True)
+    rows=[r for r in read_registry(registry_csv) if r.get("simulation_type")==simulation_type and (not require_pass or r.get("status")=="PASS")]
+    if not rows: raise ValueError(f"No usable {simulation_type} runs found in registry: {registry_csv}")
+    params=[]; ss=[]; gains=[]; ids=[]; dirs=[]; metrics=[]; freq=None
+    for row in rows:
+        run=Path(row["output_dir"]); data=load_julia_simulation(run)
+        if data.frequency_hz is None or data.s_parameters is None or data.gain_db is None: raise ValueError(f"Missing arrays: {run}")
+        freq=_require_same_frequency(freq,data.frequency_hz,run_dir=run); params.append(extract_parameter_vector(read_resolved_config(run),parameter_names=parameter_names))
+        ss.append(data.s_parameters); gains.append(data.gain_db); ids.append(data.status.run_id); dirs.append(str(run))
+        metrics.append(compute_two_port_metrics(frequency_hz=data.frequency_hz,s_parameters=data.s_parameters,gain_db=data.gain_db).to_dict())
+    p=np.stack(params); s=np.stack(ss); g=np.stack(gains); npz=output_dir/dataset_filename; summary=output_dir/"dataset_summary.json"
+    np.savez_compressed(npz,parameter_names=np.asarray(list(parameter_names)),parameters=p,frequency_hz=freq,s_real=s.real,s_imag=s.imag,gain_db=g,run_ids=np.asarray(ids),output_dirs=np.asarray(dirs))
+    write_json(summary,{"dataset_type":simulation_type,"dataset_npz":str(npz),"n_samples":len(rows),"parameter_names":list(parameter_names),"parameter_shape":list(p.shape),"frequency_shape":list(freq.shape),"s_shape":list(s.shape),"gain_db_shape":list(g.shape),"metrics":metrics})
+    return BuiltDataset(npz,summary,len(rows),len(freq),list(parameter_names))
+
 
 def load_harmonia_jtl_linear_dataset(dataset_npz: str | Path) -> dict[str, np.ndarray]:
     path = Path(dataset_npz)
@@ -655,3 +657,4 @@ def load_linear_sparams_dataset(dataset_npz: str | Path) -> dict[str, np.ndarray
 
     with np.load(path, allow_pickle=False) as data:
         return {key: data[key] for key in data.files}
+load_harmonia_rf_jtl_linear_dataset = load_harmonia_jtl_linear_dataset

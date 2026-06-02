@@ -31,6 +31,7 @@ import math
 
 import numpy as np
 
+from twpa.io.hdf5_utils import decode_h5_scalar
 
 from twpa.io.simulation_schema import (
     ALLOWED_STATUSES,
@@ -136,11 +137,7 @@ def read_status_json(path_or_run_dir: str | Path) -> JuliaSimulationStatus:
 
 
 def _decode_h5_attr(value: Any) -> Any:
-    if isinstance(value, bytes):
-        return value.decode("utf-8")
-    if isinstance(value, np.generic):
-        return value.item()
-    return value
+    return decode_h5_scalar(value)
 
 
 def read_simulation_h5(path: str | Path) -> tuple[np.ndarray | None, np.ndarray | None, np.ndarray | None, dict[str, Any]]:

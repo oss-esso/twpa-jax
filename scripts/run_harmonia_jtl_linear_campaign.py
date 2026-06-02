@@ -22,17 +22,19 @@ import sys
 from pathlib import Path
 from typing import Any
 
-import numpy as np
-
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _WORKSPACE_ROOT = _REPO_ROOT.parent
 
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from twpa.io.julia_bridge import load_julia_simulation
+from twpa.io.campaigns import (
+    campaign_paths,
+    compute_two_port_run_metrics,
+    register_completed_run,
+)
 from twpa.io.julia_runner import run_harmonia_simulation
-from twpa.io.run_registry import register_run_dir, registry_summary
+from twpa.io.run_registry import registry_summary
 from twpa.io.simulation_schema import SCHEMA_VERSION, write_json
 
 
@@ -88,56 +90,8 @@ def make_harmonia_jtl_linear_config(
     }
 
 
-def campaign_paths(campaign_dir: Path) -> dict[str, Path]:
-    return {
-        "configs": campaign_dir / "configs",
-        "runs": campaign_dir / "runs",
-        "registry": campaign_dir / "runs.csv",
-        "summary": campaign_dir / "campaign_summary.json",
-    }
-
-
 def compute_jtl_linear_metrics(run_dir: Path) -> dict[str, Any]:
-    data = load_julia_simulation(run_dir)
-
-    if data.frequency_hz is None:
-        raise ValueError(f"Missing frequency axis: {run_dir}")
-    if data.s_parameters is None:
-        raise ValueError(f"Missing S-parameters: {run_dir}")
-    if data.gain_db is None:
-        raise ValueError(f"Missing gain_db: {run_dir}")
-
-    s = np.asarray(data.s_parameters, dtype=np.complex128)
-
-    if s.ndim != 3 or s.shape[1:] != (2, 2):
-        raise ValueError(f"Expected 2-port S shape (frequency, 2, 2), got {s.shape}")
-
-    s11 = s[:, 0, 0]
-    s21 = s[:, 1, 0]
-    s12 = s[:, 0, 1]
-    s22 = s[:, 1, 1]
-
-    gain_db = np.asarray(data.gain_db, dtype=float)
-
-    return {
-        "frequency_points": int(data.frequency_hz.shape[0]),
-        "frequency_min_hz": float(np.min(data.frequency_hz)),
-        "frequency_max_hz": float(np.max(data.frequency_hz)),
-        "s_shape": list(s.shape),
-        "gain_db_min": float(np.min(gain_db)),
-        "gain_db_max": float(np.max(gain_db)),
-        "max_abs_s21": float(np.max(np.abs(s21))),
-        "min_abs_s21": float(np.min(np.abs(s21))),
-        "max_abs_s11": float(np.max(np.abs(s11))),
-        "max_abs_s22": float(np.max(np.abs(s22))),
-        "reciprocal_error_max_abs": float(np.max(np.abs(s21 - s12))),
-        "all_arrays_finite": bool(
-            np.all(np.isfinite(data.frequency_hz))
-            and np.all(np.isfinite(s.real))
-            and np.all(np.isfinite(s.imag))
-            and np.all(np.isfinite(gain_db))
-        ),
-    }
+    return compute_two_port_run_metrics(run_dir)
 
 
 def run_campaign(
@@ -189,22 +143,13 @@ def run_campaign(
         run_record: dict[str, Any] = {
             "run_name": run_name,
             "Lj_H": float(lj_h),
-            "returncode": result.returncode,
-            "ok": result.ok,
-            "output_dir": str(output_dir),
-            "status": None if result.status is None else result.status.status,
-            "run_id": None if result.status is None else result.status.run_id,
         }
-
-        if result.status is not None:
-            registered = register_run_dir(paths["registry"], output_dir)
-            run_record["registered_status"] = registered.status
-
-        if result.ok:
-            run_record["metrics"] = compute_jtl_linear_metrics(output_dir)
-        else:
-            run_record["metrics"] = None
-            run_record["failure_reason"] = None if result.status is None else result.status.failure_reason
+        run_record.update(register_completed_run(
+            registry_csv=paths["registry"],
+            run_dir=output_dir,
+            result=result,
+            compute_metrics=compute_jtl_linear_metrics,
+        ))
 
         runs.append(run_record)
 

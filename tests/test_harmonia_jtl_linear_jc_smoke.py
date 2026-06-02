@@ -2,27 +2,13 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from tkinter.font import names
-
 import h5py
 import numpy as np
 import pytest
 
 from twpa.io.julia_bridge import load_julia_simulation
 from twpa.io.julia_runner import run_harmonia_simulation
-
-
-def _decode_h5_string(value) -> str:
-    if isinstance(value, bytes):
-        return value.decode("utf-8")
-    if hasattr(value, "decode"):
-        return value.decode("utf-8")
-    if hasattr(value, "item"):
-        item = value.item()
-        if isinstance(item, bytes):
-            return item.decode("utf-8")
-        return str(item)
-    return str(value)
+from twpa.io.hdf5_utils import decode_h5_string
 
 
 def test_actual_harmonia_jtl_linear_jc_smoke_if_available(tmp_path: Path) -> None:
@@ -73,12 +59,12 @@ def test_actual_harmonia_jtl_linear_jc_smoke_if_available(tmp_path: Path) -> Non
     h5_path = output_dir / "simulation.h5"
 
     with h5py.File(h5_path, "r") as h5:
-        assert _decode_h5_string(h5.attrs["simulation_type"]) == "harmonia_jtl_linear_jc_smoke"
-        assert _decode_h5_string(h5.attrs["backend"]) == "Harmonia.CircuitIR + JosephsonCircuits.hbsolve"
+        assert decode_h5_string(h5.attrs["simulation_type"]) == "harmonia_jtl_linear_jc_smoke"
+        assert decode_h5_string(h5.attrs["backend"]) == "Harmonia.CircuitIR + JosephsonCircuits.hbsolve"
         assert bool(h5.attrs["topology_only"]) is False
         assert int(h5.attrs["n_ports"]) == 2
 
-        topology = json.loads(_decode_h5_string(h5["topology"]["topology_json"][()]))
+        topology = json.loads(decode_h5_string(h5["topology"]["topology_json"][()]))
 
     names = topology["solver_export_names"]
 
