@@ -69,6 +69,26 @@ DEFAULT_HARMONIA_JTL_LINEAR_PARAMETER_NAMES = [
     "n_pump_harmonics",
     "n_modulation_harmonics",
 ]
+
+DEFAULT_HARMONIA_ETHZ_JTL_LINEAR_PARAMETER_NAMES = [
+    "n_cells",
+    "section_pitch",
+    "section_phase",
+    "short_section_segments",
+    "long_section_segments",
+    "long_section_every",
+    "Cg_F",
+    "Lj_H",
+    "Cj_F",
+    "Cl_F",
+    "Ll_H",
+    "port_impedance_ohm",
+    "pump_frequency_hz",
+    "pump_current_a",
+    "n_pump_harmonics",
+    "n_modulation_harmonics",
+]
+
 DEFAULT_HARMONIA_RF_JTL_LINEAR_PARAMETER_NAMES = DEFAULT_HARMONIA_JTL_LINEAR_PARAMETER_NAMES + ["Lrf_H","Lp_H"]
 
 @dataclass(frozen=True)
@@ -658,3 +678,200 @@ def load_linear_sparams_dataset(dataset_npz: str | Path) -> dict[str, np.ndarray
     with np.load(path, allow_pickle=False) as data:
         return {key: data[key] for key in data.files}
 load_harmonia_rf_jtl_linear_dataset = load_harmonia_jtl_linear_dataset
+
+def build_harmonia_ethz_jtl_linear_dataset(
+    *,
+    registry_csv: str | Path,
+    output_dir: str | Path,
+    parameter_names: Iterable[str] = DEFAULT_HARMONIA_ETHZ_JTL_LINEAR_PARAMETER_NAMES,
+    require_pass: bool = True,
+) -> BuiltDataset:
+    """
+    Build an ML-ready dataset from a bounded Harmonia ETHZ JTL linear JC campaign.
+
+    Expected simulation type:
+        harmonia_ethz_jtl_linear_jc_smoke
+
+    Output NPZ convention:
+        parameter_names    (P,)
+        parameters         (N, P)
+        frequency_hz       (F,)
+        s_real             (N, F, 2, 2)
+        s_imag             (N, F, 2, 2)
+        gain_db            (N, F)
+        run_ids            (N,)
+        output_dirs        (N,)
+    """
+    registry_csv = Path(registry_csv)
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    parameter_names = list(parameter_names)
+    rows = read_registry(registry_csv)
+
+    if not rows:
+        raise ValueError(f"Registry is empty: {registry_csv}")
+
+    selected_rows = []
+    for row in rows:
+        if row.get("simulation_type") != "harmonia_ethz_jtl_linear_jc_smoke":
+            continue
+        if require_pass and row.get("status") != "PASS":
+            continue
+        selected_rows.append(row)
+
+    if not selected_rows:
+        raise ValueError(
+            f"No usable harmonia_ethz_jtl_linear_jc_smoke runs found in registry: {registry_csv}"
+        )
+
+    run_ids: list[str] = []
+    output_dirs: list[str] = []
+    parameter_vectors: list[np.ndarray] = []
+    s_arrays: list[np.ndarray] = []
+    gain_arrays: list[np.ndarray] = []
+    metrics: list[dict[str, Any]] = []
+
+    frequency_reference: np.ndarray | None = None
+
+    for row in selected_rows:
+        run_dir = Path(row["output_dir"])
+        data = load_julia_simulation(run_dir)
+
+        if data.status.status != "PASS" and require_pass:
+            raise ValueError(f"Expected PASS run, got {data.status.status}: {run_dir}")
+
+        if data.status.simulation_type != "harmonia_ethz_jtl_linear_jc_smoke":
+            raise ValueError(
+                f"Expected harmonia_ethz_jtl_linear_jc_smoke run, got "
+                f"{data.status.simulation_type}: {run_dir}"
+            )
+
+        if data.frequency_hz is None:
+            raise ValueError(f"Missing frequency axis: {run_dir}")
+        if data.s_parameters is None:
+            raise ValueError(f"Missing S-parameters: {run_dir}")
+        if data.gain_db is None:
+            raise ValueError(f"Missing gain_db curve: {run_dir}")
+
+        s = np.asarray(data.s_parameters, dtype=np.complex128)
+        gain_db = np.asarray(data.gain_db, dtype=float)
+
+        if s.ndim != 3 or s.shape[1:] != (2, 2):
+            raise ValueError(f"Expected 2-port S shape (frequency, 2, 2), got {s.shape}")
+
+        if gain_db.shape != data.frequency_hz.shape:
+            raise ValueError(
+                f"gain_db shape {gain_db.shape} does not match "
+                f"frequency shape {data.frequency_hz.shape}: {run_dir}"
+            )
+
+        frequency_reference = _require_same_frequency(
+            frequency_reference,
+            data.frequency_hz,
+            run_dir=run_dir,
+        )
+
+        config = read_resolved_config(run_dir)
+        parameter_vector = extract_parameter_vector(
+            config,
+            parameter_names=parameter_names,
+        )
+
+        if not np.all(np.isfinite(s.real)) or not np.all(np.isfinite(s.imag)):
+            raise ValueError(f"S-parameters contain non-finite values: {run_dir}")
+        if not np.all(np.isfinite(gain_db)):
+            raise ValueError(f"gain_db contains non-finite values: {run_dir}")
+
+        s11 = s[:, 0, 0]
+        s21 = s[:, 1, 0]
+        s12 = s[:, 0, 1]
+        s22 = s[:, 1, 1]
+
+        one_run_metrics = {
+            "frequency_points": int(data.frequency_hz.shape[0]),
+            "frequency_min_hz": float(np.min(data.frequency_hz)),
+            "frequency_max_hz": float(np.max(data.frequency_hz)),
+            "s_shape": list(s.shape),
+            "gain_db_min": float(np.min(gain_db)),
+            "gain_db_max": float(np.max(gain_db)),
+            "max_abs_s11": float(np.max(np.abs(s11))),
+            "max_abs_s21": float(np.max(np.abs(s21))),
+            "max_abs_s12": float(np.max(np.abs(s12))),
+            "max_abs_s22": float(np.max(np.abs(s22))),
+            "reciprocal_error_max_abs": float(np.max(np.abs(s21 - s12))),
+            "all_arrays_finite": bool(
+                np.all(np.isfinite(data.frequency_hz))
+                and np.all(np.isfinite(s.real))
+                and np.all(np.isfinite(s.imag))
+                and np.all(np.isfinite(gain_db))
+            ),
+        }
+
+        run_ids.append(data.status.run_id)
+        output_dirs.append(str(run_dir))
+        parameter_vectors.append(parameter_vector)
+        s_arrays.append(s)
+        gain_arrays.append(gain_db)
+        metrics.append(one_run_metrics)
+
+    assert frequency_reference is not None
+
+    parameters = np.stack(parameter_vectors, axis=0)
+    s_complex = np.stack(s_arrays, axis=0)
+    gain_db_array = np.stack(gain_arrays, axis=0)
+
+    dataset_npz = output_dir / "harmonia_ethz_jtl_linear_dataset.npz"
+    summary_json = output_dir / "dataset_summary.json"
+
+    np.savez_compressed(
+        dataset_npz,
+        schema_version=np.asarray(SCHEMA_VERSION),
+        dataset_type=np.asarray("harmonia_ethz_jtl_linear_jc_smoke"),
+        parameter_names=np.asarray(parameter_names),
+        parameters=parameters,
+        frequency_hz=frequency_reference,
+        s_real=s_complex.real,
+        s_imag=s_complex.imag,
+        gain_db=gain_db_array,
+        run_ids=np.asarray(run_ids),
+        output_dirs=np.asarray(output_dirs),
+    )
+
+    summary = {
+        "schema_version": SCHEMA_VERSION,
+        "dataset_type": "harmonia_ethz_jtl_linear_jc_smoke",
+        "registry_csv": str(registry_csv),
+        "dataset_npz": str(dataset_npz),
+        "n_samples": int(parameters.shape[0]),
+        "n_parameters": int(parameters.shape[1]),
+        "parameter_names": parameter_names,
+        "n_frequency": int(frequency_reference.shape[0]),
+        "frequency_min_hz": float(np.min(frequency_reference)),
+        "frequency_max_hz": float(np.max(frequency_reference)),
+        "s_shape": list(s_complex.shape),
+        "gain_db_shape": list(gain_db_array.shape),
+        "run_ids": run_ids,
+        "output_dirs": output_dirs,
+        "metrics": metrics,
+    }
+
+    write_json(summary_json, summary)
+
+    return BuiltDataset(
+        dataset_npz=dataset_npz,
+        summary_json=summary_json,
+        n_samples=int(parameters.shape[0]),
+        n_frequency=int(frequency_reference.shape[0]),
+        parameter_names=parameter_names,
+    )
+
+
+def load_harmonia_ethz_jtl_linear_dataset(dataset_npz: str | Path) -> dict[str, np.ndarray]:
+    path = Path(dataset_npz)
+
+    if not path.exists():
+        raise FileNotFoundError(f"Missing dataset NPZ: {path}")
+
+    with np.load(path, allow_pickle=False) as data:
+        return {key: data[key] for key in data.files}
