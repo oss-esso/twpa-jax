@@ -331,6 +331,19 @@ def collect_run_metrics(
                 ),
             }
         )
+            
+        timings = read_timings_json(run_dir)
+
+        for timing_key in [
+            "topology_build_s",
+            "jc_export_s",
+            "hbsolve_s",
+            "sparameter_extract_s",
+            "h5_write_s",
+            "total_internal_s",
+        ]:
+            value = timings.get(timing_key)
+            row[timing_key] = None if value is None else float(value)
 
         if data.s_parameters is not None:
             s = np.asarray(data.s_parameters, dtype=np.complex128)
@@ -441,6 +454,40 @@ def write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
         for row in rows:
             writer.writerow(row)
 
+
+def read_timings_json(run_dir: Path) -> dict[str, float | None]:
+    h5_path = run_dir / "simulation.h5"
+
+    if not h5_path.exists():
+        return {}
+
+    try:
+        import h5py
+
+        with h5py.File(h5_path, "r") as h5:
+            if "metadata/timings_json" not in h5:
+                return {}
+
+            raw = h5["metadata/timings_json"][()]
+
+            if isinstance(raw, bytes):
+                text = raw.decode("utf-8")
+            elif hasattr(raw, "decode"):
+                text = raw.decode("utf-8")
+            elif hasattr(raw, "item"):
+                item = raw.item()
+                text = item.decode("utf-8") if isinstance(item, bytes) else str(item)
+            else:
+                text = str(raw)
+
+            parsed = json.loads(text)
+
+            if not isinstance(parsed, dict):
+                return {}
+
+            return parsed
+    except Exception:
+        return {}
 
 def summarize_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
     by_status: dict[str, int] = {}
