@@ -4,12 +4,14 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
+from types import SimpleNamespace
 import shutil
 
-from twpa.io.julia_bridge import load_julia_simulation
+from twpa.io.julia_bridge import load_julia_simulation, read_status_json
 from twpa.io.run_registry import register_run_dir
 from twpa.io.simulation_schema import compute_two_port_metrics
 from twpa.io.julia_runner import run_harmonia_simulation
+from twpa.io.julia_batch_runner import run_harmonia_simulation_batch
 from twpa.io.run_registry import registry_summary
 from twpa.io.simulation_schema import write_json
 
@@ -73,17 +75,47 @@ def compute_one_port_run_metrics(run_dir: Path) -> dict[str, Any]:
         __import__("numpy").all(__import__("numpy").isfinite(data.s_parameters)))}
 
 def run_parameter_campaign(*, values, parameter_name, campaign_type, harmonia_root, campaign_dir,
-    make_config, run_name, timeout_s=300.0, force=False, compute_metrics=compute_two_port_run_metrics):
+    make_config, run_name, timeout_s=300.0, force=False, compute_metrics=compute_two_port_run_metrics,
+    use_batch_runner=False, julia_executable="julia"):
     if force and campaign_dir.exists(): shutil.rmtree(campaign_dir)
     paths=campaign_paths(campaign_dir); paths["configs"].mkdir(parents=True,exist_ok=True); paths["runs"].mkdir(parents=True,exist_ok=True)
     runs=[]
+    prepared=[]
+
     for index,value in enumerate(values):
         name=run_name(value); config_path=paths["configs"]/f"{name}.json"; output_dir=paths["runs"]/name
         write_json(config_path,make_config(index,float(value)))
-        result=run_harmonia_simulation(config_path=config_path,output_dir=output_dir,harmonia_jl_root=harmonia_root,force=force,timeout_s=timeout_s,use_cache=not force)
-        record={"run_name":name,parameter_name:float(value)}
-        record.update(register_completed_run(registry_csv=paths["registry"],run_dir=output_dir,result=result,compute_metrics=compute_metrics)); runs.append(record)
+        prepared.append((index, float(value), name, config_path, output_dir))
+
+    if use_batch_runner:
+        batch_result=run_harmonia_simulation_batch(
+            items=[(config_path, output_dir) for _,_,_,config_path,output_dir in prepared],
+            harmonia_jl_root=harmonia_root,
+            julia_executable=julia_executable,
+            timeout_s=timeout_s,
+            force=force,
+            use_cache=not force,
+            batch_work_dir=paths["runs"]/"_julia_batch_runner",
+        )
+        record_by_output={Path(r.output_dir).resolve(): r for r in batch_result.records}
+
+        for _,value,name,config_path,output_dir in prepared:
+            status_path=output_dir/"status.json"
+            status=read_status_json(status_path) if status_path.exists() else None
+            batch_record=record_by_output.get(output_dir.resolve())
+            returncode=batch_record.returncode if batch_record is not None else batch_result.returncode
+            ok=(returncode == 0 and status is not None and status.status == "PASS")
+            result=SimpleNamespace(returncode=returncode,ok=ok,output_dir=output_dir,status=status)
+            record={"run_name":name,parameter_name:float(value),"batch_runner":True}
+            record.update(register_completed_run(registry_csv=paths["registry"],run_dir=output_dir,result=result,compute_metrics=compute_metrics)); runs.append(record)
+    else:
+        for _,value,name,config_path,output_dir in prepared:
+            result=run_harmonia_simulation(config_path=config_path,output_dir=output_dir,harmonia_jl_root=harmonia_root,
+                julia_executable=julia_executable,force=force,timeout_s=timeout_s,use_cache=not force)
+            record={"run_name":name,parameter_name:float(value),"batch_runner":False}
+            record.update(register_completed_run(registry_csv=paths["registry"],run_dir=output_dir,result=result,compute_metrics=compute_metrics)); runs.append(record)
+
     summary={"campaign_type":campaign_type,"campaign_dir":str(campaign_dir),"swept_parameter":parameter_name,
         "swept_values":[float(v) for v in values],"n_requested":len(values),"n_launched":len(runs),
-        "registry":registry_summary(paths["registry"]),"runs":runs}
+        "use_batch_runner":bool(use_batch_runner),"registry":registry_summary(paths["registry"]),"runs":runs}
     write_json(paths["summary"],summary); return summary
