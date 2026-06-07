@@ -124,9 +124,14 @@ def run_campaign(
     n_cell: int = 4,
     n_frequency: int = 11,
     use_batch_runner: bool = False,
+    jtl_linear_backend: str = "hbsolve",
+    enable_jc_setup_cache: bool = False,
 ) -> dict[str, Any]:
     if not lj_values_h:
         raise ValueError("lj_values_h must not be empty")
+
+    if jtl_linear_backend not in {"hbsolve", "hblinsolve_direct"}:
+        raise ValueError("jtl_linear_backend must be 'hbsolve' or 'hblinsolve_direct'")
 
     if force and campaign_dir.exists():
         shutil.rmtree(campaign_dir)
@@ -148,6 +153,10 @@ def run_campaign(
             n_cell=n_cell,
             n_frequency=n_frequency,
         )
+        config["solver"] = {
+            "jtl_linear_backend": jtl_linear_backend,
+            "enable_jc_setup_cache": bool(enable_jc_setup_cache),
+        }
         write_json(config_path, config)
         prepared.append((float(lj_h), run_name, config_path, output_dir))
 
@@ -222,6 +231,8 @@ def run_campaign(
         "n_requested": len(lj_values_h),
         "n_launched": len(runs),
         "use_batch_runner": bool(use_batch_runner),
+        "jtl_linear_backend": jtl_linear_backend,
+        "enable_jc_setup_cache": bool(enable_jc_setup_cache),
         "registry": registry_summary(paths["registry"]),
         "runs": runs,
     }
@@ -277,6 +288,8 @@ def main() -> int:
     parser.add_argument("--timeout-s", type=float, default=300.0)
     parser.add_argument("--force", action="store_true")
     parser.add_argument("--use-batch-runner", action="store_true", help="Run campaign points through one Julia batch process.")
+    parser.add_argument("--jtl-linear-backend", choices=["hbsolve", "hblinsolve_direct"], default="hbsolve", help="Backend for harmonia_jtl_linear_jc_smoke.")
+    parser.add_argument("--enable-jc-setup-cache", action="store_true", help="Request JC setup-cache integration telemetry for supported backends.")
     parser.add_argument("--n-cell", type=int, default=4)
     parser.add_argument("--n-frequency", type=int, default=11)
     parser.add_argument("--json", action="store_true")
@@ -292,6 +305,8 @@ def main() -> int:
         n_cell=args.n_cell,
         n_frequency=args.n_frequency,
         use_batch_runner=args.use_batch_runner,
+        jtl_linear_backend=args.jtl_linear_backend,
+        enable_jc_setup_cache=args.enable_jc_setup_cache,
     )
 
     if args.json:
