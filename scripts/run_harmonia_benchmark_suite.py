@@ -549,22 +549,26 @@ def prepare_benchmark_config(
     source_config_path: Path,
     generated_config_root: Path,
     jtl_linear_backend: str,
+    rf_jtl_linear_backend: str,
     enable_jc_setup_cache: bool,
 ) -> Path:
-    if case.name != "jtl_linear" and not enable_jc_setup_cache:
-        return source_config_path
+    solver_overrides: dict[str, Any] = {}
 
-    if case.name != "jtl_linear":
-        return source_config_path
+    if case.name == "jtl_linear":
+        if jtl_linear_backend != "hbsolve" or enable_jc_setup_cache:
+            solver_overrides["jtl_linear_backend"] = jtl_linear_backend
+            solver_overrides["enable_jc_setup_cache"] = bool(enable_jc_setup_cache)
 
-    if jtl_linear_backend == "hbsolve" and not enable_jc_setup_cache:
+    elif case.name == "rf_jtl_linear":
+        if rf_jtl_linear_backend != "hbsolve" or enable_jc_setup_cache:
+            solver_overrides["rf_jtl_linear_backend"] = rf_jtl_linear_backend
+            solver_overrides["enable_jc_setup_cache"] = bool(enable_jc_setup_cache)
+
+    if not solver_overrides:
         return source_config_path
 
     config = json.loads(source_config_path.read_text(encoding="utf-8"))
-    config["solver"] = {
-        "jtl_linear_backend": jtl_linear_backend,
-        "enable_jc_setup_cache": bool(enable_jc_setup_cache),
-    }
+    config["solver"] = solver_overrides
 
     generated_config_root.mkdir(parents=True, exist_ok=True)
     out = generated_config_root / f"{case.name}__rep{rep:02d}__solver.json"
@@ -582,6 +586,7 @@ def run_benchmark_suite(
     force: bool = False,
     use_batch_runner: bool = False,
     jtl_linear_backend: str = "hbsolve",
+    rf_jtl_linear_backend: str = "hbsolve",
     enable_jc_setup_cache: bool = False,
 ) -> dict[str, Any]:
     if repetitions <= 0:
@@ -589,6 +594,9 @@ def run_benchmark_suite(
 
     if jtl_linear_backend not in {"hbsolve", "hblinsolve_direct"}:
         raise ValueError("jtl_linear_backend must be 'hbsolve' or 'hblinsolve_direct'")
+
+    if rf_jtl_linear_backend not in {"hbsolve", "hblinsolve_direct"}:
+        raise ValueError("rf_jtl_linear_backend must be 'hbsolve' or 'hblinsolve_direct'")
 
     if force and benchmark_dir.exists():
         shutil.rmtree(benchmark_dir)
@@ -630,6 +638,7 @@ def run_benchmark_suite(
                 source_config_path=config_path,
                 generated_config_root=generated_config_root,
                 jtl_linear_backend=jtl_linear_backend,
+                rf_jtl_linear_backend=rf_jtl_linear_backend,
                 enable_jc_setup_cache=enable_jc_setup_cache,
             )
             prepared.append((case, rep, effective_config_path, run_dir))
@@ -691,6 +700,7 @@ def run_benchmark_suite(
                     "repetitions": int(repetitions),
                     "use_batch_runner": bool(use_batch_runner),
                     "jtl_linear_backend": jtl_linear_backend,
+                    "rf_jtl_linear_backend": rf_jtl_linear_backend,
                     "enable_jc_setup_cache": bool(enable_jc_setup_cache),
                     "cases": cases_json,
                     "environment": environment,
@@ -741,6 +751,7 @@ def run_benchmark_suite(
                     "repetitions": int(repetitions),
                     "use_batch_runner": bool(use_batch_runner),
                     "jtl_linear_backend": jtl_linear_backend,
+                    "rf_jtl_linear_backend": rf_jtl_linear_backend,
                     "enable_jc_setup_cache": bool(enable_jc_setup_cache),
                     "cases": cases_json,
                     "environment": environment,
@@ -757,6 +768,7 @@ def run_benchmark_suite(
         "repetitions": int(repetitions),
         "use_batch_runner": bool(use_batch_runner),
         "jtl_linear_backend": jtl_linear_backend,
+        "rf_jtl_linear_backend": rf_jtl_linear_backend,
         "enable_jc_setup_cache": bool(enable_jc_setup_cache),
         "cases": cases_json,
         "environment": environment,
@@ -815,6 +827,7 @@ def main() -> int:
     parser.add_argument("--force", action="store_true")
     parser.add_argument("--use-batch-runner", action="store_true", help="Run benchmark cases through one Julia batch process.")
     parser.add_argument("--jtl-linear-backend", choices=["hbsolve", "hblinsolve_direct"], default="hbsolve", help="Backend override for the jtl_linear benchmark case.")
+    parser.add_argument("--rf-jtl-linear-backend", choices=["hbsolve", "hblinsolve_direct"], default="hbsolve", help="Backend override for the rf_jtl_linear benchmark case.")
     parser.add_argument("--enable-jc-setup-cache", action="store_true", help="Request JC setup-cache telemetry for supported benchmark cases.")
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args()
@@ -830,6 +843,7 @@ def main() -> int:
         force=args.force,
         use_batch_runner=args.use_batch_runner,
         jtl_linear_backend=args.jtl_linear_backend,
+        rf_jtl_linear_backend=args.rf_jtl_linear_backend,
         enable_jc_setup_cache=args.enable_jc_setup_cache,
     )
 
