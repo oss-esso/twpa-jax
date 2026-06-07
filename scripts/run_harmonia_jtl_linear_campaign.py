@@ -21,6 +21,7 @@ import shutil
 import sys
 from pathlib import Path
 from typing import Any
+from types import SimpleNamespace
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _WORKSPACE_ROOT = _REPO_ROOT.parent
@@ -28,12 +29,14 @@ _WORKSPACE_ROOT = _REPO_ROOT.parent
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
+from twpa.io.julia_bridge import read_status_json
 from twpa.io.campaigns import (
     campaign_paths,
     compute_two_port_run_metrics,
     register_completed_run,
 )
 from twpa.io.julia_runner import run_harmonia_simulation
+from twpa.io.julia_batch_runner import run_harmonia_simulation_batch
 from twpa.io.run_registry import registry_summary
 from twpa.io.simulation_schema import SCHEMA_VERSION, write_json
 
@@ -94,6 +97,22 @@ def compute_jtl_linear_metrics(run_dir: Path) -> dict[str, Any]:
     return compute_two_port_run_metrics(run_dir)
 
 
+def _jtl_run_name(lj_h: float) -> str:
+    return f"Lj_{lj_h:.3e}_H".replace("+", "").replace("-", "m").replace(".", "p")
+
+
+def _result_from_status_path(*, output_dir: Path, returncode: int) -> Any:
+    status_path = output_dir / "status.json"
+    status = read_status_json(status_path) if status_path.exists() else None
+    ok = returncode == 0 and status is not None and status.status == "PASS"
+    return SimpleNamespace(
+        returncode=returncode,
+        ok=ok,
+        output_dir=output_dir,
+        status=status,
+    )
+
+
 def run_campaign(
     *,
     lj_values_h: list[float],
@@ -104,6 +123,7 @@ def run_campaign(
     force: bool = False,
     n_cell: int = 4,
     n_frequency: int = 11,
+    use_batch_runner: bool = False,
 ) -> dict[str, Any]:
     if not lj_values_h:
         raise ValueError("lj_values_h must not be empty")
@@ -115,10 +135,10 @@ def run_campaign(
     paths["configs"].mkdir(parents=True, exist_ok=True)
     paths["runs"].mkdir(parents=True, exist_ok=True)
 
-    runs: list[dict[str, Any]] = []
+    prepared: list[tuple[float, str, Path, Path]] = []
 
     for idx, lj_h in enumerate(lj_values_h):
-        run_name = f"Lj_{lj_h:.3e}_H".replace("+", "").replace("-", "m").replace(".", "p")
+        run_name = _jtl_run_name(float(lj_h))
         config_path = paths["configs"] / f"{run_name}.json"
         output_dir = paths["runs"] / run_name
 
@@ -129,29 +149,67 @@ def run_campaign(
             n_frequency=n_frequency,
         )
         write_json(config_path, config)
+        prepared.append((float(lj_h), run_name, config_path, output_dir))
 
-        result = run_harmonia_simulation(
-            config_path=config_path,
-            output_dir=output_dir,
+    runs: list[dict[str, Any]] = []
+
+    if use_batch_runner:
+        batch_result = run_harmonia_simulation_batch(
+            items=[(config_path, output_dir) for _, _, config_path, output_dir in prepared],
             harmonia_jl_root=harmonia_root,
             julia_executable=julia_executable,
             timeout_s=timeout_s,
             force=force,
             use_cache=not force,
+            batch_work_dir=paths["runs"] / "_julia_batch_runner",
         )
-
-        run_record: dict[str, Any] = {
-            "run_name": run_name,
-            "Lj_H": float(lj_h),
+        returncode_by_output = {
+            Path(record.output_dir).resolve(): int(record.returncode)
+            for record in batch_result.records
         }
-        run_record.update(register_completed_run(
-            registry_csv=paths["registry"],
-            run_dir=output_dir,
-            result=result,
-            compute_metrics=compute_jtl_linear_metrics,
-        ))
 
-        runs.append(run_record)
+        for lj_h, run_name, _, output_dir in prepared:
+            result = _result_from_status_path(
+                output_dir=output_dir,
+                returncode=returncode_by_output.get(output_dir.resolve(), int(batch_result.returncode)),
+            )
+            run_record: dict[str, Any] = {
+                "run_name": run_name,
+                "Lj_H": float(lj_h),
+                "batch_runner": True,
+            }
+            run_record.update(register_completed_run(
+                registry_csv=paths["registry"],
+                run_dir=output_dir,
+                result=result,
+                compute_metrics=compute_jtl_linear_metrics,
+            ))
+            runs.append(run_record)
+
+    else:
+        for lj_h, run_name, config_path, output_dir in prepared:
+            result = run_harmonia_simulation(
+                config_path=config_path,
+                output_dir=output_dir,
+                harmonia_jl_root=harmonia_root,
+                julia_executable=julia_executable,
+                timeout_s=timeout_s,
+                force=force,
+                use_cache=not force,
+            )
+
+            run_record: dict[str, Any] = {
+                "run_name": run_name,
+                "Lj_H": float(lj_h),
+                "batch_runner": False,
+            }
+            run_record.update(register_completed_run(
+                registry_csv=paths["registry"],
+                run_dir=output_dir,
+                result=result,
+                compute_metrics=compute_jtl_linear_metrics,
+            ))
+            runs.append(run_record)
 
     summary = {
         "schema_version": SCHEMA_VERSION,
@@ -163,13 +221,13 @@ def run_campaign(
         "n_frequency": int(n_frequency),
         "n_requested": len(lj_values_h),
         "n_launched": len(runs),
+        "use_batch_runner": bool(use_batch_runner),
         "registry": registry_summary(paths["registry"]),
         "runs": runs,
     }
 
     write_json(paths["summary"], summary)
     return summary
-
 
 def print_human_summary(summary: dict[str, Any]) -> None:
     registry = summary["registry"]
@@ -218,6 +276,7 @@ def main() -> int:
     parser.add_argument("--julia", default="julia")
     parser.add_argument("--timeout-s", type=float, default=300.0)
     parser.add_argument("--force", action="store_true")
+    parser.add_argument("--use-batch-runner", action="store_true", help="Run campaign points through one Julia batch process.")
     parser.add_argument("--n-cell", type=int, default=4)
     parser.add_argument("--n-frequency", type=int, default=11)
     parser.add_argument("--json", action="store_true")
@@ -232,6 +291,7 @@ def main() -> int:
         force=args.force,
         n_cell=args.n_cell,
         n_frequency=args.n_frequency,
+        use_batch_runner=args.use_batch_runner,
     )
 
     if args.json:
