@@ -24,6 +24,7 @@ if str(_REPO_ROOT) not in sys.path:
 
 from twpa.io.julia_bridge import load_julia_simulation
 from twpa.io.julia_runner import run_harmonia_simulation
+from twpa.io.julia_batch_runner import run_harmonia_simulation_batch
 from twpa.io.simulation_schema import SCHEMA_VERSION, write_json
 from twpa.io.topology_artifacts import load_topology_artifact
 
@@ -548,6 +549,7 @@ def run_benchmark_suite(
     repetitions: int,
     julia_executable: str = "julia",
     force: bool = False,
+    use_batch_runner: bool = False,
 ) -> dict[str, Any]:
     if repetitions <= 0:
         raise ValueError("repetitions must be positive")
@@ -574,6 +576,8 @@ def run_benchmark_suite(
     )
     write_json(benchmark_dir / "environment.json", environment)
 
+    prepared: list[tuple[BenchmarkCase, int, Path, Path]] = []
+
     for case in cases:
         config_path = config_root / case.config_filename
 
@@ -582,6 +586,73 @@ def run_benchmark_suite(
 
         for rep in range(repetitions):
             run_dir = runs_root / f"{case.name}__rep{rep:02d}"
+            prepared.append((case, rep, config_path, run_dir))
+
+    if use_batch_runner:
+        batch_timeout_s = max(600.0, sum(case.timeout_s for case, _, _, _ in prepared) + 60.0)
+
+        t_batch0 = time.perf_counter()
+        batch_result = run_harmonia_simulation_batch(
+            items=[(config_path, run_dir) for _, _, config_path, run_dir in prepared],
+            harmonia_jl_root=harmonia_root,
+            julia_executable=julia_executable,
+            timeout_s=batch_timeout_s,
+            force=force,
+            use_cache=not force,
+            batch_work_dir=runs_root / "_julia_batch_runner",
+        )
+        batch_wall_time_s = time.perf_counter() - t_batch0
+
+        record_by_output = {
+            Path(record.output_dir).resolve(): record
+            for record in batch_result.records
+        }
+
+        fallback_per_run_wall_s = batch_wall_time_s / max(1, len(prepared))
+
+        for case, rep, config_path, run_dir in prepared:
+            batch_record = record_by_output.get(run_dir.resolve())
+            python_wall_time_s = (
+                float(batch_record.runtime_s)
+                if batch_record is not None and batch_record.runtime_s is not None
+                else fallback_per_run_wall_s
+            )
+
+            row = collect_run_metrics(
+                case=case,
+                run_dir=run_dir,
+                python_wall_time_s=python_wall_time_s,
+                repetition=rep,
+                config_path=config_path,
+            )
+
+            row["returncode"] = int(batch_record.returncode) if batch_record is not None else int(batch_result.returncode)
+            row["runner_ok"] = bool(batch_record.ok) if batch_record is not None else False
+            row["batch_runner"] = True
+            row["batch_process_wall_time_s"] = float(batch_wall_time_s)
+
+            rows.append(row)
+
+            write_csv(benchmark_dir / "benchmark_runs.csv", rows)
+            write_csv(benchmark_dir / "benchmark_results.csv", rows)
+            write_json(
+                benchmark_dir / "benchmark_summary.json",
+                {
+                    "schema_version": SCHEMA_VERSION,
+                    "benchmark_type": "harmonia_josephsoncircuits_baseline",
+                    "benchmark_dir": str(benchmark_dir),
+                    "created_utc": utc_timestamp(),
+                    "repetitions": int(repetitions),
+                    "use_batch_runner": bool(use_batch_runner),
+                    "cases": cases_json,
+                    "environment": environment,
+                    "summary": summarize_rows(rows),
+                    "rows": rows,
+                },
+            )
+
+    else:
+        for case, rep, config_path, run_dir in prepared:
 
             t0 = time.perf_counter()
             result = run_harmonia_simulation(
@@ -605,10 +676,13 @@ def run_benchmark_suite(
 
             row["returncode"] = int(result.returncode)
             row["runner_ok"] = bool(result.ok)
+            row["batch_runner"] = False
+            row["batch_process_wall_time_s"] = None
 
             rows.append(row)
 
             write_csv(benchmark_dir / "benchmark_runs.csv", rows)
+            write_csv(benchmark_dir / "benchmark_results.csv", rows)
             write_json(
                 benchmark_dir / "benchmark_summary.json",
                 {
@@ -617,6 +691,7 @@ def run_benchmark_suite(
                     "benchmark_dir": str(benchmark_dir),
                     "created_utc": utc_timestamp(),
                     "repetitions": int(repetitions),
+                    "use_batch_runner": bool(use_batch_runner),
                     "cases": cases_json,
                     "environment": environment,
                     "summary": summarize_rows(rows),
@@ -630,6 +705,7 @@ def run_benchmark_suite(
         "benchmark_dir": str(benchmark_dir),
         "created_utc": utc_timestamp(),
         "repetitions": int(repetitions),
+        "use_batch_runner": bool(use_batch_runner),
         "cases": cases_json,
         "environment": environment,
         "summary": summarize_rows(rows),
@@ -637,6 +713,7 @@ def run_benchmark_suite(
     }
 
     write_csv(benchmark_dir / "benchmark_runs.csv", rows)
+    write_csv(benchmark_dir / "benchmark_results.csv", rows)
     write_json(benchmark_dir / "benchmark_summary.json", final_summary)
 
     return final_summary
@@ -684,6 +761,7 @@ def main() -> int:
     parser.add_argument("--repetitions", type=int, default=3)
     parser.add_argument("--julia", default="julia")
     parser.add_argument("--force", action="store_true")
+    parser.add_argument("--use-batch-runner", action="store_true", help="Run benchmark cases through one Julia batch process.")
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args()
 
@@ -696,6 +774,7 @@ def main() -> int:
         repetitions=args.repetitions,
         julia_executable=args.julia,
         force=args.force,
+        use_batch_runner=args.use_batch_runner,
     )
 
     if args.json:
