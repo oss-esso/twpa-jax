@@ -50,6 +50,7 @@ class JuliaBatchRunResult:
     records: tuple[JuliaBatchRunRecord, ...]
     stdout: str
     stderr: str
+    cache_telemetry: dict[str, Any] | None = None
 
     @property
     def ok(self) -> bool:
@@ -212,6 +213,7 @@ def run_harmonia_simulation_batch(
     stderr = ""
     command: tuple[str, ...] = ()
     returncode = 0
+    cache_telemetry: dict[str, Any] | None = None
 
     if to_run:
         manifest_rows = [
@@ -251,6 +253,7 @@ def run_harmonia_simulation_batch(
 
         if summary_path.exists():
             summary = _read_json(summary_path)
+            cache_telemetry = summary.get("cache_telemetry")
             launched_records = [_record_from_summary(row) for row in summary.get("runs", [])]
         else:
             launched_records = [
@@ -282,6 +285,12 @@ def run_harmonia_simulation_batch(
         stdout = "CACHE_HIT"
         stderr = ""
         returncode = 0
+        cache_telemetry = {
+            "setup_cache_integration": "python_cache_only",
+            "julia_process_reused": False,
+            "hbcompiled_circuit_base_enabled": False,
+            "hbnumeric_matrix_cache_enabled": False,
+        }
 
     records = tuple(sorted(cached_records + launched_records, key=lambda r: r.index))
 
@@ -296,4 +305,5 @@ def run_harmonia_simulation_batch(
         records=records,
         stdout=stdout,
         stderr=stderr,
+        cache_telemetry=cache_telemetry,
     )
