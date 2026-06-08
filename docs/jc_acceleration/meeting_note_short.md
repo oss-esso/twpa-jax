@@ -1,23 +1,11 @@
-﻿# Meeting Note — Direct Linear Backend Phase
+# Meeting Note
 
-I completed a concrete cleanup and acceleration phase in the Harmonia/JosephsonCircuits pipeline.
+Recent work made the linear-response path across Harmonia and JosephsonCircuits explicit and testable.
 
-Some linear CircuitIR cases were using the full `hbsolve` wrapper and then reading `linearized.S`, even though the pump current was zero. I added opt-in direct `hblinsolve` backends for JTL, RF-JTL, and ETHZ-JTL linear workflows.
+JTL, RF-JTL, and ETHZ-JTL linear workflows now have opt-in direct `hblinsolve` backends. The default remains `hbsolve`, and direct mode is guarded to zero pump current. Nonlinear pumped gain workflows still use full HB.
 
-For each family, I first compared the old path against direct `hblinsolve`. All compared S-parameters matched exactly, with `max_abs_diff = 0.0`.
+Equivalence probes compared `hbsolve(...).linearized.S(...)` against direct `hblinsolve(...)`; tested S-parameters matched with `max_abs_diff = 0.0`. Largest exact comparisons were JTL 3000 cells, RF-JTL 2393 cells, and ETHZ-JTL 2048 cells.
 
-Largest exact old-vs-direct comparisons:
+Large direct-only checks reached JTL 30000, RF-JTL 5000, and ETHZ-JTL 10000 cells. RF-JTL 10000 cells produced non-finite S-parameters and is the next numerical boundary to map.
 
-- JTL 3000 cells: 6004 elements, 9004 JosephsonCircuits tuples.
-- RF-JTL 2393 cells: 9576 elements, 11969 tuples.
-- ETHZ-JTL 2048 cells: 6653 elements, 8700 tuples.
-
-I also ran direct-only extreme linear-response checks:
-
-- JTL 30000 cells: 60004 elements, 90004 tuples, about 40 s.
-- RF-JTL 5000 cells: 20004 elements, 25004 tuples, about 12 s.
-- ETHZ-JTL 10000 cells: 32497 elements, 42496 tuples, about 6.5 s.
-
-RF-JTL at 10000 cells produced non-finite S-parameters, which we recorded as a real numerical boundary rather than hiding it.
-
-The conclusion is not “full nonlinear HB is now faster.” The correct conclusion is that the linear-response path is now explicit, equivalence-tested, scalable, and status-tracked. This gives a cleaner foundation for topology validation, pump-off S-parameter campaigns, dataset sanity checks, and later nonlinear HB/calibration work.
+Main interpretation: batch runner/process reuse is the practical workflow speedup; direct `hblinsolve` is a semantics, telemetry, and large linear-response cleanup. It is not a universal nonlinear HB speedup claim.
