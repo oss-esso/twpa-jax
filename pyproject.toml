@@ -20,7 +20,7 @@ dependencies = [
 twpa = "twpa.cli:main"
 
 [tool.setuptools.packages.find]
-include = ["twpa*"]
+include = ["twpa*", "twpa_solver*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
