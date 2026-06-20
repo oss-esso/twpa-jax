@@ -1,0 +1,625 @@
+#!/usr/bin/env python3
+"""
+Build Python matrix models for the 7 JosephsonCircuits.jl documentation examples:
+JPA, DPJPA, FXJPA, JTWPA, FQJTWPA, FQJTWPA_diss, FXJTWPA.
+
+This is a topology/matrix builder only. It writes C/G/K/Bphi/Ic/ports metadata in the
+same spirit as the existing full-IPM Python builder. Solver support differs by case:
+- one-pump no-DC cases can be routed first through the current pump/gain scripts;
+- multi-pump, DC/flux-biased, and complex-loss cases are built but explicitly marked.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import math
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+import scipy.sparse as sp
+
+PHI0 = 2.0678338484619295e-15
+PHI0_REDUCED = PHI0 / (2.0 * math.pi)
+
+
+def ic_to_lj(ic_a: float) -> float:
+    return PHI0_REDUCED / ic_a
+
+
+def safe_float_or_pair(x: Any) -> Any:
+    if isinstance(x, complex) or np.iscomplexobj(x):
+        z = complex(x)
+        return {"re": float(z.real), "im": float(z.imag)}
+    if isinstance(x, (np.floating, float, int, np.integer)):
+        return float(x)
+    if isinstance(x, (list, tuple)):
+        return [safe_float_or_pair(v) for v in x]
+    return x
+
+
+@dataclass
+class Port:
+    number: int
+    n1: str
+    n2: str
+
+
+@dataclass
+class LinearInductor:
+    name: str
+    n1: str
+    n2: str
+    L: complex
+
+
+@dataclass
+class MutualCoupling:
+    name: str
+    l1_name: str
+    l2_name: str
+    k: float
+
+
+@dataclass
+class JosephsonBranch:
+    name: str
+    n1: str
+    n2: str
+    Lj: float
+    Ic: float
+
+
+@dataclass
+class CircuitBuilder:
+    name: str
+    node_map: dict[str, int] = field(default_factory=dict)
+    capacitors: list[tuple[str, str, str, complex]] = field(default_factory=list)
+    resistors: list[tuple[str, str, str, complex]] = field(default_factory=list)
+    linear_inductors: dict[str, LinearInductor] = field(default_factory=dict)
+    mutuals: list[MutualCoupling] = field(default_factory=list)
+    josephson: list[JosephsonBranch] = field(default_factory=list)
+    ports: dict[int, Port] = field(default_factory=dict)
+    element_counts: dict[str, int] = field(default_factory=dict)
+
+    def _touch(self, n: str | int) -> str:
+        ns = str(n)
+        if ns != "0" and ns not in self.node_map:
+            self.node_map[ns] = len(self.node_map)
+        return ns
+
+    def _b_entries(self, n1: str | int, n2: str | int) -> list[tuple[int, complex]]:
+        n1s = self._touch(n1)
+        n2s = self._touch(n2)
+        out: list[tuple[int, complex]] = []
+        if n1s != "0":
+            out.append((self.node_map[n1s], 1.0))
+        if n2s != "0":
+            out.append((self.node_map[n2s], -1.0))
+        return out
+
+    def _count(self, kind: str) -> None:
+        self.element_counts[kind] = self.element_counts.get(kind, 0) + 1
+
+    def port(self, name: str, n1: str | int, n2: str | int, number: int) -> None:
+        n1s = self._touch(n1)
+        n2s = self._touch(n2)
+        self.ports[int(number)] = Port(int(number), n1s, n2s)
+        self._count("port")
+
+    def resistor(self, name: str, n1: str | int, n2: str | int, R: complex) -> None:
+        self._touch(n1); self._touch(n2)
+        self.resistors.append((name, str(n1), str(n2), R))
+        self._count("resistor")
+
+    def capacitor(self, name: str, n1: str | int, n2: str | int, C: complex) -> None:
+        self._touch(n1); self._touch(n2)
+        self.capacitors.append((name, str(n1), str(n2), C))
+        self._count("capacitor")
+
+    def linear_inductor(self, name: str, n1: str | int, n2: str | int, L: complex) -> None:
+        self._touch(n1); self._touch(n2)
+        if name in self.linear_inductors:
+            raise ValueError(f"duplicate linear inductor name {name}")
+        self.linear_inductors[name] = LinearInductor(name, str(n1), str(n2), L)
+        self._count("linear_inductor")
+
+    def josephson_inductor(self, name: str, n1: str | int, n2: str | int, Lj: float) -> None:
+        self._touch(n1); self._touch(n2)
+        self.josephson.append(JosephsonBranch(name, str(n1), str(n2), float(Lj), PHI0_REDUCED / float(Lj)))
+        self._count("josephson_inductor")
+
+    def mutual(self, name: str, l1_name: str, l2_name: str, k: float) -> None:
+        self.mutuals.append(MutualCoupling(name, l1_name, l2_name, float(k)))
+        self._count("mutual_inductor_k")
+
+    def _stamp_branch(self, rows: list[int], cols: list[int], vals: list[complex], coeff: complex, n1: str, n2: str) -> None:
+        b = self._b_entries(n1, n2)
+        for i, bi in b:
+            for j, bj in b:
+                rows.append(i)
+                cols.append(j)
+                vals.append(coeff * bi * bj)
+
+    def assemble(self) -> dict[str, Any]:
+        n = len(self.node_map)
+        complex_valued = any(np.iscomplexobj(v[3]) for v in self.capacitors + self.resistors)
+        complex_valued = complex_valued or any(np.iscomplexobj(ind.L) for ind in self.linear_inductors.values())
+        dtype = np.complex128 if complex_valued else np.float64
+
+        c_rows: list[int] = []
+        c_cols: list[int] = []
+        c_vals: list[complex] = []
+        g_rows: list[int] = []
+        g_cols: list[int] = []
+        g_vals: list[complex] = []
+        k_rows: list[int] = []
+        k_cols: list[int] = []
+        k_vals: list[complex] = []
+
+        for _name, n1, n2, C in self.capacitors:
+            self._stamp_branch(c_rows, c_cols, c_vals, C, n1, n2)
+
+        for _name, n1, n2, R in self.resistors:
+            self._stamp_branch(g_rows, g_cols, g_vals, 1.0 / R, n1, n2)
+
+        coupled_names: set[str] = set()
+        for m in self.mutuals:
+            if m.l1_name not in self.linear_inductors or m.l2_name not in self.linear_inductors:
+                raise KeyError(f"mutual {m.name} references missing inductors {m.l1_name}, {m.l2_name}")
+            coupled_names.add(m.l1_name)
+            coupled_names.add(m.l2_name)
+
+        # Uncoupled linear inductors.
+        for name, ind in self.linear_inductors.items():
+            if name in coupled_names:
+                continue
+            self._stamp_branch(k_rows, k_cols, k_vals, 1.0 / ind.L, ind.n1, ind.n2)
+
+        # Pairwise mutuals. These examples do not reuse an inductor in multiple K couplings.
+        seen_coupled: set[str] = set()
+        for m in self.mutuals:
+            if m.l1_name in seen_coupled or m.l2_name in seen_coupled:
+                raise NotImplementedError("overlapping mutual couplings are not supported in this builder")
+            seen_coupled.add(m.l1_name)
+            seen_coupled.add(m.l2_name)
+            a = self.linear_inductors[m.l1_name]
+            b = self.linear_inductors[m.l2_name]
+            L1 = a.L
+            L2 = b.L
+            k = m.k
+            denom = 1.0 - k * k
+            if abs(denom) < 1e-14:
+                raise ValueError(f"mutual {m.name} has |k| too close to 1")
+            y11 = (1.0 / L1) / denom
+            y22 = (1.0 / L2) / denom
+            y12 = (-k / np.sqrt(L1 * L2)) / denom
+            b1 = self._b_entries(a.n1, a.n2)
+            b2 = self._b_entries(b.n1, b.n2)
+            for i, bi in b1:
+                for j, bj in b1:
+                    k_rows.append(i); k_cols.append(j); k_vals.append(y11 * bi * bj)
+            for i, bi in b2:
+                for j, bj in b2:
+                    k_rows.append(i); k_cols.append(j); k_vals.append(y22 * bi * bj)
+            for i, bi in b1:
+                for j, bj in b2:
+                    k_rows.append(i); k_cols.append(j); k_vals.append(y12 * bi * bj)
+                    k_rows.append(j); k_cols.append(i); k_vals.append(y12 * bj * bi)
+
+        C = sp.coo_matrix((c_vals, (c_rows, c_cols)), shape=(n, n), dtype=dtype).tocsr()
+        G = sp.coo_matrix((g_vals, (g_rows, g_cols)), shape=(n, n), dtype=dtype).tocsr()
+        K = sp.coo_matrix((k_vals, (k_rows, k_cols)), shape=(n, n), dtype=dtype).tocsr()
+
+        bj_rows: list[int] = []
+        bj_cols: list[int] = []
+        bj_vals: list[float] = []
+        Ic = np.zeros(len(self.josephson), dtype=np.float64)
+        for col, jj in enumerate(self.josephson):
+            for row, val in self._b_entries(jj.n1, jj.n2):
+                bj_rows.append(row)
+                bj_cols.append(col)
+                bj_vals.append(float(val))
+            Ic[col] = jj.Ic
+        Bphi = sp.coo_matrix((bj_vals, (bj_rows, bj_cols)), shape=(n, len(self.josephson)), dtype=np.float64).tocsr()
+
+        ports = {}
+        for pnum, p in sorted(self.ports.items()):
+            if p.n2 != "0":
+                raise NotImplementedError("only single-ended ports to ground are exported as scalar port vectors")
+            ports[pnum] = self.node_map[p.n1] if p.n1 != "0" else self.node_map[p.n2]
+
+        return {
+            "C": C,
+            "G": G,
+            "K": K,
+            "Bphi": Bphi,
+            "Ic": Ic,
+            "ports": ports,
+            "complex_valued": complex_valued,
+            "node_count": n,
+            "jj_count": len(self.josephson),
+        }
+
+    def write(self, outdir: Path, metadata: dict[str, Any]) -> dict[str, Any]:
+        outdir.mkdir(parents=True, exist_ok=True)
+        assembled = self.assemble()
+        C = assembled["C"]
+        G = assembled["G"]
+        K = assembled["K"]
+        Bphi = assembled["Bphi"]
+        Ic = assembled["Ic"]
+
+        sp.save_npz(outdir / "C.npz", C)
+        sp.save_npz(outdir / "G.npz", G)
+        sp.save_npz(outdir / "K.npz", K)
+        sp.save_npz(outdir / "Bphi.npz", Bphi)
+        port_numbers = np.array(sorted(assembled["ports"].keys()), dtype=np.int64)
+        port_indices = np.array([assembled["ports"][k] for k in sorted(assembled["ports"].keys())], dtype=np.int64)
+        ports_dict = {int(k): int(v) for k, v in assembled["ports"].items()}
+
+        np.savez(
+            outdir / "ipm_arrays.npz",
+            # Compatibility with exp08_full_ipm_pump_solve.py / exp09_full_ipm_gain_from_pump.py
+            nodes=np.array(assembled["node_count"], dtype=np.int64),
+            node_count=np.array(assembled["node_count"], dtype=np.int64),
+            ports=np.array(ports_dict, dtype=object),
+
+            # Explicit portable representation too.
+            port_numbers=port_numbers,
+            port_indices=port_indices,
+
+            Ic=Ic,
+            phi0_reduced=np.array(PHI0_REDUCED),
+        )
+
+        summary = {
+            "case": self.name,
+            "nodes": int(assembled["node_count"]),
+            "C_nnz": int(C.nnz),
+            "G_nnz": int(G.nnz),
+            "K_nnz": int(K.nnz),
+            "Bphi_shape": [int(x) for x in Bphi.shape],
+            "Bphi_nnz": int(Bphi.nnz),
+            "Ic_min": float(np.min(Ic)) if Ic.size else None,
+            "Ic_max": float(np.max(Ic)) if Ic.size else None,
+            "Ic_median": float(np.median(Ic)) if Ic.size else None,
+            "phi0_reduced": PHI0_REDUCED,
+            "ports": {str(k): int(v) for k, v in assembled["ports"].items()},
+            "complex_valued": bool(assembled["complex_valued"]),
+            "element_counts": self.element_counts,
+            "metadata": metadata,
+        }
+        (outdir / "summary.json").write_text(json.dumps(summary, indent=2, default=safe_float_or_pair), encoding="utf-8")
+        (outdir / "ipm_summary.json").write_text(json.dumps(summary, indent=2, default=safe_float_or_pair), encoding="utf-8")
+        return summary
+
+
+def add_jpa_common(name: str, pump_freqs_ghz: list[float], pump_current_a: float, multi_pump: bool = False) -> tuple[CircuitBuilder, dict[str, Any]]:
+    cb = CircuitBuilder(name)
+    R = 50.0
+    Cc = 100.0e-15
+    Cj = 1000.0e-15
+    Lj = 1000.0e-12
+    cb.port("P1", 1, 0, 1)
+    cb.resistor("R1", 1, 0, R)
+    cb.capacitor("C1", 1, 2, Cc)
+    cb.josephson_inductor("Lj1", 2, 0, Lj)
+    cb.capacitor("C2", 2, 0, Cj)
+    md = {
+        "pump_freqs_ghz": pump_freqs_ghz,
+        "pump_sources": [
+            {"port": 1, "mode": [1] if not multi_pump else [1, 0], "current_a": pump_current_a},
+        ] if not multi_pump else [
+            {"port": 1, "mode": [1, 0], "current_a": pump_current_a},
+            {"port": 1, "mode": [0, 1], "current_a": pump_current_a},
+        ],
+        "signal_ghz": {"start": 4.5, "stop": 5.0, "step": 0.001},
+        "Npumpharmonics": [16] if not multi_pump else [8, 8],
+        "Nmodulationharmonics": [8] if not multi_pump else [8, 8],
+        "features": {"single_pump": not multi_pump, "multi_pump": multi_pump, "needs_dc": False, "complex_valued": False},
+        "recommended_first_test": "reflection gain, source_port=1, out_port=1",
+    }
+    return cb, md
+
+
+def build_jpa() -> tuple[CircuitBuilder, dict[str, Any]]:
+    return add_jpa_common("jc_jpa", [4.75001], 0.00565e-6, multi_pump=False)
+
+
+def build_dpjpa() -> tuple[CircuitBuilder, dict[str, Any]]:
+    return add_jpa_common("jc_dpjpa", [4.65001, 4.85001], 0.00565e-6 * 1.7, multi_pump=True)
+
+
+def build_fxjpa() -> tuple[CircuitBuilder, dict[str, Any]]:
+    cb = CircuitBuilder("jc_fxjpa")
+    R = 50.0
+    Lj = 219.63e-12
+    Lr = 0.4264e-9
+    Lg = 100.0e-9
+    Cc = 16.0e-15
+    Cj = 10.0e-15
+    Cr = 0.4e-12
+    Ll = 34e-12
+    Kc = 0.999
+    Ldc = 0.74e-12
+    Ip = 0.7e-6
+    Idc = 140.3e-6
+    cb.port("P1", 1, 0, 1)
+    cb.resistor("R1", 1, 0, R)
+    cb.linear_inductor("L0", 1, 0, Lg)
+    cb.capacitor("C1", 1, 2, Cc)
+    cb.linear_inductor("L1", 2, 3, Lr)
+    cb.capacitor("C2", 2, 0, Cr)
+    cb.josephson_inductor("Lj1", 3, 0, Lj)
+    cb.capacitor("Cj1", 3, 0, Cj)
+    cb.linear_inductor("L2", 3, 4, Ll)
+    cb.josephson_inductor("Lj2", 4, 0, Lj)
+    cb.capacitor("Cj2", 4, 0, Cj)
+    cb.linear_inductor("L3", 5, 0, Ldc)
+    cb.mutual("K1", "L2", "L3", Kc)
+    cb.port("P2", 5, 0, 2)
+    cb.resistor("R2", 5, 0, 1000.0)
+    md = {
+        "pump_freqs_ghz": [19.50],
+        "pump_sources": [{"port": 2, "mode": [0], "current_a": Idc}, {"port": 2, "mode": [1], "current_a": Ip}],
+        "signal_ghz": {"start": 9.7, "stop": 9.8, "step": 0.0001},
+        "Npumpharmonics": [16],
+        "Nmodulationharmonics": [8],
+        "features": {"single_pump": True, "multi_pump": False, "needs_dc": True, "mutuals": True, "complex_valued": False},
+        "recommended_first_test": "requires DC operating point before pumped S11 certification",
+    }
+    return cb, md
+
+
+def build_jtwpa() -> tuple[CircuitBuilder, dict[str, Any]]:
+    cb = CircuitBuilder("jc_jtwpa")
+    Rleft = 50.0
+    Rright = 50.0
+    Nj = 2048
+    pmrpitch = 4
+    Lj = ic_to_lj(3.4e-6)
+    Cg = 45.0e-15
+    Cc = 30.0e-15
+    Cr = 2.8153e-12
+    Lr = 1.70e-10
+    Cj = 55e-15
+    cb.port("P1_0", 1, 0, 1)
+    cb.resistor("R1_0", 1, 0, Rleft)
+    cb.capacitor("C1_0", 1, 0, Cg / 2)
+    cb.josephson_inductor("Lj1_2", 1, 2, Lj)
+    cb.capacitor("C1_2", 1, 2, Cj)
+    j = 2
+    for i in range(2, Nj):
+        if i % pmrpitch == pmrpitch // 2:
+            cb.capacitor(f"C{j}_0", j, 0, Cg - Cc)
+            cb.josephson_inductor(f"Lj{j}_{j+2}", j, j + 2, Lj)
+            cb.capacitor(f"C{j}_{j+2}", j, j + 2, Cj)
+            cb.capacitor(f"C{j}_{j+1}", j, j + 1, Cc)
+            cb.capacitor(f"C{j+1}_0", j + 1, 0, Cr)
+            cb.linear_inductor(f"L{j+1}_0", j + 1, 0, Lr)
+            j += 1
+        else:
+            cb.capacitor(f"C{j}_0", j, 0, Cg)
+            cb.josephson_inductor(f"Lj{j}_{j+1}", j, j + 1, Lj)
+            cb.capacitor(f"C{j}_{j+1}", j, j + 1, Cj)
+        j += 1
+    cb.capacitor(f"C{j}_0", j, 0, Cg / 2)
+    cb.resistor(f"R{j}_0", j, 0, Rright)
+    cb.port(f"P{j}_0", j, 0, 2)
+    md = {
+        "pump_freqs_ghz": [7.12],
+        "pump_sources": [{"port": 1, "mode": [1], "current_a": 1.85e-6}],
+        "signal_ghz": {"start": 1.0, "stop": 14.0, "step": 0.1},
+        "Npumpharmonics": [20],
+        "Nmodulationharmonics": [10],
+        "features": {"single_pump": True, "multi_pump": False, "needs_dc": False, "pmr": True, "complex_valued": False},
+        "recommended_first_test": "transmission gain, source_port=1, out_port=2",
+    }
+    return cb, md
+
+
+def build_fqjtwpa() -> tuple[CircuitBuilder, dict[str, Any]]:
+    cb = CircuitBuilder("jc_fqjtwpa")
+    Rleft = 50.0
+    Rright = 50.0
+    Nj = 2000
+    pmrpitch = 8
+    weightwidth = 745.0
+    Lj0 = ic_to_lj(1.75e-6)
+    Cg = 76.6e-15
+    Cc = 40.0e-15
+    Cr = 1.533e-12
+    Lr = 2.47e-10
+    Cj = 40e-15
+
+    def weight(n: float, Nnodes: float = Nj, width: float = weightwidth) -> float:
+        return math.exp(-((n - Nnodes / 2.0) ** 2) / (width ** 2))
+
+    cb.port("P1_0", 1, 0, 1)
+    cb.resistor("R1_0", 1, 0, Rleft)
+    cb.capacitor("C1_0", 1, 0, Cg / 2 * weight(1 - 0.5))
+    cb.josephson_inductor("Lj1_2", 1, 2, Lj0 * weight(1))
+    cb.capacitor("C1_2", 1, 2, Cj / weight(1))
+    j = 2
+    for i in range(2, Nj):
+        if i % pmrpitch == pmrpitch // 2:
+            cb.capacitor(f"C{j}_0", j, 0, (Cg - Cc) * weight(i - 0.5))
+            cb.josephson_inductor(f"Lj{j}_{j+2}", j, j + 2, Lj0 * weight(i))
+            cb.capacitor(f"C{j}_{j+2}", j, j + 2, Cj / weight(i))
+            cb.capacitor(f"C{j}_{j+1}", j, j + 1, Cc * weight(i - 0.5))
+            cb.capacitor(f"C{j+1}_0", j + 1, 0, Cr)
+            cb.linear_inductor(f"L{j+1}_0", j + 1, 0, Lr)
+            j += 1
+        else:
+            cb.capacitor(f"C{j}_0", j, 0, Cg * weight(i - 0.5))
+            cb.josephson_inductor(f"Lj{j}_{j+1}", j, j + 1, Lj0 * weight(i))
+            cb.capacitor(f"C{j}_{j+1}", j, j + 1, Cj / weight(i))
+        j += 1
+    cb.capacitor(f"C{j}_0", j, 0, Cg / 2 * weight(Nj - 0.5))
+    cb.resistor(f"R{j}_0", j, 0, Rright)
+    cb.port(f"P{j}_0", j, 0, 2)
+    md = {
+        "pump_freqs_ghz": [7.9],
+        "pump_sources": [{"port": 1, "mode": [1], "current_a": 1.1e-6}],
+        "signal_ghz": {"start": 1.0, "stop": 14.0, "step": 0.1},
+        "Npumpharmonics": [20],
+        "Nmodulationharmonics": [10],
+        "features": {"single_pump": True, "multi_pump": False, "needs_dc": False, "pmr": True, "flux_qubit_weighted": True, "complex_valued": False},
+        "recommended_first_test": "transmission gain, source_port=1, out_port=2",
+    }
+    return cb, md
+
+
+def build_fqjtwpa_diss(tandelta: float = 1.0e-3) -> tuple[CircuitBuilder, dict[str, Any]]:
+    # Same topology as FQJTWPA, but complex capacitors C/(1+i*tan_delta).
+    cb, md = build_fqjtwpa()
+    cb.name = "jc_fqjtwpa_diss"
+    factor = 1.0 / (1.0 + 1j * tandelta)
+    cb.capacitors = [(name, n1, n2, C * factor) for (name, n1, n2, C) in cb.capacitors]
+    md = dict(md)
+    md["pump_sources"] = [{"port": 1, "mode": [1], "current_a": 1.1e-6 * (1.0 + 125.0 * tandelta)}]
+    md["tandelta"] = tandelta
+    md["features"] = dict(md["features"])
+    md["features"].update({"complex_valued": True, "unsupported_by_real_time_domain_solver": True})
+    md["recommended_first_test"] = "matrix export only; complex capacitance needs lossy/frequency-domain extension"
+    return cb, md
+
+
+def build_fxjtwpa() -> tuple[CircuitBuilder, dict[str, Any]]:
+    cb = CircuitBuilder("jc_fxjtwpa")
+    Rport = 50.0
+    cutoff_frequency = 46e9
+    Z0 = 50.0
+    capacitance = 1.0 / (2.0 * math.pi * cutoff_frequency * Z0)
+    junction_inductance = Z0 / (2.0 * math.pi * cutoff_frequency)
+    critical_current = PHI0_REDUCED / junction_inductance
+    critical_current_density = 3e6
+    jj_area = critical_current / critical_current_density
+    jj_cap_density = 50.0e-15 / (1.0e-6) ** 2
+    jj_capacitance = jj_cap_density * jj_area
+    nr_cells = 500
+    modulation_parameter = 0.06
+    coupling = 0.02
+    mutual_inductance = coupling * junction_inductance
+    linear_squid_loop_inductance = mutual_inductance**2 / junction_inductance
+    optimal_dc_flux = PHI0 / 3.0
+    Idc = optimal_dc_flux / mutual_inductance
+    Ip = modulation_parameter * Idc
+    pump_line_inductance = 1.1 * junction_inductance
+    pump_frequency = 20e9
+    Lg = 20.0e-9
+    kappa = 0.999
+    Cpump = pump_line_inductance / Z0**2
+
+    node = 1
+    cb.port("P1", node, 0, 1)
+    cb.resistor("R1", node, 0, Rport)
+    cb.port("P3", node + 1, 0, 3)
+    cb.resistor("R3", node + 1, 0, Rport)
+
+    for cell_index in range(1, nr_cells + 1):
+        cb.capacitor(f"C{node}_0", node, 0, capacitance / 2.0 if cell_index == 1 else capacitance)
+        cb.josephson_inductor(f"Lj_a{node}_{node+3}", node, node + 3, junction_inductance)
+        cb.capacitor(f"Cj_a{node}_{node+3}", node, node + 3, jj_capacitance)
+        lsmall_name = f"L{node}_{node+2}"
+        cb.linear_inductor(lsmall_name, node, node + 2, linear_squid_loop_inductance)
+        cb.josephson_inductor(f"Lj_b{node+2}_{node+3}", node + 2, node + 3, junction_inductance)
+        cb.capacitor(f"Cj_b{node+2}_{node+3}", node + 2, node + 3, jj_capacitance)
+
+        lpump_name = f"L{node+1}_{node+4}"
+        cb.linear_inductor(lpump_name, node + 1, node + 4, pump_line_inductance)
+        cb.capacitor(f"Cpump{node+1}_0", node + 1, 0, Cpump / 2.0 if cell_index == 1 else Cpump)
+        cb.mutual(f"K{node}", lsmall_name, lpump_name, kappa)
+        node += 3
+
+    cb.capacitor(f"C{node}_0", node, 0, capacitance / 2.0)
+    cb.port("P2", node, 0, 2)
+    cb.resistor("R2", node, 0, Rport)
+    cb.capacitor(f"Cpump{node+1}_0", node + 1, 0, Cpump / 2.0)
+    cb.port("P4", node + 1, 0, 4)
+    cb.resistor("R4", node + 1, 0, Rport)
+    cb.linear_inductor(f"L{node+1}_0", node + 1, 0, Lg)
+
+    md = {
+        "pump_freqs_ghz": [pump_frequency / 1e9],
+        "pump_sources": [{"port": 3, "mode": [0], "current_a": Idc}, {"port": 3, "mode": [1], "current_a": Ip}],
+        "signal_ghz": {"start": float((pump_frequency / 2.0) * (0.5 + 1.0) / 1e9), "stop": float((pump_frequency / 2.0) * (1.5 + 1.0) / 1e9), "points": 500},
+        "Npumpharmonics": [8],
+        "Nmodulationharmonics": [4],
+        "derived": {
+            "cutoff_frequency_hz": cutoff_frequency,
+            "capacitance_f": capacitance,
+            "junction_inductance_h": junction_inductance,
+            "critical_current_a": critical_current,
+            "jj_capacitance_f": jj_capacitance,
+            "pump_line_inductance_h": pump_line_inductance,
+            "pump_line_capacitance_f": Cpump,
+            "linear_squid_loop_inductance_h": linear_squid_loop_inductance,
+            "Idc_a": Idc,
+            "Ip_a": Ip,
+        },
+        "features": {"single_pump": True, "multi_pump": False, "needs_dc": True, "mutuals": True, "pump_line": True, "complex_valued": False},
+        "recommended_first_test": "requires DC operating point; then transmission gain, source_port=1, out_port=2, pump_port=3/4 depending convention",
+    }
+    return cb, md
+
+
+BUILDERS = {
+    "jc_jpa": build_jpa,
+    "jc_dpjpa": build_dpjpa,
+    "jc_fxjpa": build_fxjpa,
+    "jc_jtwpa": build_jtwpa,
+    "jc_fqjtwpa": build_fqjtwpa,
+    "jc_fqjtwpa_diss": build_fqjtwpa_diss,
+    "jc_fxjtwpa": build_fxjtwpa,
+}
+
+
+def main() -> None:
+    p = argparse.ArgumentParser()
+    p.add_argument("--outdir", default="outputs/jc_doc_python_designs")
+    p.add_argument("--cases", nargs="+", default=list(BUILDERS.keys()))
+    p.add_argument("--tandelta", type=float, default=1.0e-3)
+    args = p.parse_args()
+
+    root = Path(args.outdir)
+    root.mkdir(parents=True, exist_ok=True)
+    summaries = []
+    for case in args.cases:
+        if case not in BUILDERS:
+            raise SystemExit(f"unknown case {case}; choices={sorted(BUILDERS)}")
+        if case == "jc_fqjtwpa_diss":
+            cb, md = build_fqjtwpa_diss(args.tandelta)
+        else:
+            cb, md = BUILDERS[case]()
+        summary = cb.write(root / case, md)
+        summaries.append(summary)
+        print(
+            f"{case}: nodes={summary['nodes']} jj={summary['Bphi_shape'][1]} "
+            f"C_nnz={summary['C_nnz']} G_nnz={summary['G_nnz']} K_nnz={summary['K_nnz']} "
+            f"ports={summary['ports']} complex={summary['complex_valued']} features={summary['metadata']['features']}"
+        )
+
+    table = []
+    for s in summaries:
+        md = s["metadata"]
+        table.append({
+            "case": s["case"],
+            "nodes": s["nodes"],
+            "jj": s["Bphi_shape"][1],
+            "ports": s["ports"],
+            "complex_valued": s["complex_valued"],
+            "features": md.get("features", {}),
+            "pump_freqs_ghz": md.get("pump_freqs_ghz"),
+            "pump_sources": md.get("pump_sources"),
+            "recommended_first_test": md.get("recommended_first_test"),
+        })
+    (root / "build_manifest.json").write_text(json.dumps(table, indent=2, default=safe_float_or_pair), encoding="utf-8")
+    print(f"wrote_manifest={root / 'build_manifest.json'}")
+
+
+if __name__ == "__main__":
+    main()
