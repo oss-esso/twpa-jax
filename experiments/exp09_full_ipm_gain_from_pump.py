@@ -395,10 +395,51 @@ def build_khat(
 def dynamic_block(
     ipm: IPMMatrices,
     omega: float,
+    loss_model: str = "current_complex_c",
 ) -> sp.csr_matrix:
-    C = ipm.C.astype(np.complex128)
-    G = ipm.G.astype(np.complex128)
-    K = ipm.K.astype(np.complex128)
+    Cfull = ipm.C.astype(np.complex128).tocsr()
+    Gfull = ipm.G.astype(np.complex128).tocsr()
+    K = ipm.K.astype(np.complex128).tocsr()
+
+    # Cfull may contain dielectric loss as C = C_re + i C_im.
+    # The old/default convention is directly:
+    #   D(w) = K - w^2 Cfull + i w G
+    #
+    # For negative Floquet sidebands, JC may use an equivalent conductance-like
+    # per-frequency damping convention rather than a sign-independent complex-C
+    # convention. These variants are intentionally diagnostic.
+    Cre = Cfull.real.astype(np.complex128).tocsr()
+    Cim = Cfull.imag.astype(np.complex128).tocsr()
+
+    if loss_model == "current_complex_c":
+        C = Cfull
+        G = Gfull
+    elif loss_model == "real_capacitance":
+        C = Cre
+        G = Gfull
+    elif loss_model == "conjugate_complex_c":
+        C = Cfull.conjugate().astype(np.complex128).tocsr()
+        G = Gfull
+    elif loss_model == "complex_c_sign_omega":
+        sgn = 1.0 if omega >= 0.0 else -1.0
+        C = (Cre + (1j * sgn) * Cim).astype(np.complex128).tocsr()
+        G = Gfull
+    elif loss_model == "conductance_signed_omega":
+        # Algebraically equivalent to current_complex_c when C_im is the loss
+        # carrier, but useful as an explicit check.
+        C = Cre
+        G = (Gfull - omega * Cim).astype(np.complex128).tocsr()
+    elif loss_model == "conductance_abs_omega":
+        # Physical damping sign follows the sideband frequency through i*w*G,
+        # while the dissipative conductance magnitude is positive.
+        C = Cre
+        G = (Gfull - abs(omega) * Cim).astype(np.complex128).tocsr()
+    elif loss_model == "conductance_abs_omega_opposite":
+        C = Cre
+        G = (Gfull + abs(omega) * Cim).astype(np.complex128).tocsr()
+    else:
+        raise ValueError(f"unknown loss_linearization_model={loss_model!r}")
+
     return (K + (-omega * omega) * C + (1j * omega) * G).tocsr()
 
 
@@ -408,6 +449,7 @@ def assemble_conversion_matrix(
     omega_s: float,
     omega_p: float,
     ms: list[int],
+    loss_model: str = "current_complex_c",
 ) -> sp.csc_matrix:
     zero = sp.csr_matrix(ipm.C.shape, dtype=np.complex128)
     rows: list[list[sp.csr_matrix]] = []
@@ -419,7 +461,7 @@ def assemble_conversion_matrix(
         omega_m = omega_s + m * omega_p
 
         if m not in D_cache:
-            D_cache[m] = dynamic_block(ipm, omega_m)
+            D_cache[m] = dynamic_block(ipm, omega_m, loss_model=loss_model)
 
         for q in ms:
             ell = m - q
@@ -473,8 +515,9 @@ def solve_single_block_transfer(
     source_index: int,
     out_index: int,
     source_current_a: float,
+    loss_model: str = "current_complex_c",
 ) -> tuple[complex, complex, float]:
-    A = (dynamic_block(ipm, omega_s) + D_extra).tocsc()
+    A = (dynamic_block(ipm, omega_s, loss_model=loss_model) + D_extra).tocsc()
     b = np.zeros(ipm.C.shape[0], dtype=np.complex128)
     b[source_index] = source_current_a
 
@@ -538,6 +581,7 @@ def solve_gain_one(
     source_port: int,
     out_port: int,
     z0_ohm: float,
+    loss_model: str = "current_complex_c",
 ) -> GainResult:
     omega_s = 2.0 * math.pi * signal_ghz * 1e9
     ms = sideband_list(sidebands)
@@ -553,6 +597,7 @@ def solve_gain_one(
         omega_s=omega_s,
         omega_p=omega_p,
         ms=ms,
+        loss_model=loss_model,
     )
     assemble_runtime_s = time.perf_counter() - t0
 
@@ -582,6 +627,7 @@ def solve_gain_one(
         source_index=source_index,
         out_index=out_index,
         source_current_a=source_current_a,
+        loss_model=loss_model,
     )
 
     # Pump-induced average stiffness only, no frequency-conversion sidebands.
@@ -815,7 +861,23 @@ def parse_args() -> argparse.Namespace:
 
     p.add_argument("--real-capacitance", action="store_true",
                    help="Drop the imaginary (lossy) part of C in the linearized gain solve (loss-convention study).")
+    p.add_argument(
+        "--loss-linearization-model",
+        choices=[
+            "current_complex_c",
+            "real_capacitance",
+            "conjugate_complex_c",
+            "complex_c_sign_omega",
+            "conductance_signed_omega",
+            "conductance_abs_omega",
+            "conductance_abs_omega_opposite",
+        ],
+        default="current_complex_c",
+        help="Diagnostic lossy linearization convention for D(w).",
+    )
     p.add_argument("--gamma-nt", type=int, default=128)
+    p.add_argument("--pump-state-scale", type=float, default=1.0,
+                   help="Diagnostic scale applied to loaded pump phasors before gamma_hat computation.")
     p.add_argument("--fallback-pump-freq-ghz", type=float, default=7.9)
     p.add_argument("--drop-gamma-tol", type=float, default=0.0)
 
@@ -829,10 +891,17 @@ def main() -> None:
 
     resolved_ipm_dir = args.ipm_dir or infer_ipm_dir_from_pump_report(Path(args.pump_dir)) or "outputs/ipm_python_design"
     ipm = load_ipm(resolved_ipm_dir)
+    loss_model = args.loss_linearization_model
     if args.real_capacitance:
-        ipm.C = ipm.C.real.astype(np.complex128).tocsr()
+        loss_model = "real_capacitance"
         print("real_capacitance=True (loss dropped from linearized gain solve)")
+    print(f"loss_linearization_model={loss_model}")
     pump = load_pump(args.pump_dir, args.fallback_pump_freq_ghz)
+    if abs(args.pump_state_scale - 1.0) > 0.0:
+        if not hasattr(pump, "X"):
+            raise AttributeError("loaded pump object has no attribute X for --pump-state-scale")
+        pump.X = pump.X * float(args.pump_state_scale)
+        print(f"pump_state_scale={args.pump_state_scale:.12g}")
     dc_branch_flux = load_dc_branch_flux(args.dc_solution, ipm)
 
     if args.source_port not in ipm.port_to_index:
@@ -940,6 +1009,7 @@ def main() -> None:
             source_port=args.source_port,
             out_port=args.out_port,
             z0_ohm=args.z0_ohm,
+            loss_model=loss_model,
         )
         rows.append(r)
 
@@ -969,6 +1039,8 @@ def main() -> None:
         "signal_m": args.signal_m,
         "idler_m": args.idler_m,
         "gamma_nt": args.gamma_nt,
+        "pump_state_scale": args.pump_state_scale,
+        "loss_linearization_model": loss_model,
         "gamma_hat_runtime_s": gamma_runtime,
         "khat_build_runtime_s": khat_runtime,
         "total_runtime_s": time.perf_counter() - t_all,

@@ -69,8 +69,8 @@ CASES: list[CaseSpec] = [
     ),
     CaseSpec(
         "jc_fxjtwpa",
-        "outputs/exp14_fxjtwpa_dense4_scale2",
-        "dense_real",
+        "outputs/exp14_fxjtwpa_seed_fixed",
+        "dense_real_jc_seed_node_order_fixed",
         "outputs/exp14_jc_refs/jc_fxjtwpa_curve_21pt.csv",
     ),
     CaseSpec(

@@ -52,9 +52,18 @@ conj(gamma_hat[ell])).
 - Multi-pump (DPJPA): needs true 2D-lattice HB -> use the standalone
   `exp14_dpjpa_multitone.py` (modes are (k1,k2) tuples). `auto_jc` in exp08 still
   raises for multi-pump (scalar policy can't represent it).
-- DC + mutual-inductor distributed (FXJTWPA): pump branch **folds**; plain
-  continuation can't cross it. Use `--preconditioner real_coupled` (exact). Full
-  scale-2 needs a JC frequency-domain warm-start seed (open).
+- DC + mutual-inductor distributed (FXJTWPA): **MATCHED (RMS 0.0 dB)** via an
+  imported JC pump nodeflux seed. The blocker was never the fold or the stiff
+  mutual K (exp10's mutual stamp is algebraically identical to JC's `calcinvLn`,
+  doctest in `capindmat.jl`). It was **node ordering**: exp10 inserts nodes per
+  cell as (node, node+3, node+2, node+1, node+4) -- unsorted -- while JC orders
+  by sorted node number. The identity seed left a real ~45 pump residual on the
+  SQUID nodes; the sorted-rank permutation drops it to ~5e-9. Pipeline:
+  `exp14_build_jc_warmstart.py` (raw seed) -> `exp14_fxjtwpa_fix_seed.py`
+  (applies the node-order permutation to pump X **and** DC node fluxes) ->
+  `exp09 --pump-dir outputs/exp14_fxjtwpa_seed_fixed/pump --dc-solution .../dc
+  --source-port 1 --out-port 2 --sidebands 4 --signal-m 0 --idler-m -2`.
+  Test: `tests/test_fxjtwpa_node_order.py`.
 
 ### Preconditioners (exp08 `--preconditioner`)
 - `mean_tangent` (default), `linear`, `none` — block-diagonal.
@@ -63,8 +72,9 @@ conj(gamma_hat[ell])).
   GMRES converges in ~1 iteration. Use for stiff DC/mutual designs.
 
 ### 7-design parity status (outputs/exp14_seven_design_summary/)
-5/7 MATCHED < 0.0024 dB: jpa, jtwpa, fqjtwpa, fxjpa, dpjpa. fqjtwpa_diss SOLVED
-~0.89 dB (lossy convention). fxjtwpa FINITE_NONCONVERGED (fold). JC reference
+6/7 MATCHED < 0.0024 dB: jpa, jtwpa, fqjtwpa, fxjpa, dpjpa, **fxjtwpa (RMS 0.0)**.
+fqjtwpa_diss SOLVED ~0.89 dB (lossy convention) -- the only remaining mismatch.
+JC reference
 curves: `outputs/exp14_jc_refs/` via `exp14_jc_doc_curve_dump.jl` (generic; splats
 each case `hbsolve_kwargs` so DC/3WM/4WM work).
 
