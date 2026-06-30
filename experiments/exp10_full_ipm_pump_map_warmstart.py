@@ -54,6 +54,7 @@ sys.path.insert(0, str(ROOT / "experiments"))
 import exp08_full_ipm_pump_solve as exp08  # noqa: E402
 import exp09_full_ipm_gain_from_pump as exp09  # noqa: E402
 import pump_basis  # noqa: E402
+from pump_solvers.schur_operators import SchurReducedProblem, build_schur_problem  # noqa: E402
 
 
 # =============================================================================
@@ -415,6 +416,9 @@ class InProcessEngine:
         self.source_idx = self.ipm09.port_to_index[args.source_port]
         self.out_idx = self.ipm09.port_to_index[args.out_port]
         self.ic_median = float(np.median(self.ipm08.Ic))
+        self.ports = list(self.ipm08.port_to_index.values())
+        # Schur partition is constant in power -> cache one per pump frequency.
+        self._schur_part_cache: dict[float, Any] = {}
 
     def _settings(self) -> exp08.NewtonKrylovSettings:
         return exp08.NewtonKrylovSettings(
@@ -454,35 +458,52 @@ class InProcessEngine:
         t0 = time.perf_counter()
 
         injected = point.current_a * a.pump_current_jc_scale
-        problem, basis, omega = self._build_problem(point.pump_freq_ghz, injected)
+        full_problem, basis, omega = self._build_problem(point.pump_freq_ghz, injected)
+        # Optional Schur-reduced backend: solve on retained nodes, reconstruct
+        # the full solution for write_results/exp09 (which need full-node X).
+        use_schur = a.inproc_pump_backend == "schur_cpu_mt"
+        if use_schur:
+            part = self._schur_part_cache.get(point.pump_freq_ghz)
+            sprob = (SchurReducedProblem(full=full_problem, partition=part)
+                     if part is not None
+                     else build_schur_problem(full_problem, self.ports))
+            self._schur_part_cache[point.pump_freq_ghz] = sprob.part
+            solve_problem = sprob
+        else:
+            solve_problem = full_problem
         solver = exp08.HarmonicNewtonKrylovSolver(self._settings())
 
         if mode == "warm" and warm_X is not None:
-            X, reports = solver.solve_direct(problem, warm_X)
-        elif mode == "seed":
+            X, reports = solver.solve_direct(solve_problem, warm_X)
+        elif mode == "seed" and not use_schur:
             X_seed, _ = exp08.build_linear_phasor_seed(
-                problem, source_scale=1.0, method="gmres", rtol=1e-6,
+                full_problem, source_scale=1.0, method="gmres", rtol=1e-6,
                 maxiter=a.linear_seed_maxiter, restart=60,
             )
             X, reports, _ = solver.solve_adaptive_continuation(
-                problem, X_seed, initial_step=a.adaptive_initial_step,
+                full_problem, X_seed, initial_step=a.adaptive_initial_step,
                 min_step=a.adaptive_min_step, growth=1.5, shrink=0.5,
                 fallback_fixed_steps=20,
             )
-        else:  # cold
-            X, reports = solver.solve_continuation(problem, continuation_steps=a.continuation_steps)
+        else:  # cold (and schur seed -> cold continuation on retained)
+            X, reports = solver.solve_continuation(solve_problem, continuation_steps=a.continuation_steps)
 
         converged = bool(reports and reports[-1].converged
                          and abs(reports[-1].source_scale - 1.0) < 1e-12)
+
+        # X is retained-sized for the Schur backend; reconstruct full nodes.
+        chain_X = X
+        X_full = solve_problem.reconstruct_full(X) if use_schur else X
 
         metadata = {
             **basis.to_metadata(),
             "pump_freq_ghz": point.pump_freq_ghz, "nt": a.nt, "omega_p": omega,
             "pump_current_a": injected,
             "pump_current_ratio_ic_median": injected / self.ic_median,
+            "pump_backend": a.inproc_pump_backend,
         }
-        summary = exp08.summarize_solution(problem, X)
-        exp08.write_results(pump_dir, X, reports, summary, metadata)
+        summary = exp08.summarize_solution(full_problem, X_full)
+        exp08.write_results(pump_dir, X_full, reports, summary, metadata)
 
         row: dict[str, Any] = {
             "point_index": point.index, "i_power": point.i_power, "j_freq": point.j_freq,
@@ -492,7 +513,9 @@ class InProcessEngine:
             "pump_runtime_s": float(sum(r.runtime_s for r in reports)),
             "pump_factor_runtime_s": float(sum(r.factor_runtime_s for r in reports)),
             "pump_coeff_rel": float(reports[-1].coeff_rel) if reports else None,
-            "pump_time_rel": (float(reports[-1].time_rel)
+            "pump_time_rel": (float(solve_problem.full_time_residual_rel(X, 1.0))
+                              if use_schur and converged
+                              else float(reports[-1].time_rel)
                               if reports and reports[-1].time_rel is not None else None),
             "pump_newton_total": int(sum(r.newton_iterations for r in reports)),
             "pump_gmres_total": int(sum(r.gmres_iterations_total for r in reports)),
@@ -855,6 +878,13 @@ def parse_args() -> argparse.Namespace:
                    help="Preconditioner for the in-process pump solve. mean_tangent "
                    "(default) is cheapest for small warm-start steps; real_coupled "
                    "cuts GMRES iters but its full-Jacobian LU is costlier per Newton.")
+    p.add_argument("--inproc-pump-backend", choices=["full", "schur_cpu_mt"],
+                   default="full",
+                   help="In-process pump backend. 'full' (default, legacy) solves all "
+                   "nodes. 'schur_cpu_mt' eliminates linear-internal nodes via an "
+                   "assembled sparse Schur complement (constant per frequency) and "
+                   "solves the retained system -- 2.5-4.5x faster at the high-power "
+                   "fold, gain identical. Pair with --inproc-preconditioner mean_tangent.")
     p.add_argument("--inproc-precond-reuse", type=int, default=1,
                    help="Reuse the preconditioner factor for up to N consecutive Newton "
                    "steps (modified-Newton). 1 (default) refactors every step. N>1 "

@@ -129,11 +129,53 @@ sub-1 s through −23 dBm, 0.1–0.4 s across the convergent region, gain identi
 to baseline. Keep the assembled `S_k` (CPU); revisit the matrix-free apply only
 on GPU, where the back-sub maps to a parallel banded solve.
 
-### Remaining bottleneck at −22 dBm (1.28 s, not sub-1 s)
+### Remaining bottleneck at −22 dBm (1.4 s, not sub-1 s)
 
 Not the Schur apply, not the preconditioner build (0.09 s), not the gain solve
 (flat ~0.43 s). It is **GMRES iterations × nonlinear AFT matvec**: 205 matvecs,
 each dominated by the FFT-based `synthesize`/`project_positive` on retained
-nodes. The two levers left, both algorithmic (deferred): a better retained
-preconditioner that includes a cheap Schur/nonlinear correction to cut GMRES
-below 26/Newton, or a faster (batched/GPU) AFT matvec.
+nodes.
+
+## Follow-up: attacking GMRES count and matvec cost
+
+**Per-Newton GMRES (−22 dBm) is spread evenly** — ~26 matvecs on every one of the
+8 Newton steps, not one stiff step. Retained-preconditioner comparison:
+
+| retained precond | GMRES total | factor/assemble | pump |
+|---|---|---|---|
+| mean_tangent | 205 | 0.10 s | **1.45 s** |
+| spectral_coupled (k−q only) | 109 | 0.67 s | 2.16 s |
+| real_coupled (k−q + conjugate k+q) | 8 | 2.66 s | 3.24 s |
+
+The conjugate `k+q` term is what collapses GMRES (109→8); `gamma_hat` decays ~40×
+per harmonic, so it concentrates in low offsets. **But the coupled
+preconditioners lose anyway**: their *apply* (one big LU solve per GMRES
+iteration) and *build* cost cancel the iteration savings. `mean_tangent`'s psolve
+is 10 tiny triangular solves (0.71 ms). Harmonic-banding the coupled
+preconditioner (keep |k−q|≤L, k+q≤S) was tried (`precond_ell_diff_max` /
+`precond_ell_sum_max`): it does not shrink the LU enough — zeroing blocks keeps
+the same 50360-matrix structure, so GMRES rises (8→89) while the factor only
+drops 2.6→1.9 s. **Net: `mean_tangent` on the reduced system is near the CPU
+optimum (~1.4 s at −22).** Pushing below needs a cheaper matvec, not a stronger
+preconditioner.
+
+**Per-GMRES-iteration cost** (−22 dBm): matvec 2.58 ms (AFT 2.08 ms + sparse
+`Sc` 0.17 ms) + mean_tangent psolve 0.71 ms ≈ 3.3 ms. The AFT dominates the
+matvec.
+
+**JVP device microbenchmark** (`benchmark_jvp_device.py`, retained Schur JVP on
+the converged −22 state): a JIT'd JAX implementation matches NumPy to 8e-8 and is
+**1.7× faster on CPU** (2.57→1.54 ms/JVP) from op fusion alone. No CUDA device is
+present in this environment, so a true GPU speedup can't be measured, but the
+kernel is validated and device-portable — wiring it into GMRES on a GPU machine
+(arrays kept on-device) is the next concrete lever. The matvec is the right
+target: at 205 matvecs × 2 ms ≈ 0.4 s, halving it is the largest remaining win
+short of cutting Newton steps (pseudo-arclength) near the fold.
+
+## Map integration
+
+`schur_cpu_mt` is wired into the exp10 map runner: `--inproc-pump-backend
+schur_cpu_mt` (pair with `--inproc-preconditioner mean_tangent`). The Schur
+partition is cached per pump frequency. Validated against the `full` backend on a
+warm-started fold column: **identical gain** (4.5165 / 6.9377 / 9.7646 dB) and
+time residual, 2.6–2.7× faster pump solve. Default remains `full` (legacy-safe).

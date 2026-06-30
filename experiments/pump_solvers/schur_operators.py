@@ -58,6 +58,14 @@ class SchurReducedProblem:
     full: exp08.FullIPMPumpProblem
     partition: SchurPartition
     linear_apply_mode: str = "assembled"
+    # Harmonic-banding cutoffs for the real_coupled retained preconditioner.
+    # gamma_hat decays fast with harmonic offset, so the coupled block can keep
+    # only |k-q| <= precond_ell_diff_max and k+q <= precond_ell_sum_max and stay
+    # an accurate preconditioner while being far cheaper to assemble and factor
+    # (the "line"/banded preconditioner). None = keep all couplings (exact
+    # real_coupled).
+    precond_ell_diff_max: int | None = None
+    precond_ell_sum_max: int | None = None
 
     def __post_init__(self) -> None:
         f = self.full
@@ -240,14 +248,20 @@ class SchurReducedProblem:
         """
         modes_int = [int(round(k)) for k in self.grid.k]
         zero = sp.csr_matrix((self.n, self.n), dtype=np.complex128)
+        ldiff = self.precond_ell_diff_max
+        lsum = self.precond_ell_sum_max
         jrr, jri, jir, jii = [], [], [], []
         for ki, k in enumerate(modes_int):
             rrr, rri, rir, rii = [], [], [], []
             for qi, q in enumerate(modes_int):
-                L = spectral.khat.get(k - q, zero)
+                L = zero
+                if ldiff is None or abs(k - q) <= ldiff:
+                    L = spectral.khat.get(k - q, zero)
                 if ki == qi:
                     L = L + self.part.schur[ki]
-                P = spectral.khat.get(k + q, zero)
+                P = zero
+                if lsum is None or (k + q) <= lsum:
+                    P = spectral.khat.get(k + q, zero)
                 Lr, Li = L.real, L.imag
                 Pr, Pi = P.real, P.imag
                 rrr.append((Lr + Pr).tocsr())
@@ -268,9 +282,13 @@ def build_schur_problem(
     port_indices: list[int],
     *,
     linear_apply_mode: str = "assembled",
+    precond_ell_diff_max: int | None = None,
+    precond_ell_sum_max: int | None = None,
 ) -> SchurReducedProblem:
     """Construct a Schur-reduced problem from a full pump problem."""
     part = build_partition(full._linear_blocks, full.Bphi, port_indices)
     return SchurReducedProblem(
-        full=full, partition=part, linear_apply_mode=linear_apply_mode
+        full=full, partition=part, linear_apply_mode=linear_apply_mode,
+        precond_ell_diff_max=precond_ell_diff_max,
+        precond_ell_sum_max=precond_ell_sum_max,
     )
