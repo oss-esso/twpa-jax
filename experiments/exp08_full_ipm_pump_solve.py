@@ -775,6 +775,11 @@ class HarmonicNewtonKrylovSolver:
                 if s.preconditioner == "real_coupled":
                     cached_real = problem.assemble_real_coupled_preconditioner(spectral_tangent)
                     cached_coupled = cached_factors = None
+                elif s.preconditioner == "real_coupled_fast":
+                    # Exact real-coupled with assembly + symbolic-factorization
+                    # reuse (Schur backend only). Same psolve interface.
+                    cached_real = problem.assemble_real_coupled_fast(tangent)
+                    cached_coupled = cached_factors = None
                 elif s.preconditioner == "spectral_coupled":
                     cached_coupled = problem.assemble_coupled_preconditioner(spectral_tangent)
                     cached_real = cached_factors = None

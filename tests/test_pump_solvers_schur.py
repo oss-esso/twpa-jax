@@ -167,6 +167,66 @@ def test_analytic_jvp_matches_fd_schur():
 # --------------------------------------------------------------------------- #
 # 4. Metadata: reconstructed Schur pump writes an exp09-loadable .npz.
 # --------------------------------------------------------------------------- #
+def test_fast_coupled_assembly_matches_reference():
+    """The fast assembled real-coupled matrix equals the bmat reference exactly."""
+    from pump_solvers.fast_coupled import FastCoupledPreconditioner
+
+    full = _toy_problem()
+    part = build_partition(full._linear_blocks, full.Bphi, [0, 2])
+    schur = SchurReducedProblem(full=full, partition=part)
+    X, rep = exp08.HarmonicNewtonKrylovSolver(
+        _settings("mean_tangent")).solve_continuation(schur, continuation_steps=12)
+    tangent = schur.tangent_state(X)
+    spectral = schur.spectral_tangent_state(tangent)
+    ref = schur.assemble_real_coupled_preconditioner  # builds + factors reference
+    # Reference matrix via the documented real-coupled assembly.
+    import scipy.sparse as sp
+    modes = [int(round(k)) for k in schur.grid.k]
+    zero = sp.csr_matrix((schur.n, schur.n), dtype=np.complex128)
+    jrr, jri, jir, jii = [], [], [], []
+    for ki, k in enumerate(modes):
+        rrr, rri, rir, rii = [], [], [], []
+        for qi, q in enumerate(modes):
+            L = spectral.khat.get(k - q, zero)
+            if ki == qi:
+                L = L + part.schur[ki]
+            P = spectral.khat.get(k + q, zero)
+            Lr, Li, Pr, Pi = L.real, L.imag, P.real, P.imag
+            rrr.append((Lr + Pr).tocsr()); rri.append((Pi - Li).tocsr())
+            rir.append((Li + Pi).tocsr()); rii.append((Lr - Pr).tocsr())
+        jrr.append(rrr); jri.append(rri); jir.append(rir); jii.append(rii)
+    top = sp.bmat([[sp.bmat(jrr), sp.bmat(jri)]])
+    bot = sp.bmat([[sp.bmat(jir), sp.bmat(jii)]])
+    M_ref = sp.bmat([[top], [bot]], format="csr")
+    M_ref.sum_duplicates(); M_ref.sort_indices(); M_ref.eliminate_zeros()
+
+    fc = FastCoupledPreconditioner(schur, use_pardiso=False)
+    fc.refactor(tangent)
+    D = (fc.M - M_ref); D.eliminate_zeros()
+    rel = (np.abs(D.data).max() / max(np.abs(M_ref.data).max(), 1e-30)) if D.nnz else 0.0
+    assert rel < 1e-10, f"fast assembly differs from reference by {rel:.2e}"
+    # exact preconditioner solve
+    b = np.random.default_rng(0).standard_normal(fc.M.shape[0])
+    assert np.linalg.norm(M_ref @ fc.solve(b) - b) / np.linalg.norm(b) < 1e-8
+
+
+def test_real_coupled_fast_matches_real_coupled_solution():
+    """A Schur solve with real_coupled_fast reaches the same pump as real_coupled."""
+    full = _toy_problem()
+    part = build_partition(full._linear_blocks, full.Bphi, [0, 2])
+
+    def solve(precond):
+        s = SchurReducedProblem(full=full, partition=part)
+        X, rep = exp08.HarmonicNewtonKrylovSolver(
+            _settings(precond)).solve_continuation(s, continuation_steps=12)
+        assert rep[-1].converged
+        return X
+
+    Xa = solve("real_coupled")
+    Xb = solve("real_coupled_fast")
+    assert np.linalg.norm(Xb - Xa) / np.linalg.norm(Xa) < 1e-8
+
+
 def test_schur_solution_writes_exp09_compatible_npz(tmp_path):
     full = _toy_problem()
     part = build_partition(full._linear_blocks, full.Bphi, [0, 2])

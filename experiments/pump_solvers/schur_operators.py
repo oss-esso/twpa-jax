@@ -237,6 +237,26 @@ class SchurReducedProblem:
             rows.append(row)
         return spla.splu(sp.bmat(rows, format="csc"))
 
+    def assemble_real_coupled_fast(self, tangent: exp08.TangentState):
+        """Exact real-coupled preconditioner with assembly + symbolic reuse.
+
+        Builds the precompute (scatter map + symbolic factorization) once per
+        partition (constant across power and Newton step) and caches it on the
+        partition; each call only rebuilds M.data and runs the numeric factor.
+        ~10x cheaper per Newton step than ``assemble_real_coupled_preconditioner``
+        while producing the identical exact preconditioner (GMRES converges in
+        one iteration). Requires pypardiso for the full speedup; falls back to
+        SuperLU otherwise (still benefits from assembly reuse).
+        """
+        from .fast_coupled import FastCoupledPreconditioner
+
+        fc = getattr(self.part, "_fast_coupled", None)
+        if fc is None:
+            fc = FastCoupledPreconditioner(self)
+            self.part._fast_coupled = fc
+        fc.refactor(tangent)
+        return fc
+
     def assemble_real_coupled_preconditioner(
         self, spectral: exp08.SpectralTangentState
     ) -> spla.SuperLU:

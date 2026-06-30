@@ -873,7 +873,8 @@ def parse_args() -> argparse.Namespace:
                    "point and keep warm-starting from the last converged neighbour, so "
                    "over-fold points fail in ~one stalled solve. For high-power fold maps.")
     p.add_argument("--inproc-preconditioner",
-                   choices=["mean_tangent", "real_coupled", "spectral_coupled", "linear"],
+                   choices=["mean_tangent", "real_coupled", "real_coupled_fast",
+                            "spectral_coupled", "linear"],
                    default="mean_tangent",
                    help="Preconditioner for the in-process pump solve. mean_tangent "
                    "(default) is cheapest for small warm-start steps; real_coupled "

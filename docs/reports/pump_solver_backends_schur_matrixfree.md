@@ -172,6 +172,46 @@ kernel is validated and device-portable — wiring it into GMRES on a GPU machin
 target: at 205 matvecs × 2 ms ≈ 0.4 s, halving it is the largest remaining win
 short of cutting Newton steps (pseudo-arclength) near the fold.
 
+## Fastest CPU backend: `schur_cpu_rcfast` (assembly + symbolic-factorization reuse)
+
+The earlier conclusion -- "`mean_tangent` is near the CPU optimum, the coupled
+preconditioners lose to their factor cost" -- assumed scipy's `splu` re-does the
+full symbolic+numeric factorization (and `bmat` re-assembly) every Newton step.
+That is the same cost **JosephsonCircuits.jl avoids by using KLU with symbolic
+reuse**. Removing both costs makes the *exact* real-coupled preconditioner
+(GMRES = 1/Newton) the clear winner:
+
+* **Assembly reuse.** The real-coupled matrix pattern is constant (power, freq,
+  Newton step). `khat_ell = Bphi diag(gamma_hat_ell) Bphi^T` has fixed pattern and
+  `.data` linear in `gamma_hat_ell`, so a precomputed sparse map `W` rebuilds
+  `M.data = M_const + W @ khat_source` in one spmv (~33 ms) instead of `bmat`
+  (~280 ms).
+* **Symbolic-factorization reuse.** MKL Pardiso (`pypardiso`) does the symbolic
+  analysis once; each Newton step runs only the numeric phase (phase 23): ~28 ms
+  vs SuperLU's ~260 ms. Falls back to SuperLU if `pypardiso` is absent (still
+  gets assembly reuse). `experiments/pump_solvers/fast_coupled.py`.
+
+Per Newton step at the fold: ~33 ms assemble + ~28 ms numeric factor + ~13 ms
+solve ≈ 75 ms, vs the legacy real-coupled ~540 ms. Fold benchmark (one machine
+state, `--backends full_real_coupled schur_cpu_mt schur_cpu_rcfast`):
+
+| power | full_real_coupled | schur_cpu_mt | **schur_cpu_rcfast** | GMRES |
+|---|---|---|---|---|
+| −23.0 dBm | 2.84 s | 0.76 s | **0.46 s** | 4 |
+| −22.5 dBm | 3.39 s | 1.11 s | **0.60 s** | 5 |
+| −22.0 dBm | 6.61 s | 2.27 s | **1.21 s** | 8 |
+
+`schur_cpu_rcfast` is **~5.4× faster than the original baseline at −22 dBm and
+~1.9× over `schur_cpu_mt`**, sub-1 s through −22.5 dBm, gain drift 1e-10 dB,
+accepted 7/7. GMRES is 1/Newton, so the matvec is no longer the cost -- the
+remaining time is the numeric factor (≈8 × 60 ms) and the Newton count (8 at the
+very fold). Solution is bit-identical (3e-15) to `mean_tangent`.
+
+Use it via the map: `--inproc-pump-backend schur_cpu_mt --inproc-preconditioner
+real_coupled_fast` (Schur backend only; needs `pypardiso` for the full speedup).
+The remaining levers are now the Newton count (a tangent/arclength predictor near
+the fold) and a faster assemble spmv -- not the linear solve.
+
 ## Map integration
 
 `schur_cpu_mt` is wired into the exp10 map runner: `--inproc-pump-backend

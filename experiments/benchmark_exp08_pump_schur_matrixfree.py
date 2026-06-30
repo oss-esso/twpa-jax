@@ -72,6 +72,7 @@ BACKENDS: dict[str, BackendSpec] = {
     "full_adaptive": BackendSpec("full_adaptive", "full", "", "adaptive"),
     "schur_cpu_mt": BackendSpec("schur_cpu_mt", "schur", "assembled", "mean_tangent"),
     "schur_cpu_rc": BackendSpec("schur_cpu_rc", "schur", "assembled", "real_coupled"),
+    "schur_cpu_rcfast": BackendSpec("schur_cpu_rcfast", "schur", "assembled", "real_coupled_fast"),
     "schur_mf_jfnk": BackendSpec("schur_mf_jfnk", "schur", "matrix_free", "mean_tangent"),
 }
 
