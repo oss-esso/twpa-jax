@@ -45,6 +45,7 @@ import json
 import math
 import os
 import time
+import warnings
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -627,6 +628,19 @@ class NewtonKrylovSettings:
     verbose: bool
     continuation_predictor: str
     jvp_mode: str
+    # Stall detection: abort a Newton solve that is making negligible progress
+    # (residual reduction ratio above stall_ratio for stall_patience consecutive
+    # accepted steps while still far from tolerance). This stops the solver from
+    # grinding all max_newton iterations on an over-fold / unsolvable operating
+    # point, which is the dominant cost when sweeping past the pump-power fold.
+    # stall_patience <= 0 disables it.
+    stall_ratio: float = 0.8
+    stall_patience: int = 4
+    # Hard wall-time budget per solve_one (seconds). 0 disables. Aborts a solve
+    # that exceeds the budget (over-fold points near the harmonic-balance fold
+    # are stiff: each Newton step runs GMRES to maxiter, so they grind without a
+    # clean stall signal). Convergent warm-start points finish well under it.
+    solve_deadline_s: float = 0.0
 
 
 @dataclass
@@ -642,6 +656,29 @@ class StepReport:
     factor_runtime_s: float
     runtime_s: float
     failure_reason: str
+
+
+@dataclass
+class ContinuationTrace:
+    mode: str
+    attempted_lambdas: list[float]
+    accepted_lambdas: list[float]
+    failed_attempts: int
+    accepted_steps: int
+    fallback_used: bool
+    failure_reason: str
+
+
+def empty_continuation_trace(mode: str) -> ContinuationTrace:
+    return ContinuationTrace(
+        mode=mode,
+        attempted_lambdas=[],
+        accepted_lambdas=[],
+        failed_attempts=0,
+        accepted_steps=0,
+        fallback_used=False,
+        failure_reason="",
+    )
 
 
 class HarmonicNewtonKrylovSolver:
@@ -679,8 +716,16 @@ class HarmonicNewtonKrylovSolver:
         gmres_total = 0
         factor_total = 0.0
         failure_reason = ""
+        stall_count = 0
 
         for it in range(1, s.max_newton + 1):
+            if s.solve_deadline_s > 0.0 and (time.perf_counter() - t0) > s.solve_deadline_s:
+                failure_reason = f"solve exceeded {s.solve_deadline_s:.1f}s budget at Newton {it}"
+                return X, self._make_report(
+                    False, source_scale, nrm, it - 1, gmres_total,
+                    factor_total, t0, failure_reason,
+                )
+            pre_coeff = nrm["coeff_rel"]
             R = problem.residual_coeffs(X, source_scale)
             rhs = -pack_complex(R)
 
@@ -808,6 +853,23 @@ class HarmonicNewtonKrylovSolver:
             X = best_X
             nrm = best_nrm
 
+            # Stall detection: if accepted steps keep barely reducing the
+            # residual while still far from tolerance, the operating point is
+            # over the fold / unsolvable. Bail instead of grinding to max_newton.
+            if s.stall_patience > 0 and nrm["coeff_rel"] > 100.0 * s.newton_tol:
+                ratio = nrm["coeff_rel"] / max(pre_coeff, 1e-300)
+                stall_count = stall_count + 1 if ratio > s.stall_ratio else 0
+                if stall_count >= s.stall_patience:
+                    failure_reason = (
+                        f"stalled at Newton {it} (reduction ratio {ratio:.3f})"
+                    )
+                    if s.verbose:
+                        print(f"  newton={it:02d} STALL ratio={ratio:.3f} coeff_rel={nrm['coeff_rel']:.3e}")
+                    return X, self._make_report(
+                        False, source_scale, nrm, it, gmres_total,
+                        factor_total, t0, failure_reason,
+                    )
+
             if s.verbose:
                 msg = (
                     f"  newton={it:02d} alpha={alpha:.3e} "
@@ -925,6 +987,109 @@ class HarmonicNewtonKrylovSolver:
 
         return X_prev, reports
 
+    def solve_adaptive_continuation(
+        self,
+        problem: FullIPMPumpProblem,
+        x_init: np.ndarray | None,
+        *,
+        initial_step: float,
+        min_step: float,
+        growth: float,
+        shrink: float,
+        fallback_fixed_steps: int,
+    ) -> tuple[np.ndarray, list[StepReport], ContinuationTrace]:
+        reports: list[StepReport] = []
+        trace = empty_continuation_trace("adaptive")
+
+        if initial_step <= 0.0 or initial_step > 1.0:
+            raise ValueError("--adaptive-initial-step must be in (0, 1]")
+        if min_step <= 0.0 or min_step > 1.0:
+            raise ValueError("--adaptive-min-step must be in (0, 1]")
+        if growth < 1.0:
+            raise ValueError("--adaptive-growth must be >= 1")
+        if shrink <= 0.0 or shrink >= 1.0:
+            raise ValueError("--adaptive-shrink must be in (0, 1)")
+
+        X_current = problem.zeros() if x_init is None else np.array(x_init, dtype=np.complex128, copy=True)
+        lambda_current = 0.0
+        step = float(initial_step)
+
+        X_prevprev: np.ndarray | None = None
+        X_prev = X_current
+        lam_prevprev: float | None = None
+        lam_prev: float | None = 0.0
+
+        while lambda_current < 1.0 - 1e-12:
+            step = min(step, 1.0 - lambda_current)
+            target = float(min(1.0, lambda_current + step))
+            trace.attempted_lambdas.append(target)
+
+            X_guess = X_current
+            if (
+                self.settings.continuation_predictor == "secant"
+                and X_prevprev is not None
+                and lam_prev is not None
+                and lam_prevprev is not None
+                and abs(lam_prev - lam_prevprev) > 0.0
+            ):
+                beta = (target - lam_prev) / (lam_prev - lam_prevprev)
+                X_guess = X_prev + beta * (X_prev - X_prevprev)
+
+            print(f"=== adaptive continuation lambda={target:.6f} step={step:.6f} ===")
+            X_new, report = self.solve_one(problem, X_guess, target)
+            reports.append(report)
+
+            status = "VALID_CONVERGED" if report.converged else "FAIL"
+            msg = (
+                f"step_status={status} "
+                f"coeff_rel={report.coeff_rel:.3e} "
+                f"newton={report.newton_iterations} "
+                f"gmres_total={report.gmres_iterations_total} "
+                f"factor_s={report.factor_runtime_s:.3f} "
+                f"runtime_s={report.runtime_s:.3f} "
+                f"reason={report.failure_reason}"
+            )
+            if report.time_rel is not None:
+                msg = msg.replace(
+                    f"newton={report.newton_iterations}",
+                    f"time_rel={report.time_rel:.3e} newton={report.newton_iterations}",
+                )
+            print(msg)
+
+            if report.converged:
+                X_prevprev = X_current
+                lam_prevprev = lambda_current
+                X_current = X_new
+                X_prev = X_new
+                lambda_current = target
+                lam_prev = target
+                trace.accepted_lambdas.append(target)
+                step = min(1.0, max(min_step, step * growth))
+                continue
+
+            trace.failed_attempts += 1
+            trace.failure_reason = report.failure_reason
+            next_step = step * shrink
+            if next_step < min_step:
+                trace.fallback_used = True
+                print(
+                    "adaptive continuation failed below minimum step; "
+                    f"falling back to fixed {fallback_fixed_steps} steps"
+                )
+                X_fallback, fallback_reports = self.solve_continuation(
+                    problem,
+                    continuation_steps=fallback_fixed_steps,
+                    x_init=x_init,
+                )
+                reports.extend(fallback_reports)
+                trace.accepted_steps = len(trace.accepted_lambdas)
+                return X_fallback, reports, trace
+
+            step = next_step
+
+        trace.accepted_steps = len(trace.accepted_lambdas)
+        return X_current, reports, trace
+
     @staticmethod
     def _make_report(
         converged: bool,
@@ -983,6 +1148,97 @@ def gmres_call(
             maxiter=maxiter,
             callback=callback,
         )
+
+
+# =============================================================================
+# Initial guesses
+# =============================================================================
+
+def build_linear_phasor_seed(
+    problem: FullIPMPumpProblem,
+    *,
+    source_scale: float = 1.0,
+    method: str = "gmres",
+    rtol: float = 1e-6,
+    maxiter: int = 200,
+    restart: int = 60,
+) -> tuple[np.ndarray, dict[str, float | int | str]]:
+    """Build a first-harmonic seed from D(omega_p) X1 = S1.
+
+    This intentionally uses the same linear block and positive-frequency
+    source coefficient convention as the residual: x(t) = 2 Re X1 exp(i wt),
+    source(t) = I_p cos(wt), so S1 = 0.5 I_p at the pump node.
+    """
+    X = problem.zeros()
+    S = problem.source_coeffs(source_scale)
+    source_from_time = problem.grid.project_positive(problem.source_time(source_scale))
+    source_error = S - source_from_time
+    source_error_abs = float(np.linalg.norm(pack_complex(source_error)))
+    source_norm = float(np.linalg.norm(pack_complex(S)))
+    source_error_rel = source_error_abs / max(source_norm, 1e-300)
+
+    row = problem.source_row
+    A = problem._linear_blocks[row]
+    b = S[row]
+    gmres_iterations = 0
+    info = 0
+    t0 = time.perf_counter()
+
+    if method == "direct":
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", spla.MatrixRankWarning)
+            x1 = spla.spsolve(A, b)
+    elif method == "gmres":
+        def cb(_pr_norm: float) -> None:
+            nonlocal gmres_iterations
+            gmres_iterations += 1
+
+        try:
+            x1, info = spla.gmres(
+                A,
+                b,
+                rtol=rtol,
+                atol=0.0,
+                restart=restart,
+                maxiter=maxiter,
+                callback=cb,
+                callback_type="pr_norm",
+            )
+        except TypeError:
+            x1, info = spla.gmres(
+                A,
+                b,
+                tol=rtol,
+                restart=restart,
+                maxiter=maxiter,
+                callback=cb,
+            )
+    else:
+        raise ValueError(f"unknown linear seed method {method!r}")
+
+    runtime_s = time.perf_counter() - t0
+
+    if not np.all(np.isfinite(x1)):
+        raise RuntimeError("linear_phasor seed solve produced non-finite entries")
+
+    X[row] = np.asarray(x1, dtype=np.complex128)
+    linear_residual_abs = float(np.linalg.norm(A @ X[row] - b))
+    linear_residual_rel = linear_residual_abs / max(float(np.linalg.norm(b)), 1e-300)
+
+    return X, {
+        "initial_guess": "linear_phasor",
+        "linear_seed_source_scale": float(source_scale),
+        "linear_seed_mode": str(int(round(problem.grid.k[row]))),
+        "linear_seed_method": method,
+        "linear_seed_solve_runtime_s": float(runtime_s),
+        "linear_seed_solver_info": int(info),
+        "linear_seed_gmres_iterations": int(gmres_iterations),
+        "linear_seed_linear_residual_abs": linear_residual_abs,
+        "linear_seed_linear_residual_rel": linear_residual_rel,
+        "linear_seed_norm": float(np.linalg.norm(X[row])),
+        "linear_seed_source_error_abs": source_error_abs,
+        "linear_seed_source_error_rel": source_error_rel,
+    }
 
 
 # =============================================================================
@@ -1143,9 +1399,24 @@ def parse_args() -> argparse.Namespace:
     )
     p.add_argument("--continuation-steps", type=int, default=20)
     p.add_argument("--continuation-predictor", choices=["none", "secant"], default="none")
+    p.add_argument("--initial-guess", choices=["zero", "linear_phasor"], default="zero")
+    p.add_argument("--linear-seed-method", choices=["gmres", "direct"], default="gmres")
+    p.add_argument("--linear-seed-rtol", type=float, default=1e-6)
+    p.add_argument("--linear-seed-maxiter", type=int, default=200)
+    p.add_argument("--linear-seed-restart", type=int, default=60)
+    p.add_argument("--continuation-mode", choices=["fixed", "adaptive"], default="fixed")
+    p.add_argument("--adaptive-initial-step", type=float, default=1.0)
+    p.add_argument("--adaptive-min-step", type=float, default=0.05)
+    p.add_argument("--adaptive-growth", type=float, default=1.5)
+    p.add_argument("--adaptive-shrink", type=float, default=0.5)
+    p.add_argument("--adaptive-fallback-fixed-steps", type=int, default=20)
 
     p.add_argument("--newton-tol", type=float, default=1e-9)
     p.add_argument("--max-newton", type=int, default=16)
+    p.add_argument("--stall-ratio", type=float, default=0.8,
+                   help="Residual reduction ratio above which a Newton step counts as stalled.")
+    p.add_argument("--stall-patience", type=int, default=4,
+                   help="Consecutive stalled steps before aborting a solve (0 disables).")
 
     p.add_argument("--gmres-rtol", type=float, default=1e-7)
     p.add_argument("--gmres-atol", type=float, default=0.0)
@@ -1244,6 +1515,8 @@ def main() -> None:
         verbose=not args.quiet,
         continuation_predictor=args.continuation_predictor,
         jvp_mode=args.jvp_mode,
+        stall_ratio=args.stall_ratio,
+        stall_patience=args.stall_patience,
     )
 
     print("\n=== solve settings ===")
@@ -1252,15 +1525,44 @@ def main() -> None:
     print(f"harmonics={args.harmonics}")
     print(f"nt={args.nt}")
     print(f"real_unknowns={2 * args.harmonics * ipm.C.shape[0]}")
+    print(f"initial_guess={args.initial_guess}")
+    if args.initial_guess == "linear_phasor":
+        print(f"linear_seed_method={args.linear_seed_method}")
+        print(f"linear_seed_rtol={args.linear_seed_rtol}")
+        print(f"linear_seed_maxiter={args.linear_seed_maxiter}")
+        print(f"linear_seed_restart={args.linear_seed_restart}")
+    print(f"continuation_mode={args.continuation_mode}")
     print(f"continuation_steps={args.continuation_steps}")
     print(f"continuation_predictor={args.continuation_predictor}")
+    if args.continuation_mode == "adaptive":
+        print(f"adaptive_initial_step={args.adaptive_initial_step}")
+        print(f"adaptive_min_step={args.adaptive_min_step}")
+        print(f"adaptive_growth={args.adaptive_growth}")
+        print(f"adaptive_shrink={args.adaptive_shrink}")
+        print(f"adaptive_fallback_fixed_steps={args.adaptive_fallback_fixed_steps}")
     print(f"preconditioner={args.preconditioner}")
     print(f"jvp_mode={args.jvp_mode}")
     print(f"compute_time_residual={not args.skip_time_residual}")
 
     solver = HarmonicNewtonKrylovSolver(settings)
 
+    t0 = time.perf_counter()
     x_init = None
+    initial_guess_report: dict[str, Any] = {"initial_guess": args.initial_guess}
+    if args.initial_guess == "linear_phasor":
+        x_init, initial_guess_report = build_linear_phasor_seed(
+            problem,
+            source_scale=1.0,
+            method=args.linear_seed_method,
+            rtol=args.linear_seed_rtol,
+            maxiter=args.linear_seed_maxiter,
+            restart=args.linear_seed_restart,
+        )
+        print(f"linear_seed_solve_runtime_s={initial_guess_report['linear_seed_solve_runtime_s']:.6f}")
+        print(f"linear_seed_solver_info={initial_guess_report['linear_seed_solver_info']}")
+        print(f"linear_seed_linear_residual_rel={initial_guess_report['linear_seed_linear_residual_rel']:.12e}")
+        print(f"linear_seed_source_error_rel={initial_guess_report['linear_seed_source_error_rel']:.12e}")
+
     warm_started = False
     if args.promote_from_pump_dir:
         X_src, src_basis = load_pump_basis_from_solution(
@@ -1273,18 +1575,46 @@ def main() -> None:
         x_init = promote_solution_to_basis(X_src, src_basis, basis)
         warm_started = True
         shared = sorted(set(src_basis.modes) & set(basis.modes))
+        initial_guess_report = {
+            "initial_guess": "promote_from_pump_dir",
+            "warm_start_from": args.promote_from_pump_dir,
+            "warm_start_src_modes": src_basis.modes,
+            "warm_start_shared_modes": shared,
+        }
         print(f"warm_start_from={args.promote_from_pump_dir}")
         print(f"warm_start_src_modes={src_basis.modes}")
         print(f"warm_start_shared_modes={shared}")
 
-    t0 = time.perf_counter()
     if warm_started:
         X, reports = solver.solve_direct(problem, x_init)
+        continuation_trace = empty_continuation_trace("direct_warm_start")
+        continuation_trace.attempted_lambdas = [float(r.source_scale) for r in reports]
+        continuation_trace.accepted_lambdas = [float(r.source_scale) for r in reports if r.converged]
+        continuation_trace.failed_attempts = sum(1 for r in reports if not r.converged)
+        continuation_trace.accepted_steps = len(continuation_trace.accepted_lambdas)
+        continuation_trace.failure_reason = reports[-1].failure_reason if reports else "no reports"
+    elif args.continuation_mode == "adaptive":
+        X, reports, continuation_trace = solver.solve_adaptive_continuation(
+            problem,
+            x_init,
+            initial_step=args.adaptive_initial_step,
+            min_step=args.adaptive_min_step,
+            growth=args.adaptive_growth,
+            shrink=args.adaptive_shrink,
+            fallback_fixed_steps=args.adaptive_fallback_fixed_steps,
+        )
     else:
         X, reports = solver.solve_continuation(
             problem,
             continuation_steps=args.continuation_steps,
+            x_init=x_init,
         )
+        continuation_trace = empty_continuation_trace("fixed")
+        continuation_trace.attempted_lambdas = [float(r.source_scale) for r in reports]
+        continuation_trace.accepted_lambdas = [float(r.source_scale) for r in reports if r.converged]
+        continuation_trace.failed_attempts = sum(1 for r in reports if not r.converged)
+        continuation_trace.accepted_steps = len(continuation_trace.accepted_lambdas)
+        continuation_trace.failure_reason = reports[-1].failure_reason if reports else "no reports"
     total_runtime_s = time.perf_counter() - t0
 
     solution_summary = summarize_solution(problem, X)
@@ -1298,14 +1628,29 @@ def main() -> None:
         "pump_current_ratio_ic_median": pump_current_a / float(np.median(ipm.Ic)),
         "pump_freq_ghz": args.pump_freq_ghz,
         "omega_p": omega_p,
+        "total_runtime_s": total_runtime_s,
         "harmonics": basis.n_modes,
         "nt": args.nt,
         **basis.to_metadata(),
         "warm_started": warm_started,
         "promote_from_pump_dir": args.promote_from_pump_dir,
+        **initial_guess_report,
+        "continuation_mode": args.continuation_mode,
         "continuation_steps": args.continuation_steps,
         "continuation_predictor": args.continuation_predictor,
+        "adaptive_initial_step": args.adaptive_initial_step,
+        "adaptive_min_step": args.adaptive_min_step,
+        "adaptive_growth": args.adaptive_growth,
+        "adaptive_shrink": args.adaptive_shrink,
+        "adaptive_fallback_fixed_steps": args.adaptive_fallback_fixed_steps,
+        "continuation_trace": asdict(continuation_trace),
         "real_unknowns": 2 * basis.n_modes * ipm.C.shape[0],
+        "newton_tol": args.newton_tol,
+        "max_newton": args.max_newton,
+        "gmres_rtol": args.gmres_rtol,
+        "gmres_atol": args.gmres_atol,
+        "gmres_restart": args.gmres_restart,
+        "gmres_maxiter": args.gmres_maxiter,
         "preconditioner": args.preconditioner,
         "jvp_mode": args.jvp_mode,
         "compute_time_residual": not args.skip_time_residual,

@@ -126,9 +126,9 @@ class IPMParams:
     len3: int = 100
     len4: int = 300
 
-    Lj: float = 79e-12
+    Lj: float = 123.9e-12
     Cj: float = 145.0e-15
-    Cg: float = 33e-15
+    Cg: float = 66.0e-15
     Cl: float = 10 * 1.73e-15
     Ll: float = 10 * 4.13e-12
 
