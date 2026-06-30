@@ -424,6 +424,8 @@ class InProcessEngine:
             preconditioner=self.args.inproc_preconditioner, compute_time_residual=True, verbose=False,
             continuation_predictor="none", jvp_mode="aft", stall_ratio=0.8, stall_patience=4,
             solve_deadline_s=self.args.inproc_solve_deadline_s,
+            precond_reuse=self.args.inproc_precond_reuse,
+            precond_reuse_refresh_gmres=self.args.inproc_precond_refresh_gmres,
         )
 
     def _build_problem(self, freq_ghz: float, current_a: float):
@@ -493,6 +495,7 @@ class InProcessEngine:
             "pump_time_rel": (float(reports[-1].time_rel)
                               if reports and reports[-1].time_rel is not None else None),
             "pump_newton_total": int(sum(r.newton_iterations for r in reports)),
+            "pump_gmres_total": int(sum(r.gmres_iterations_total for r in reports)),
             "pump_branch_current_max": finite_or_none(summary.get("branch_i_max_abs")),
         }
         row.update({k: None for k in (
@@ -852,6 +855,15 @@ def parse_args() -> argparse.Namespace:
                    help="Preconditioner for the in-process pump solve. mean_tangent "
                    "(default) is cheapest for small warm-start steps; real_coupled "
                    "cuts GMRES iters but its full-Jacobian LU is costlier per Newton.")
+    p.add_argument("--inproc-precond-reuse", type=int, default=1,
+                   help="Reuse the preconditioner factor for up to N consecutive Newton "
+                   "steps (modified-Newton). 1 (default) refactors every step. N>1 "
+                   "amortizes the LU across steps -- the big win for real_coupled near "
+                   "the fold, where the exact LU barely changes between steps.")
+    p.add_argument("--inproc-precond-refresh-gmres", type=int, default=0,
+                   help="Force an early factor refresh when the previous Newton step's "
+                   "GMRES iterations crossed this threshold (staleness guard for "
+                   "--inproc-precond-reuse). 0 disables.")
     p.add_argument("--outdir", type=Path, default=ROOT / "outputs" / "exp10_pump_map_warmstart")
     p.add_argument("--ipm-dir", type=Path, default=ROOT / "outputs" / "ipm_python_design")
 

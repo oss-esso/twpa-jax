@@ -641,6 +641,19 @@ class NewtonKrylovSettings:
     # are stiff: each Newton step runs GMRES to maxiter, so they grind without a
     # clean stall signal). Convergent warm-start points finish well under it.
     solve_deadline_s: float = 0.0
+    # Preconditioner factor reuse (modified-Newton preconditioning). The
+    # preconditioner is only a GMRES accelerator -- the Newton update is always
+    # computed against the true Jacobian via the matvec -- so reusing one stale
+    # factor across several Newton steps does not change the converged solution,
+    # it only trades a few extra GMRES iterations for skipping the (expensive,
+    # exact) LU rebuild. Dominant win for ``real_coupled`` near the fold, where
+    # the full-Jacobian LU is re-factored every step but barely changes.
+    # precond_reuse = 1 refactors every step (legacy). N>1 reuses for up to N
+    # consecutive steps. precond_reuse_refresh_gmres > 0 forces an early refresh
+    # whenever the previous step's GMRES iteration count crossed the threshold
+    # (staleness guard: the factor has drifted too far to precondition well).
+    precond_reuse: int = 1
+    precond_reuse_refresh_gmres: int = 0
 
 
 @dataclass
@@ -718,6 +731,13 @@ class HarmonicNewtonKrylovSolver:
         failure_reason = ""
         stall_count = 0
 
+        # Cached preconditioner factor (modified-Newton reuse, see settings).
+        cached_real: spla.SuperLU | None = None
+        cached_coupled: spla.SuperLU | None = None
+        cached_factors: list[spla.SuperLU] | None = None
+        steps_since_factor = 0
+        last_gmres = 0
+
         for it in range(1, s.max_newton + 1):
             if s.solve_deadline_s > 0.0 and (time.perf_counter() - t0) > s.solve_deadline_s:
                 failure_reason = f"solve exceeded {s.solve_deadline_s:.1f}s budget at Newton {it}"
@@ -730,21 +750,44 @@ class HarmonicNewtonKrylovSolver:
             rhs = -pack_complex(R)
 
             tangent = problem.tangent_state(X)
+
+            # Decide whether to (re)build the preconditioner factor or reuse the
+            # cached one from an earlier Newton step (modified-Newton reuse).
+            have_cache = (cached_real is not None or cached_coupled is not None
+                          or cached_factors is not None)
+            refresh = (
+                not have_cache
+                or s.precond_reuse <= 1
+                or steps_since_factor >= s.precond_reuse
+                or (s.precond_reuse_refresh_gmres > 0
+                    and last_gmres >= s.precond_reuse_refresh_gmres)
+            )
+
             spectral_tangent = None
-            if s.jvp_mode == "spectral" or s.preconditioner in ("spectral_coupled", "real_coupled"):
+            if refresh and (s.jvp_mode == "spectral"
+                            or s.preconditioner in ("spectral_coupled", "real_coupled")):
+                spectral_tangent = problem.spectral_tangent_state(tangent)
+            elif s.jvp_mode == "spectral":
                 spectral_tangent = problem.spectral_tangent_state(tangent)
 
             tf = time.perf_counter()
-            coupled_factor = None
-            real_factor = None
-            if s.preconditioner == "real_coupled":
-                real_factor = problem.assemble_real_coupled_preconditioner(spectral_tangent)
-                factors = None
-            elif s.preconditioner == "spectral_coupled":
-                coupled_factor = problem.assemble_coupled_preconditioner(spectral_tangent)
-                factors = None
+            if refresh:
+                if s.preconditioner == "real_coupled":
+                    cached_real = problem.assemble_real_coupled_preconditioner(spectral_tangent)
+                    cached_coupled = cached_factors = None
+                elif s.preconditioner == "spectral_coupled":
+                    cached_coupled = problem.assemble_coupled_preconditioner(spectral_tangent)
+                    cached_real = cached_factors = None
+                else:
+                    cached_factors = problem.build_preconditioner_factors(
+                        X, s.preconditioner, tangent=tangent)
+                    cached_real = cached_coupled = None
+                steps_since_factor = 0
             else:
-                factors = problem.build_preconditioner_factors(X, s.preconditioner, tangent=tangent)
+                steps_since_factor += 1
+            real_factor = cached_real
+            coupled_factor = cached_coupled
+            factors = cached_factors
             factor_s = time.perf_counter() - tf
             factor_total += factor_s
 
@@ -810,6 +853,7 @@ class HarmonicNewtonKrylovSolver:
                 callback=cb,
             )
             gmres_total += gmres_counter["n"]
+            last_gmres = gmres_counter["n"]
 
             if info != 0:
                 failure_reason = f"GMRES did not fully converge, info={info}"
