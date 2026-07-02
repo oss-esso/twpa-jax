@@ -159,7 +159,23 @@ Measured on the 7.0 GHz column (Schur + `real_coupled_fast`), warm-started
 
 At the −22 dBm fold: **−37 % Newton steps, −43 % runtime**, same
 `VALID_CONVERGED`, gain drift ≪ 0.01 dB (≈1e-8). ~32 % faster over the whole warm
-column. Stacks on top of `schur_cpu_rcfast`. Code:
+column. Stacks on top of `schur_cpu_rcfast`.
+
+**Confirmed map-wide** (full 35×35 map, −30→−20 dBm × 6–8 GHz, corrected signal
+`ws = wp − 100 MHz`, `none` vs `secant`):
+
+| metric | copy (none) | secant |
+|---|---:|---:|
+| points converged | 918 / 1225 | **1039 / 1225 (+121)** |
+| gain drift vs none (common) | — | **3.1e-7 dB** |
+| Newton total (common PASS) | 5680 | **4803 (−15.4 %)** |
+| pump runtime (common PASS) | 638 s | **554 s (−13.2 %)** |
+
+The predictor also **extends the convergence frontier**: secant reaches a higher
+pump power in 20/35 frequency columns (mean **+0.96 dBm**, max **+6.8 dBm**),
+because the better initial guess lets Newton converge further up the gain ridge.
+The 196 `secant_fallback` cells (overshoot → retried from the plain warm start)
+introduced zero new failures. Code:
 `exp10_full_ipm_pump_map_warmstart.py` (`secant_guess` + warm-pass loop); tests in
 `tests/test_exp10_gate.py`. Optional next step if pushing *past* the fold: a
 pseudo-arclength predictor/corrector (secant alone can overshoot the turning
