@@ -50,6 +50,14 @@ def read_json(path: Path) -> dict[str, Any] | None:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def signal_ghz_for(pump_freq_ghz: float, args: argparse.Namespace) -> float:
+    """Readout signal frequency: ws = wp - detuning (default 100 MHz) per point,
+    unless an explicit fixed --signal-ghz overrides it."""
+    if getattr(args, "signal_ghz", None) is not None:
+        return float(args.signal_ghz)
+    return float(pump_freq_ghz) - float(args.signal_detuning_mhz) / 1000.0
+
+
 def run(cmd: list[str], log: Path, timeout_s: float) -> int:
     log.parent.mkdir(parents=True, exist_ok=True)
     with log.open("w", encoding="utf-8") as f:
@@ -102,7 +110,7 @@ def solve_point(
             "--outdir", str(gain_dir),
             "--source-port", str(args.source_port),
             "--out-port", str(args.out_port),
-            "--signal-ghz", f"{args.signal_ghz:.12g}",
+            "--signal-ghz", f"{signal_ghz_for(freq_ghz, args):.12g}",
             "--sidebands", str(args.sidebands),
             "--gamma-nt", str(args.gamma_nt),
             "--fallback-pump-freq-ghz", f"{freq_ghz:.12g}",
@@ -156,7 +164,13 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--pump-freq-min-ghz", type=float, default=5.0)
     p.add_argument("--pump-freq-max-ghz", type=float, default=10.0)
     p.add_argument("--n-freq", type=int, default=26)
-    p.add_argument("--signal-ghz", type=float, default=6.0)
+    # Default: signal tracks the pump at ws = wp - 100 MHz per swept frequency.
+    p.add_argument("--signal-ghz", type=float, default=None,
+                   help="Fixed absolute signal frequency (GHz). If omitted, the "
+                   "signal tracks the pump at ws = wp - --signal-detuning-mhz.")
+    p.add_argument("--signal-detuning-mhz", type=float, default=100.0,
+                   help="Signal detuning below the pump when --signal-ghz is not "
+                   "set: ws = wp - detuning (default 100 MHz).")
     p.add_argument("--jc-scales", type=str, default="1.0,2.0")
     p.add_argument("--pump-port", type=int, default=4)
     p.add_argument("--source-port", type=int, default=1)
@@ -206,7 +220,9 @@ def main() -> None:
                 label=f"inject {inj_uA:.2f} uA = {inj_uA*1e-6/args.ic_a:.2f} Ic (scale {scale:g})")
     ax.axhline(0.0, color="0.6", lw=0.8)
     ax.set_xlabel("pump frequency (GHz)")
-    ax.set_ylabel(f"gain S21 at signal {args.signal_ghz:g} GHz (dB)")
+    _sig_lbl = (f"{args.signal_ghz:g} GHz" if args.signal_ghz is not None
+               else f"wp - {args.signal_detuning_mhz:g} MHz")
+    ax.set_ylabel(f"gain S21 at signal {_sig_lbl} (dB)")
     ax.set_title(f"IPM JTWPA gain vs pump frequency @ {args.power_dbm:g} dBm "
                  f"(Ip={dbm_to_peak_current_a(args.power_dbm, attenuation_db=args.attenuation_db, z0_ohm=args.z0_ohm)*1e6:.2f} uA)")
     ax.legend()

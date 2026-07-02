@@ -61,6 +61,14 @@ def run_command(cmd: list[str], stdout_path: Path, stderr_path: Path) -> int:
     return int(proc.returncode)
 
 
+def signal_ghz_for(pump_freq_ghz: float, args: argparse.Namespace) -> float:
+    """Readout signal frequency: ws = wp - detuning (default 100 MHz) per cell,
+    unless an explicit fixed --signal-ghz overrides it."""
+    if getattr(args, "signal_ghz", None) is not None:
+        return float(args.signal_ghz)
+    return float(pump_freq_ghz) - float(args.signal_detuning_mhz) / 1000.0
+
+
 def best_gain_row(gain_csv: Path) -> dict[str, Any] | None:
     if not gain_csv.exists():
         return None
@@ -109,7 +117,14 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--pump-freq-max-ghz", type=float, default=8.0)
     p.add_argument("--attenuation-db", type=float, default=35.0)
     p.add_argument("--z0-ohm", type=float, default=50.0)
-    p.add_argument("--signal-ghz", type=float, default=6.0)
+    # Default: signal tracks the pump at ws = wp - 100 MHz per cell. Pass
+    # --signal-ghz to force a fixed absolute signal.
+    p.add_argument("--signal-ghz", type=float, default=None,
+                   help="Fixed absolute signal frequency (GHz). If omitted, the "
+                   "signal tracks each cell's pump at ws = wp - --signal-detuning-mhz.")
+    p.add_argument("--signal-detuning-mhz", type=float, default=100.0,
+                   help="Signal detuning below the pump when --signal-ghz is not "
+                   "set: ws = wp - detuning (default 100 MHz).")
     p.add_argument("--gain-sweep", action="store_true", help="Run exp09 signal sweep instead of one signal point.")
     p.add_argument("--signal-start-ghz", type=float, default=4.0)
     p.add_argument("--signal-stop-ghz", type=float, default=8.0)
@@ -235,7 +250,8 @@ def main() -> None:
                         str(args.signal_points),
                     ])
                 else:
-                    gain_cmd.extend(["--signal-ghz", str(args.signal_ghz)])
+                    gain_cmd.extend(["--signal-ghz",
+                                     f"{signal_ghz_for(pump_freq_ghz, args):.12g}"])
                 gain_rc = run_command(gain_cmd, point_dir / "gain_stdout.txt", point_dir / "gain_stderr.txt")
 
             pump_report = load_json(pump_report_path) if pump_report_path.exists() else None
@@ -370,7 +386,11 @@ def write_outputs(
         "z0_ohm": float(args.z0_ohm),
         "current_convention": "I_peak = sqrt(2 * P_source_W / Z0), P_source_dBm = P_external_dBm - attenuation_dB",
         "gain_sweep": bool(args.gain_sweep),
-        "signal_ghz": None if args.gain_sweep else float(args.signal_ghz),
+        "signal_ghz": args.signal_ghz,
+        "signal_detuning_mhz": args.signal_detuning_mhz,
+        "signal_convention": ("sweep" if args.gain_sweep
+                              else "fixed" if args.signal_ghz is not None
+                              else f"ws = wp - {args.signal_detuning_mhz} MHz"),
         "best": best,
     }
     with (outdir / "gain_map_summary.json").open("w", encoding="utf-8") as f:
@@ -384,7 +404,7 @@ def write_outputs(
         f"- attenuation: `{args.attenuation_db}` dB",
         f"- source pump power: `{args.pump_power_min_dbm - args.attenuation_db}` to `{args.pump_power_max_dbm - args.attenuation_db}` dBm",
         f"- pump frequency: `{args.pump_freq_min_ghz}` to `{args.pump_freq_max_ghz}` GHz",
-        f"- signal readout: `{'sweep max' if args.gain_sweep else str(args.signal_ghz) + ' GHz'}`",
+        f"- signal readout: `{'sweep max' if args.gain_sweep else ('%g GHz' % args.signal_ghz) if args.signal_ghz is not None else ('ws = wp - %g MHz' % args.signal_detuning_mhz)}`",
         "- current convention: `I_peak = sqrt(2 * P_source_W / Z0)`",
         f"- elapsed: `{elapsed:.3f}` s",
         f"- status counts: `{status_counts}`",

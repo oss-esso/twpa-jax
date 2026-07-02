@@ -69,6 +69,18 @@ def dbm_to_peak_current_a(power_dbm: float, *, attenuation_db: float, z0_ohm: fl
     return math.sqrt(2.0 * power_w / float(z0_ohm))
 
 
+def signal_ghz_for(pump_freq_ghz: float, args: argparse.Namespace) -> float:
+    """Readout signal frequency for a map cell.
+
+    Physically the map sweeps the pump frequency, so the signal must track it at a
+    fixed detuning ws = wp - detuning (default 100 MHz). An explicit --signal-ghz
+    overrides this with a fixed absolute signal.
+    """
+    if getattr(args, "signal_ghz", None) is not None:
+        return float(args.signal_ghz)
+    return float(pump_freq_ghz) - float(args.signal_detuning_mhz) / 1000.0
+
+
 def finite_or_none(value: Any) -> float | None:
     try:
         x = float(value)
@@ -269,7 +281,7 @@ def run_point(
             "--z0-ohm", str(args.z0_ohm),
             "--source-port", str(args.source_port),
             "--out-port", str(args.out_port),
-            "--signal-ghz", f"{args.signal_ghz:.12g}",
+            "--signal-ghz", f"{signal_ghz_for(point.pump_freq_ghz, args):.12g}",
             "--sidebands", str(args.sidebands),
             "--gamma-nt", str(args.gamma_nt),
             "--fallback-pump-freq-ghz", f"{point.pump_freq_ghz:.12g}",
@@ -560,7 +572,8 @@ class InProcessEngine:
         ).astype(np.complex128).tocsr()
         return exp09.solve_gain_one(
             ipm=self.ipm09, khat=khat, khat_off_0=khat_off_0, omega_p=pump.omega_p,
-            signal_ghz=a.signal_ghz, sidebands=a.sidebands, signal_m=0, idler_m=-2,
+            signal_ghz=signal_ghz_for(freq_ghz, a), sidebands=a.sidebands,
+            signal_m=0, idler_m=-2,
             source_index=self.source_idx, out_index=self.out_idx,
             source_current_a=1.0, source_port=a.source_port, out_port=a.out_port,
             z0_ohm=a.z0_ohm, loss_model="current_complex_c",
@@ -843,6 +856,9 @@ def write_summary(
         "attenuation_db": args.attenuation_db,
         "z0_ohm": args.z0_ohm,
         "signal_ghz": args.signal_ghz,
+        "signal_detuning_mhz": args.signal_detuning_mhz,
+        "signal_convention": ("fixed" if args.signal_ghz is not None
+                              else f"ws = wp - {args.signal_detuning_mhz} MHz"),
         "current_convention": "I_peak = sqrt(2 * P_W / Z0), P = P_dbm - attenuation_db",
         "cold_status_counts": counts(cold_rows),
         "warm_status_counts": counts(warm_rows),
@@ -971,7 +987,16 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--pump-freq-max-ghz", type=float, default=8.0)
     p.add_argument("--attenuation-db", type=float, default=35.0)
     p.add_argument("--z0-ohm", type=float, default=50.0)
-    p.add_argument("--signal-ghz", type=float, default=6.0)
+    # Signal readout frequency. Default: track the pump at a fixed detuning
+    # ws = wp - 100 MHz per cell (the physically correct choice for a map that
+    # sweeps pump frequency). Pass --signal-ghz to force a fixed absolute signal.
+    p.add_argument("--signal-ghz", type=float, default=None,
+                   help="Fixed absolute signal frequency (GHz). If omitted, the "
+                   "signal tracks each cell's pump at ws = wp - "
+                   "--signal-detuning-mhz.")
+    p.add_argument("--signal-detuning-mhz", type=float, default=100.0,
+                   help="Signal detuning below the pump when --signal-ghz is not "
+                   "set: ws = wp - detuning (default 100 MHz).")
 
     p.add_argument("--pump-port", type=int, default=4)
     p.add_argument("--source-port", type=int, default=1)
