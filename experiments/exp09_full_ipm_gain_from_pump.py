@@ -965,6 +965,7 @@ def main() -> None:
     )
     khat_runtime = time.perf_counter() - t0
 
+    t0 = time.perf_counter()
     if dc_branch_flux is None:
         gamma_off = ipm.Ic / ipm.phi0
     else:
@@ -975,8 +976,10 @@ def main() -> None:
         @ sp.diags(gamma_off, offsets=0, format="csr")
         @ ipm.Bphi.T
     ).astype(np.complex128).tocsr()
+    khat_off_runtime = time.perf_counter() - t0
 
     print(f"khat_build_runtime_s={khat_runtime:.6f}")
+    print(f"khat_off_build_runtime_s={khat_off_runtime:.6f}")
     print(f"khat_0_nnz={khat[0].nnz}")
     if 2 in khat:
         print(f"khat_plus2_nnz={khat[2].nnz}")
@@ -1043,6 +1046,7 @@ def main() -> None:
         "loss_linearization_model": loss_model,
         "gamma_hat_runtime_s": gamma_runtime,
         "khat_build_runtime_s": khat_runtime,
+        "khat_off_build_runtime_s": khat_off_runtime,
         "total_runtime_s": time.perf_counter() - t_all,
     }
 

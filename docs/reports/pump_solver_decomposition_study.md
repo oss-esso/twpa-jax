@@ -27,7 +27,7 @@ baseline (drift ~1e-8 dB), 5.4× over the original `full_real_coupled`.
 
 | stage | cost | GPU-friendly? | notes |
 |---|---:|---|---|
-| **assemble** `M.data = M_const + W @ src` | **~33 ms** | ✅ (plain spmv) | **largest single term** |
+| **assemble refresh** `M.data = M_const + W @ src` | **~19 ms** | yes (plain spmv) | batched projection done; `W @ src` remains ~16 ms |
 | **numeric LU factor** (Pardiso phase 22) | ~18–20 ms | ❌ (see §3) | at the decomposition floor (§3) |
 | **triangular solve** (phase 33) | ~9 ms | ❌ (sequential) | |
 | JVP matvec (GMRES=1) | ~2.8 ms | ✅ (4.6× on GPU) | only one, since GMRES=1 |
@@ -36,13 +36,13 @@ Outer loop: **Newton count** — 8 at the raw fold, **5 with the secant predicto
 
 ### Bottlenecks, ranked
 
-1. **The assembly spmv (~33 ms) — not the LU — is the #1 per-step cost.** It is a
-   single large sparse mat-vec (`W` has `M.nnz ≈ 3.0M` rows). This is the next
-   real CPU optimization target (leaner scatter / smaller `W`), and unlike the
-   factor it *is* GPU-friendly.
-2. **The numeric LU factor (~20 ms).** Provably near-optimal for this matrix — no
-   other decomposition is cheaper (§3). Do not spend effort here.
-3. **The Newton count at the fold.** Addressed by the secant predictor (8→5).
+1. **The numeric LU factor (~20 ms) and assembly refresh (~19 ms) are now neck-and-neck.**
+   The old assembly bucket was ~33 ms; batching the `gamma_hat_ell` Fourier
+   projection cuts the refresh to ~19 ms.
+2. **The remaining assembly scatter (`W @ src`, ~16 ms).** This is the next real
+   CPU micro-optimization target (leaner scatter / smaller `W`), and unlike the
+   factor it is GPU-friendly.
+3. **The Newton count at the fold.** Addressed by the secant predictor (8->5).
 4. **The triangular solve (~9 ms).** Sequential; the reason GPU can't help (§2).
 
 ---
@@ -114,7 +114,7 @@ removing it is exactly the forbidden physics change.
 
 ### Verdict
 
-> **Sparse LU with symbolic reuse (Pardiso mtype 11) is at the practical floor for
+> **Sparse LU with symbolic reuse (Pardiso mtype 1, structurally symmetric real) is at the practical floor for
 > `M`.** Fill is already ~1.8×, the structurally-symmetric pattern is exploited by
 > the ordering, and every alternative decomposition is provably worse:
 > Cholesky (indefinite), LDLᵀ (kills the conjugate term → +GMRES), block-triangular
@@ -127,7 +127,7 @@ removing it is exactly the forbidden physics change.
 
 - **Use `schur_cpu_rcfast` + secant predictor.** It is optimal on CPU: GMRES=1,
   LU at the decomposition floor, Newton count minimized.
-- **Next CPU lever is the assembly spmv (~33 ms), not the LU.**
+- **Next CPU lever is the remaining assembly scatter (`W @ src`, ~16 ms), not the LU.**
 - **GPU only pays with a full on-device loop + cuDSS**, and only at larger
   harmonic content than the current IPM case. Do not port a naive GPU GMRES or
   retry `cupyx.splu`/`spsolve` as the preconditioner.

@@ -10,7 +10,7 @@ using Symbolics
 using Statistics
 using DelimitedFiles
 
-cases_dir = raw"D:\Projects\Thesis\Harmonia.jl\experiments\solver_benchmark\cases\jc_docs"
+cases_dir = get(ENV, "JC_DOCS_CASES_DIR", raw"D:\Projects\Thesis\Harmonia.jl\experiments\solver_benchmark\cases\jc_docs")
 case    = ARGS[1]
 outdir  = ARGS[2]
 mkpath(outdir)

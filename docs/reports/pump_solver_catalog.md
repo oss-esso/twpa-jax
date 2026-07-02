@@ -66,17 +66,19 @@ scipy's `splu`+`bmat` re-pay every Newton step — the same costs
 JosephsonCircuits.jl avoids with KLU:
 
 - **Assembly reuse.** Real-coupled matrix pattern is constant; `.data` is linear
-  in `gamma_hat`, so a precomputed sparse scatter map rebuilds
-  `M.data = M_const + W @ khat_source` in ~33 ms (vs `bmat` ~280 ms).
+  in `gamma_hat`, so a precomputed batched Fourier projection plus sparse
+  scatter map rebuilds `M.data = M_const + W @ khat_source` in ~19 ms
+  (vs `bmat` ~280 ms).
 - **Symbolic-factorization reuse.** MKL Pardiso (`pypardiso`) analyses once;
   each Newton step runs only the numeric phase (phase 23) ≈28 ms (vs SuperLU
   ~260 ms). Falls back to SuperLU if `pypardiso` absent (assembly reuse only).
 
-Per Newton step at the fold: ~33 ms assemble + ~28 ms numeric factor + ~13 ms
-solve ≈ 75 ms (vs legacy ~540 ms). GMRES = 1/Newton, so the residual cost is now
-the numeric factor × Newton-count. **Remaining levers are the Newton count
-(a power-axis tangent/arclength predictor) and the assemble spmv — not the
-linear solve.**  Use: `--inproc-pump-backend schur_cpu_mt --inproc-preconditioner
+Per Newton step at the fold: ~19 ms assemble refresh + ~28 ms numeric factor +
+~13 ms solve = ~60 ms (vs legacy ~540 ms). GMRES = 1/Newton, so the residual cost
+is now the numeric factor x Newton-count. **Remaining levers are the Newton count
+(a power-axis tangent/arclength predictor) and the remaining `W @ khat_source`
+scatter (~16 ms), not the linear solve.**  Use:
+`--inproc-pump-backend schur_cpu_mt --inproc-preconditioner
 real_coupled_fast` (needs `pypardiso`). Code: `pump_solvers/fast_coupled.py`.
 
 ## 4. LU-free / operator-only solvers ❌
@@ -195,8 +197,10 @@ levers are orthogonal to the solve — **do fewer / cheaper Newton steps**:
 
 1. ✅ **Fewer Newton steps at the fold** — the power-axis secant predictor (§8):
    −37 % Newton / −43 % runtime at −22 dBm, gain-identical. Done.
-2. **Faster assemble spmv** — the ~33 ms `M.data = M_const + W @ khat_source`
-   (still open, the next micro-optimization).
+2. **Faster gamma projection inside assembly** -- batched the `gamma_hat_ell`
+   Fourier projection, cutting the fold assembly refresh from ~35 ms to ~19 ms.
+   Remaining CPU micro-optimization target: the `W @ khat_source` scatter itself
+   (~16 ms median).
 
 ## Where the code lives
 

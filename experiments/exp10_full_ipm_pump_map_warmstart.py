@@ -134,7 +134,9 @@ def run_command(
 def pump_metrics(report: dict[str, Any] | None) -> dict[str, float | None]:
     if report is None:
         return {k: None for k in (
-            "pump_runtime_s", "pump_factor_runtime_s", "pump_coeff_rel",
+            "pump_runtime_s", "pump_factor_runtime_s",
+            "pump_preconditioner_assembly_runtime_s",
+            "pump_preconditioner_numeric_factor_runtime_s", "pump_coeff_rel",
             "pump_time_rel", "pump_newton_total", "pump_branch_current_max",
         )}
     reports = report.get("reports", [])
@@ -143,6 +145,8 @@ def pump_metrics(report: dict[str, Any] | None) -> dict[str, float | None]:
     return {
         "pump_runtime_s": sum(finite_or_none(r.get("runtime_s")) or 0.0 for r in reports) if reports else None,
         "pump_factor_runtime_s": sum(finite_or_none(r.get("factor_runtime_s")) or 0.0 for r in reports) if reports else None,
+        "pump_preconditioner_assembly_runtime_s": sum(finite_or_none(r.get("preconditioner_assembly_runtime_s")) or 0.0 for r in reports) if reports else None,
+        "pump_preconditioner_numeric_factor_runtime_s": sum(finite_or_none(r.get("preconditioner_numeric_factor_runtime_s")) or 0.0 for r in reports) if reports else None,
         "pump_coeff_rel": finite_or_none(final.get("coeff_rel")),
         "pump_time_rel": finite_or_none(final.get("time_rel")),
         "pump_newton_total": int(sum(int(r.get("newton_iterations", 0)) for r in reports)),
@@ -155,6 +159,9 @@ def gain_metrics(report: dict[str, Any] | None) -> dict[str, float | None]:
         return {k: None for k in (
             "gain_db", "gain_vs_off_db", "gain_vs_pumpdiag_db",
             "signal_ghz", "linear_rel_residual", "gain_total_runtime_s",
+            "gain_gamma_hat_runtime_s", "gain_khat_build_runtime_s",
+            "gain_khat_off_runtime_s", "gain_matrix_assemble_runtime_s", "gain_factor_solve_runtime_s",
+            "gain_baseline_off_runtime_s", "gain_baseline_pumpdiag_runtime_s",
         )}
     results = report.get("results", [])
     valid = [r for r in results if finite_or_none(r.get("gain_db")) is not None]
@@ -166,6 +173,13 @@ def gain_metrics(report: dict[str, Any] | None) -> dict[str, float | None]:
         "signal_ghz": finite_or_none(best.get("signal_ghz")),
         "linear_rel_residual": finite_or_none(best.get("linear_rel_residual")),
         "gain_total_runtime_s": finite_or_none(report.get("metadata", {}).get("total_runtime_s")),
+        "gain_gamma_hat_runtime_s": finite_or_none(report.get("metadata", {}).get("gamma_hat_runtime_s")),
+        "gain_khat_build_runtime_s": finite_or_none(report.get("metadata", {}).get("khat_build_runtime_s")),
+        "gain_khat_off_runtime_s": finite_or_none(report.get("metadata", {}).get("khat_off_build_runtime_s")),
+        "gain_matrix_assemble_runtime_s": finite_or_none(best.get("assemble_runtime_s")),
+        "gain_factor_solve_runtime_s": finite_or_none(best.get("factor_solve_runtime_s")),
+        "gain_baseline_off_runtime_s": finite_or_none(best.get("baseline_off_runtime_s")),
+        "gain_baseline_pumpdiag_runtime_s": finite_or_none(best.get("baseline_pumpdiag_runtime_s")),
     }
 
 
@@ -261,7 +275,7 @@ def run_point(
     if promote_from is not None:
         pump_cmd.extend(["--promote-from-pump-dir", str(promote_from)])
 
-    pump_rc, _ = run_command(
+    pump_rc, pump_wall_runtime_s = run_command(
         pump_cmd,
         stdout_path=pdir / "pump_stdout.txt",
         stderr_path=pdir / "pump_stderr.txt",
@@ -286,13 +300,15 @@ def run_point(
             "--gamma-nt", str(args.gamma_nt),
             "--fallback-pump-freq-ghz", f"{point.pump_freq_ghz:.12g}",
         ]
-        gain_rc, _ = run_command(
+        gain_rc, gain_wall_runtime_s = run_command(
             gain_cmd,
             stdout_path=pdir / "gain_stdout.txt",
             stderr_path=pdir / "gain_stderr.txt",
             timeout_s=args.gain_timeout_s,
         )
         gain_report = read_json(gain_dir / "gain_report.json")
+    else:
+        gain_wall_runtime_s = None
     g_status = gain_status(gain_report, gain_rc)
 
     status = "PASS" if p_status == "VALID_CONVERGED" and g_status == "VALID_SOLVED" else "ERROR"
@@ -309,6 +325,8 @@ def run_point(
         "gain_status": g_status,
         "warm_started": promote_from is not None,
         "elapsed_s": time.perf_counter() - point_start,
+        "pump_wall_runtime_s": pump_wall_runtime_s,
+        "gain_wall_runtime_s": gain_wall_runtime_s,
         "pump_dir": str(pump_dir),
     }
     row.update(pump_metrics(pump_report))
@@ -468,12 +486,16 @@ class InProcessEngine:
         gain_dir = pdir / "gain"
         pdir.mkdir(parents=True, exist_ok=True)
         t0 = time.perf_counter()
+        pump_wall_start = time.perf_counter()
 
         injected = point.current_a * a.pump_current_jc_scale
+        t_setup = time.perf_counter()
         full_problem, basis, omega = self._build_problem(point.pump_freq_ghz, injected)
+        pump_setup_runtime_s = time.perf_counter() - t_setup
         # Optional Schur-reduced backend: solve on retained nodes, reconstruct
         # the full solution for write_results/exp09 (which need full-node X).
         use_schur = a.inproc_pump_backend == "schur_cpu_mt"
+        t_schur = time.perf_counter()
         if use_schur:
             part = self._schur_part_cache.get(point.pump_freq_ghz)
             sprob = (SchurReducedProblem(full=full_problem, partition=part)
@@ -483,8 +505,10 @@ class InProcessEngine:
             solve_problem = sprob
         else:
             solve_problem = full_problem
+        pump_schur_setup_runtime_s = time.perf_counter() - t_schur
         solver = exp08.HarmonicNewtonKrylovSolver(self._settings())
 
+        t_solve = time.perf_counter()
         if mode == "warm" and warm_X is not None:
             X, reports = solver.solve_direct(solve_problem, warm_X)
         elif mode == "seed" and not use_schur:
@@ -500,6 +524,8 @@ class InProcessEngine:
         else:  # cold (and schur seed -> cold continuation on retained)
             X, reports = solver.solve_continuation(solve_problem, continuation_steps=a.continuation_steps)
 
+        pump_solve_wall_runtime_s = time.perf_counter() - t_solve
+
         converged = bool(reports and reports[-1].converged
                          and abs(reports[-1].source_scale - 1.0) < 1e-12)
 
@@ -514,8 +540,11 @@ class InProcessEngine:
             "pump_current_ratio_ic_median": injected / self.ic_median,
             "pump_backend": a.inproc_pump_backend,
         }
+        t_write = time.perf_counter()
         summary = exp08.summarize_solution(full_problem, X_full)
         exp08.write_results(pump_dir, X_full, reports, summary, metadata)
+        pump_write_runtime_s = time.perf_counter() - t_write
+        pump_wall_runtime_s = time.perf_counter() - pump_wall_start
 
         row: dict[str, Any] = {
             "point_index": point.index, "i_power": point.i_power, "j_freq": point.j_freq,
@@ -523,7 +552,14 @@ class InProcessEngine:
             "pump_current_peak_a": point.current_a, "warm_started": mode == "warm",
             "pump_status": "VALID_CONVERGED" if converged else "FAIL",
             "pump_runtime_s": float(sum(r.runtime_s for r in reports)),
+            "pump_wall_runtime_s": pump_wall_runtime_s,
+            "pump_setup_runtime_s": pump_setup_runtime_s,
+            "pump_schur_setup_runtime_s": pump_schur_setup_runtime_s,
+            "pump_solve_wall_runtime_s": pump_solve_wall_runtime_s,
+            "pump_write_runtime_s": pump_write_runtime_s,
             "pump_factor_runtime_s": float(sum(r.factor_runtime_s for r in reports)),
+            "pump_preconditioner_assembly_runtime_s": float(sum(getattr(r, "preconditioner_assembly_runtime_s", 0.0) for r in reports)),
+            "pump_preconditioner_numeric_factor_runtime_s": float(sum(getattr(r, "preconditioner_numeric_factor_runtime_s", 0.0) for r in reports)),
             "pump_coeff_rel": float(reports[-1].coeff_rel) if reports else None,
             "pump_time_rel": (float(solve_problem.full_time_residual_rel(X, 1.0))
                               if use_schur and converged
@@ -535,11 +571,16 @@ class InProcessEngine:
         }
         row.update({k: None for k in (
             "gain_db", "gain_vs_off_db", "gain_vs_pumpdiag_db", "signal_ghz",
-            "linear_rel_residual", "gain_total_runtime_s")})
+            "linear_rel_residual", "gain_total_runtime_s", "gain_wall_runtime_s",
+            "gain_gamma_hat_runtime_s", "gain_khat_build_runtime_s",
+            "gain_khat_off_runtime_s", "gain_matrix_assemble_runtime_s",
+            "gain_factor_solve_runtime_s", "gain_baseline_off_runtime_s",
+            "gain_baseline_pumpdiag_runtime_s")})
         row["gain_status"] = "ERROR"
 
         if converged:
-            g = self._gain(pump_dir, gain_dir, point.pump_freq_ghz)
+            g, gain_timing = self._gain(pump_dir, gain_dir, point.pump_freq_ghz)
+            row.update(gain_timing)
             if g is not None and g.status == "VALID_SOLVED":
                 row["gain_status"] = "VALID_SOLVED"
                 row["gain_db"] = float(g.gain_db)
@@ -547,7 +588,6 @@ class InProcessEngine:
                 row["gain_vs_pumpdiag_db"] = float(g.gain_vs_pumpdiag_db)
                 row["signal_ghz"] = float(g.signal_ghz)
                 row["linear_rel_residual"] = float(g.linear_rel_residual)
-                row["gain_total_runtime_s"] = float(g.factor_solve_runtime_s)
 
         row["status"] = "PASS" if (row["pump_status"] == "VALID_CONVERGED"
                                    and row["gain_status"] == "VALID_SOLVED") else "ERROR"
@@ -558,19 +598,26 @@ class InProcessEngine:
     def _gain(self, pump_dir: Path, gain_dir: Path, freq_ghz: float):
         a = self.args
         gain_dir.mkdir(parents=True, exist_ok=True)
+        t_all = time.perf_counter()
         pump = exp09.load_pump(pump_dir, fallback_pump_freq_ghz=freq_ghz)
         ms = exp09.sideband_list(a.sidebands)
         max_ell = max(abs(m - q) for m in ms for q in ms)
+        t0 = time.perf_counter()
         gamma_hat = exp09.compute_gamma_hat(
             ipm=self.ipm09, pump=pump, max_ell=max_ell, gamma_nt=a.gamma_nt,
             dc_branch_flux=None,
         )
+        gamma_runtime_s = time.perf_counter() - t0
+        t0 = time.perf_counter()
         khat = exp09.build_khat(Bphi=self.ipm09.Bphi, gamma_hat=gamma_hat, drop_tol=0.0)
+        khat_runtime_s = time.perf_counter() - t0
+        t0 = time.perf_counter()
         gamma_off = self.ipm09.Ic / self.ipm09.phi0
         khat_off_0 = (
             self.ipm09.Bphi @ sp.diags(gamma_off, offsets=0, format="csr") @ self.ipm09.Bphi.T
         ).astype(np.complex128).tocsr()
-        return exp09.solve_gain_one(
+        khat_off_runtime_s = time.perf_counter() - t0
+        g = exp09.solve_gain_one(
             ipm=self.ipm09, khat=khat, khat_off_0=khat_off_0, omega_p=pump.omega_p,
             signal_ghz=signal_ghz_for(freq_ghz, a), sidebands=a.sidebands,
             signal_m=0, idler_m=-2,
@@ -578,6 +625,18 @@ class InProcessEngine:
             source_current_a=1.0, source_port=a.source_port, out_port=a.out_port,
             z0_ohm=a.z0_ohm, loss_model="current_complex_c",
         )
+        timing = {
+            "gain_wall_runtime_s": time.perf_counter() - t_all,
+            "gain_total_runtime_s": time.perf_counter() - t_all,
+            "gain_gamma_hat_runtime_s": gamma_runtime_s,
+            "gain_khat_build_runtime_s": khat_runtime_s,
+            "gain_khat_off_runtime_s": khat_off_runtime_s,
+            "gain_matrix_assemble_runtime_s": float(g.assemble_runtime_s),
+            "gain_factor_solve_runtime_s": float(g.factor_solve_runtime_s),
+            "gain_baseline_off_runtime_s": float(g.baseline_off_runtime_s),
+            "gain_baseline_pumpdiag_runtime_s": float(g.baseline_pumpdiag_runtime_s),
+        }
+        return g, timing
 
 
 def run_cold_pass_inprocess(
@@ -805,9 +864,17 @@ def write_points_csv(path: Path, rows: list[dict[str, Any]]) -> None:
         "gain_status", "warm_started", "warm_retry_reseed", "pump_predictor",
         "gain_db", "gain_vs_off_db",
         "gain_vs_pumpdiag_db", "signal_ghz", "linear_rel_residual",
-        "pump_runtime_s", "pump_factor_runtime_s", "pump_newton_total",
+        "pump_runtime_s", "pump_wall_runtime_s", "pump_setup_runtime_s",
+        "pump_schur_setup_runtime_s", "pump_solve_wall_runtime_s",
+        "pump_write_runtime_s", "pump_factor_runtime_s",
+        "pump_preconditioner_assembly_runtime_s",
+        "pump_preconditioner_numeric_factor_runtime_s", "pump_newton_total",
         "pump_gmres_total", "pump_coeff_rel", "pump_time_rel", "pump_branch_current_max",
-        "gain_total_runtime_s", "elapsed_s", "pump_dir",
+        "gain_total_runtime_s", "gain_wall_runtime_s", "gain_gamma_hat_runtime_s",
+        "gain_khat_build_runtime_s", "gain_khat_off_runtime_s",
+        "gain_matrix_assemble_runtime_s", "gain_factor_solve_runtime_s",
+        "gain_baseline_off_runtime_s", "gain_baseline_pumpdiag_runtime_s",
+        "elapsed_s", "pump_dir",
     ]
     with path.open("w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=keys, extrasaction="ignore")
@@ -831,6 +898,37 @@ def write_arrays(
     grids: dict[str, np.ndarray],
 ) -> None:
     np.savez(path, pump_power_dbm=powers, pump_frequency_ghz=freqs, **grids)
+
+
+def total_metric(rows: list[dict[str, Any]], key: str) -> float | None:
+    vals = [finite_or_none(r.get(key)) for r in rows]
+    vals = [v for v in vals if v is not None]
+    return float(sum(vals)) if vals else None
+
+
+def timing_totals(rows: list[dict[str, Any]]) -> dict[str, float | None]:
+    keys = [
+        "pump_wall_runtime_s",
+        "pump_runtime_s",
+        "pump_setup_runtime_s",
+        "pump_schur_setup_runtime_s",
+        "pump_solve_wall_runtime_s",
+        "pump_write_runtime_s",
+        "pump_factor_runtime_s",
+        "pump_preconditioner_assembly_runtime_s",
+        "pump_preconditioner_numeric_factor_runtime_s",
+        "gain_wall_runtime_s",
+        "gain_total_runtime_s",
+        "gain_gamma_hat_runtime_s",
+        "gain_khat_build_runtime_s",
+        "gain_khat_off_runtime_s",
+        "gain_matrix_assemble_runtime_s",
+        "gain_factor_solve_runtime_s",
+        "gain_baseline_off_runtime_s",
+        "gain_baseline_pumpdiag_runtime_s",
+        "elapsed_s",
+    ]
+    return {key: total_metric(rows, key) for key in keys}
 
 
 def write_summary(
@@ -864,6 +962,10 @@ def write_summary(
         "warm_status_counts": counts(warm_rows),
         "cold_pump_runtime_s": total_pump_runtime(cold_rows) if cold_rows else None,
         "warm_pump_runtime_s": total_pump_runtime(warm_rows) if warm_rows else None,
+        "cold_gain_runtime_s": total_metric(cold_rows, "gain_total_runtime_s") if cold_rows else None,
+        "warm_gain_runtime_s": total_metric(warm_rows, "gain_total_runtime_s") if warm_rows else None,
+        "cold_timing_totals": timing_totals(cold_rows) if cold_rows else {},
+        "warm_timing_totals": timing_totals(warm_rows) if warm_rows else {},
         "elapsed_s": elapsed_s,
         "gate": {
             "evaluated": gate.evaluated,
@@ -897,6 +999,8 @@ def write_summary(
         f"- cold status: `{counts(cold_rows)}`" if cold_rows else "- cold pass: not run",
         f"- warm status: `{counts(warm_rows)}`" if warm_rows else "- warm pass: not run",
         f"- elapsed: `{elapsed_s:.3f}` s",
+        f"- warm pump/gain total: `{total_metric(warm_rows, 'pump_runtime_s')}` / `{total_metric(warm_rows, 'gain_total_runtime_s')}` s" if warm_rows else "- warm timing: not run",
+        f"- cold pump/gain total: `{total_metric(cold_rows, 'pump_runtime_s')}` / `{total_metric(cold_rows, 'gain_total_runtime_s')}` s" if cold_rows else "- cold timing: not run",
         "",
         "## Gate",
         "",

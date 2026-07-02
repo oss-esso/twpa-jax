@@ -183,16 +183,17 @@ reuse**. Removing both costs makes the *exact* real-coupled preconditioner
 
 * **Assembly reuse.** The real-coupled matrix pattern is constant (power, freq,
   Newton step). `khat_ell = Bphi diag(gamma_hat_ell) Bphi^T` has fixed pattern and
-  `.data` linear in `gamma_hat_ell`, so a precomputed sparse map `W` rebuilds
-  `M.data = M_const + W @ khat_source` in one spmv (~33 ms) instead of `bmat`
-  (~280 ms).
+  `.data` linear in `gamma_hat_ell`, so a batched Fourier projection plus
+  precomputed sparse map `W` rebuilds `M.data = M_const + W @ khat_source`
+  in ~19 ms instead of `bmat` (~280 ms).
 * **Symbolic-factorization reuse.** MKL Pardiso (`pypardiso`) does the symbolic
   analysis once; each Newton step runs only the numeric phase (phase 23): ~28 ms
   vs SuperLU's ~260 ms. Falls back to SuperLU if `pypardiso` is absent (still
   gets assembly reuse). `experiments/pump_solvers/fast_coupled.py`.
 
-Per Newton step at the fold: ~33 ms assemble + ~28 ms numeric factor + ~13 ms
-solve ≈ 75 ms, vs the legacy real-coupled ~540 ms. Fold benchmark (one machine
+Per Newton step at the fold after the batched projection: ~19 ms assemble
+refresh + ~28 ms numeric factor + ~13 ms solve = ~60 ms, vs the legacy
+real-coupled ~540 ms. Fold benchmark (one machine
 state, `--backends full_real_coupled schur_cpu_mt schur_cpu_rcfast`):
 
 | power | full_real_coupled | schur_cpu_mt | **schur_cpu_rcfast** | GMRES |
@@ -210,7 +211,8 @@ very fold). Solution is bit-identical (3e-15) to `mean_tangent`.
 Use it via the map: `--inproc-pump-backend schur_cpu_mt --inproc-preconditioner
 real_coupled_fast` (Schur backend only; needs `pypardiso` for the full speedup).
 The remaining levers are now the Newton count (a tangent/arclength predictor near
-the fold) and a faster assemble spmv -- not the linear solve.
+the fold) and the remaining assembly scatter (`W @ khat_source`, ~16 ms) -- not
+the linear solve.
 
 ## Map integration
 

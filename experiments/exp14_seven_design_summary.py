@@ -8,10 +8,9 @@ curve, and emits:
     outputs/exp14_seven_design_summary/summary.csv
     outputs/exp14_seven_design_summary/summary.json
 
-Columns:
-    case, status, jc_max, py_max, jc_peak, py_peak, max_abs_err_db,
-    mean_abs_err_db, rms_err_db, pump_runtime_s, gain_runtime_s, mode_policy,
-    pump_modes
+Columns include parity metrics plus timing splits for the pump and small-signal
+gain solves. Older exp14 outputs are accepted; missing newer timing fields are
+left blank.
 
 Statuses are honest: SOLVED_MATCHED_JC (parity vs JC reference), SOLVED_NO_JC_REF
 (pump+gain valid but no working JC reference curve to compare), UNSUPPORTED
@@ -101,6 +100,42 @@ def peak_of(curve: dict[float, float]) -> tuple[float, float]:
     return curve[f], f
 
 
+def finite_float(v: object) -> float | None:
+    try:
+        x = float(v)
+    except (TypeError, ValueError):
+        return None
+    return x if math.isfinite(x) else None
+
+
+def rounded(v: object, ndigits: int = 3) -> float | str:
+    x = finite_float(v)
+    return round(x, ndigits) if x is not None else ""
+
+
+def sum_report_field(reports: list[dict[str, object]], key: str) -> float | str:
+    vals = [finite_float(r.get(key)) for r in reports]
+    vals = [v for v in vals if v is not None]
+    return round(float(sum(vals)), 3) if vals else ""
+
+
+def sum_report_int(reports: list[dict[str, object]], key: str) -> int | str:
+    vals = []
+    for r in reports:
+        try:
+            vals.append(int(r.get(key, 0) or 0))
+        except (TypeError, ValueError):
+            pass
+    return int(sum(vals)) if vals else ""
+
+
+def metadata_runtime(report: dict[str, object], key: str) -> float | str:
+    md = report.get("metadata", {})
+    if not isinstance(md, dict):
+        return ""
+    return rounded(md.get(key))
+
+
 def summarize(spec: CaseSpec) -> dict[str, object]:
     row: dict[str, object] = {
         "case": spec.case,
@@ -113,7 +148,19 @@ def summarize(spec: CaseSpec) -> dict[str, object]:
         "mean_abs_err_db": "",
         "rms_err_db": "",
         "pump_runtime_s": "",
+        "pump_final_step_runtime_s": "",
+        "pump_factor_runtime_s": "",
+        "pump_preconditioner_assembly_runtime_s": "",
+        "pump_preconditioner_numeric_factor_runtime_s": "",
+        "pump_newton_total": "",
         "gain_runtime_s": "",
+        "gain_gamma_hat_runtime_s": "",
+        "gain_khat_build_runtime_s": "",
+        "gain_khat_off_runtime_s": "",
+        "gain_matrix_assemble_runtime_s": "",
+        "gain_factor_solve_runtime_s": "",
+        "gain_baseline_off_runtime_s": "",
+        "gain_baseline_pumpdiag_runtime_s": "",
         "mode_policy": spec.mode_policy,
         "pump_modes": "",
     }
@@ -137,8 +184,17 @@ def summarize(spec: CaseSpec) -> dict[str, object]:
         row["pump_modes"] = ";".join(str(m) for m in md.get("pump_modes", []))
         reports = rep.get("reports", [])
         if reports:
-            row["pump_runtime_s"] = round(float(reports[-1].get("runtime_s", 0.0)), 3)
-            pump_coeff_rel = float(reports[-1].get("coeff_rel", math.inf))
+            row["pump_runtime_s"] = sum_report_field(reports, "runtime_s")
+            row["pump_final_step_runtime_s"] = rounded(reports[-1].get("runtime_s"))
+            row["pump_factor_runtime_s"] = sum_report_field(reports, "factor_runtime_s")
+            row["pump_preconditioner_assembly_runtime_s"] = sum_report_field(
+                reports, "preconditioner_assembly_runtime_s"
+            )
+            row["pump_preconditioner_numeric_factor_runtime_s"] = sum_report_field(
+                reports, "preconditioner_numeric_factor_runtime_s"
+            )
+            row["pump_newton_total"] = sum_report_int(reports, "newton_iterations")
+            pump_coeff_rel = finite_float(reports[-1].get("coeff_rel"))
         pump_converged = rep.get("final_status") == "VALID_CONVERGED" or (
             pump_coeff_rel is not None and pump_coeff_rel < 1e-6
         )
@@ -161,9 +217,18 @@ def summarize(spec: CaseSpec) -> dict[str, object]:
 
     if gain_report.exists():
         grep = json.loads(gain_report.read_text(encoding="utf-8"))
-        row["gain_runtime_s"] = round(
-            float(grep.get("metadata", {}).get("total_runtime_s", 0.0)), 3
-        )
+        row["gain_runtime_s"] = metadata_runtime(grep, "total_runtime_s")
+        row["gain_gamma_hat_runtime_s"] = metadata_runtime(grep, "gamma_hat_runtime_s")
+        row["gain_khat_build_runtime_s"] = metadata_runtime(grep, "khat_build_runtime_s")
+        row["gain_khat_off_runtime_s"] = metadata_runtime(grep, "khat_off_build_runtime_s")
+        results = grep.get("results", [])
+        if isinstance(results, list):
+            row["gain_matrix_assemble_runtime_s"] = sum_report_field(results, "assemble_runtime_s")
+            row["gain_factor_solve_runtime_s"] = sum_report_field(results, "factor_solve_runtime_s")
+            row["gain_baseline_off_runtime_s"] = sum_report_field(results, "baseline_off_runtime_s")
+            row["gain_baseline_pumpdiag_runtime_s"] = sum_report_field(
+                results, "baseline_pumpdiag_runtime_s"
+            )
 
     if spec.jc_ref_csv and Path(spec.jc_ref_csv).exists():
         jc = load_curve(spec.jc_ref_csv)
@@ -206,7 +271,19 @@ def main() -> None:
         "mean_abs_err_db",
         "rms_err_db",
         "pump_runtime_s",
+        "pump_final_step_runtime_s",
+        "pump_factor_runtime_s",
+        "pump_preconditioner_assembly_runtime_s",
+        "pump_preconditioner_numeric_factor_runtime_s",
+        "pump_newton_total",
         "gain_runtime_s",
+        "gain_gamma_hat_runtime_s",
+        "gain_khat_build_runtime_s",
+        "gain_khat_off_runtime_s",
+        "gain_matrix_assemble_runtime_s",
+        "gain_factor_solve_runtime_s",
+        "gain_baseline_off_runtime_s",
+        "gain_baseline_pumpdiag_runtime_s",
         "mode_policy",
         "pump_modes",
     ]

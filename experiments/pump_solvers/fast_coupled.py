@@ -25,6 +25,8 @@ The conjugate ``K_{k+q}`` coupling is kept exactly (it is what collapses GMRES).
 
 from __future__ import annotations
 
+import time
+
 import numpy as np
 import scipy.sparse as sp
 import scipy.sparse.linalg as spla
@@ -87,20 +89,26 @@ class FastCoupledPreconditioner:
         self.modes = [int(round(k)) for k in problem.grid.k]
         self.use_pardiso = bool(use_pardiso and _HAVE_PARDISO)
         self._khat_map = _KhatDataMap(problem.Bphi_r, problem.BphiT_r)
-        # Precompute exp(-i ell theta) projectors for gamma_hat_ell.
+        # Precompute batched exp(-i ell theta) projectors for gamma_hat_ell.
         theta = problem.grid.omega * problem.grid.t
         self._ells = self._needed_ells()
-        self._phase = {ell: np.exp(-1j * ell * theta) for ell in self._ells}
+        self._phase_matrix = (
+            np.exp(-1j * np.asarray(self._ells)[:, None] * theta[None, :])
+            / float(theta.size)
+        )
         self._build_scatter()
         self._pardiso = None
         self._lu = None
         self._analyzed = False
+        self.last_assembly_runtime_s = 0.0
+        self.last_factor_runtime_s = 0.0
+
+    def _gamma_hat_array(self, gamma_t: np.ndarray) -> np.ndarray:
+        return self._phase_matrix @ gamma_t
 
     def _gamma_hat(self, gamma_t: np.ndarray) -> dict[int, np.ndarray]:
-        out: dict[int, np.ndarray] = {}
-        for ell, ph in self._phase.items():
-            out[ell] = np.mean(gamma_t * ph[:, None], axis=0)
-        return out
+        gh = self._gamma_hat_array(gamma_t)
+        return {ell: gh[i] for i, ell in enumerate(self._ells)}
 
     # ------------------------------------------------------------------ build
     def _build_scatter(self) -> None:
@@ -229,21 +237,29 @@ class FastCoupledPreconditioner:
         khat_ell.data is recomputed from gamma_hat_ell via the precomputed linear
         map -- guaranteeing the same pattern/order the scatter indices assume.
         """
-        gh = self._gamma_hat(tangent.gamma_t)
+        t0 = time.perf_counter()
+        gh = self._gamma_hat_array(tangent.gamma_t)
         nnzk = self._nnzk
         src = np.empty(2 * len(self._ells) * nnzk)
-        for i, ell in enumerate(self._ells):
-            d = self._khat_map.data(gh[ell])
+        for i in range(len(self._ells)):
+            d = self._khat_map.data(gh[i])
             src[2 * i * nnzk:(2 * i + 1) * nnzk] = d.real
             src[(2 * i + 1) * nnzk:(2 * i + 2) * nnzk] = d.imag
-        self.M.data = self._Mconst + self._W @ src
+        data = self._W @ src
+        data += self._Mconst
+        self.M.data = data
+        self.last_assembly_runtime_s = time.perf_counter() - t0
         self._factor()
 
     def _factor(self) -> None:
+        t0 = time.perf_counter()
         if self.use_pardiso:
             A = self.M
             if self._pardiso is None:
-                self._pardiso = PyPardisoSolver()
+                # M has a symmetric sparsity pattern but nonsymmetric values;
+                # mtype=1 lets Pardiso exploit that structure without dropping
+                # the exact conjugate coupling terms.
+                self._pardiso = PyPardisoSolver(mtype=1)
                 self._pardiso.set_statistical_info_off()
                 self._pardiso.factorize(A)  # phase 12: analysis + numeric
                 self._analyzed = True
@@ -253,6 +269,7 @@ class FastCoupledPreconditioner:
                 self._pardiso._call_pardiso(A, np.zeros(A.shape[0]))
         else:
             self._lu = spla.splu(self.M.tocsc())
+        self.last_factor_runtime_s = time.perf_counter() - t0
 
     def solve(self, b_real: np.ndarray) -> np.ndarray:
         if self.use_pardiso:

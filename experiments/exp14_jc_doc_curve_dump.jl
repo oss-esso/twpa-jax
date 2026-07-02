@@ -14,7 +14,7 @@ using JosephsonCircuits
 using Symbolics
 using Statistics
 
-cases_dir = raw"D:\Projects\Thesis\Harmonia.jl\experiments\solver_benchmark\cases\jc_docs"
+cases_dir = get(ENV, "JC_DOCS_CASES_DIR", raw"D:\Projects\Thesis\Harmonia.jl\experiments\solver_benchmark\cases\jc_docs")
 
 case      = ARGS[1]
 fstart    = parse(Float64, ARGS[2])

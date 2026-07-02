@@ -669,6 +669,8 @@ class StepReport:
     factor_runtime_s: float
     runtime_s: float
     failure_reason: str
+    preconditioner_assembly_runtime_s: float = 0.0
+    preconditioner_numeric_factor_runtime_s: float = 0.0
 
 
 @dataclass
@@ -728,6 +730,8 @@ class HarmonicNewtonKrylovSolver:
         dim_real = 2 * shape[0] * shape[1]
         gmres_total = 0
         factor_total = 0.0
+        precond_assembly_total = 0.0
+        precond_numeric_factor_total = 0.0
         failure_reason = ""
         stall_count = 0
 
@@ -744,6 +748,8 @@ class HarmonicNewtonKrylovSolver:
                 return X, self._make_report(
                     False, source_scale, nrm, it - 1, gmres_total,
                     factor_total, t0, failure_reason,
+                    preconditioner_assembly_runtime_s=precond_assembly_total,
+                    preconditioner_numeric_factor_runtime_s=precond_numeric_factor_total,
                 )
             pre_coeff = nrm["coeff_rel"]
             R = problem.residual_coeffs(X, source_scale)
@@ -777,7 +783,16 @@ class HarmonicNewtonKrylovSolver:
                     cached_coupled = cached_factors = None
                 elif s.preconditioner == "real_coupled_fast":
                     # Exact real-coupled with assembly + symbolic-factorization
-                    # reuse (Schur backend only). Same psolve interface.
+                    # reuse. Implemented ONLY for the Schur-reduced problem
+                    # (exp10 in-process backend); the direct exp08 solver runs
+                    # the full problem, which has no such method.
+                    if not hasattr(problem, "assemble_real_coupled_fast"):
+                        raise NotImplementedError(
+                            "real_coupled_fast is available only for the "
+                            "Schur-reduced backend (exp10 --inproc-preconditioner "
+                            "real_coupled_fast). For the direct exp08 solver use "
+                            "--preconditioner real_coupled."
+                        )
                     cached_real = problem.assemble_real_coupled_fast(tangent)
                     cached_coupled = cached_factors = None
                 elif s.preconditioner == "spectral_coupled":
@@ -795,6 +810,9 @@ class HarmonicNewtonKrylovSolver:
             factors = cached_factors
             factor_s = time.perf_counter() - tf
             factor_total += factor_s
+            if refresh and s.preconditioner == "real_coupled_fast" and cached_real is not None:
+                precond_assembly_total += float(getattr(cached_real, "last_assembly_runtime_s", 0.0))
+                precond_numeric_factor_total += float(getattr(cached_real, "last_factor_runtime_s", 0.0))
 
             def matvec(v_real: np.ndarray) -> np.ndarray:
                 V = unpack_complex(v_real, shape)
@@ -897,6 +915,8 @@ class HarmonicNewtonKrylovSolver:
                     factor_total,
                     t0,
                     failure_reason,
+                    preconditioner_assembly_runtime_s=precond_assembly_total,
+                    preconditioner_numeric_factor_runtime_s=precond_numeric_factor_total,
                 )
 
             X = best_X
@@ -917,6 +937,8 @@ class HarmonicNewtonKrylovSolver:
                     return X, self._make_report(
                         False, source_scale, nrm, it, gmres_total,
                         factor_total, t0, failure_reason,
+                        preconditioner_assembly_runtime_s=precond_assembly_total,
+                        preconditioner_numeric_factor_runtime_s=precond_numeric_factor_total,
                     )
 
             if s.verbose:
@@ -942,6 +964,8 @@ class HarmonicNewtonKrylovSolver:
                     factor_total,
                     t0,
                     "",
+                    preconditioner_assembly_runtime_s=precond_assembly_total,
+                    preconditioner_numeric_factor_runtime_s=precond_numeric_factor_total,
                 )
 
         failure_reason = failure_reason or "maximum Newton iterations reached"
@@ -954,6 +978,8 @@ class HarmonicNewtonKrylovSolver:
             factor_total,
             t0,
             failure_reason,
+            preconditioner_assembly_runtime_s=precond_assembly_total,
+            preconditioner_numeric_factor_runtime_s=precond_numeric_factor_total,
         )
 
     def solve_direct(
@@ -1149,6 +1175,9 @@ class HarmonicNewtonKrylovSolver:
         factor_runtime_s: float,
         t0: float,
         failure_reason: str,
+        *,
+        preconditioner_assembly_runtime_s: float = 0.0,
+        preconditioner_numeric_factor_runtime_s: float = 0.0,
     ) -> StepReport:
         return StepReport(
             converged=converged,
@@ -1162,6 +1191,8 @@ class HarmonicNewtonKrylovSolver:
             factor_runtime_s=factor_runtime_s,
             runtime_s=time.perf_counter() - t0,
             failure_reason=failure_reason,
+            preconditioner_assembly_runtime_s=float(preconditioner_assembly_runtime_s),
+            preconditioner_numeric_factor_runtime_s=float(preconditioner_numeric_factor_runtime_s),
         )
 
 
@@ -1474,9 +1505,16 @@ def parse_args() -> argparse.Namespace:
 
     p.add_argument(
         "--preconditioner",
-        choices=["mean_tangent", "linear", "none", "spectral_coupled", "real_coupled"],
+        choices=[
+            "mean_tangent", "linear", "none", "spectral_coupled",
+            "real_coupled", "real_coupled_fast",
+        ],
         default="mean_tangent",
     )
+    p.add_argument("--precond-reuse", type=int, default=1,
+                   help="Reuse a preconditioner factor for up to N Newton steps.")
+    p.add_argument("--precond-refresh-gmres", type=int, default=0,
+                   help="Refresh a reused preconditioner after a step with at least this many GMRES iterations; 0 disables.")
 
     p.add_argument("--real-capacitance", action="store_true",
                    help="Drop the imaginary (lossy) part of C in the pump solve (loss-convention study).")
@@ -1566,6 +1604,8 @@ def main() -> None:
         jvp_mode=args.jvp_mode,
         stall_ratio=args.stall_ratio,
         stall_patience=args.stall_patience,
+        precond_reuse=args.precond_reuse,
+        precond_reuse_refresh_gmres=args.precond_refresh_gmres,
     )
 
     print("\n=== solve settings ===")
@@ -1590,6 +1630,8 @@ def main() -> None:
         print(f"adaptive_shrink={args.adaptive_shrink}")
         print(f"adaptive_fallback_fixed_steps={args.adaptive_fallback_fixed_steps}")
     print(f"preconditioner={args.preconditioner}")
+    print(f"precond_reuse={args.precond_reuse}")
+    print(f"precond_refresh_gmres={args.precond_refresh_gmres}")
     print(f"jvp_mode={args.jvp_mode}")
     print(f"compute_time_residual={not args.skip_time_residual}")
 
@@ -1701,6 +1743,8 @@ def main() -> None:
         "gmres_restart": args.gmres_restart,
         "gmres_maxiter": args.gmres_maxiter,
         "preconditioner": args.preconditioner,
+        "precond_reuse": args.precond_reuse,
+        "precond_refresh_gmres": args.precond_refresh_gmres,
         "jvp_mode": args.jvp_mode,
         "compute_time_residual": not args.skip_time_residual,
         "nodes": int(ipm.C.shape[0]),
