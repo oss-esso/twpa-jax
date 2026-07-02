@@ -9,8 +9,14 @@ convention, gain definition). Acceptance gate for any backend: exp09 gain drift
 **< 0.01 dB** vs the mean_tangent baseline, and honest `VALID_CONVERGED` status.
 
 Reference machine state: IPM design, `positive_odd_jc` basis (10 modes), nt=40,
-signal 6.0 GHz, 10 sidebands, 2× JC pump-current scale, 35 dB attenuation.
-Runtimes are one converged fold solve, warm-started from the neighbouring power.
+signal `ws = wp − 100 MHz` per cell, 10 sidebands, 2× JC pump-current scale,
+35 dB attenuation. Runtimes are one converged fold solve, warm-started from the
+neighbouring power.
+
+**Cross-checked against native JosephsonCircuits.jl** — see
+[`runtime_vs_josephsoncircuits.md`](runtime_vs_josephsoncircuits.md): on one IPM
+map tile (pump 6.765 GHz, 22 dB cell) `schur_cpu_rcfast` + secant is **~6×
+faster end-to-end (~10× on the pump solve) at identical gain (22.07 dB)**.
 
 ## Headline numbers (one fold solve, warm-started)
 
