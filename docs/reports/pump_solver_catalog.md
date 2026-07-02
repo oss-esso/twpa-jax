@@ -134,6 +134,37 @@ larger harmonic content (nt/sidebands) where the matvec dominates.
 
 ---
 
+## 8. Newton-count reduction: power-axis secant predictor ✅
+
+Orthogonal to the linear solve: instead of cheapening the factor, **take fewer
+Newton steps** by giving each map cell a better initial guess. In the exp10 warm
+pass, extrapolate the pump state along the **pump-current axis** from the last
+two converged solutions (secant), rather than copying the previous solution:
+
+    X_guess = X_prev + beta (X_prev - X_prevprev),
+    beta    = (I - I_prev) / (I_prev - I_prevprev)   (I = injected pump current).
+
+Only the *initial guess* changes — residual, JVP, preconditioner, convention are
+untouched. A predicted solve that fails (fold overshoot) falls back once to the
+plain warm start before the reseed. Flag: `--inproc-fold-predictor secant`.
+
+Measured on the 7.0 GHz column (Schur + `real_coupled_fast`), warm-started
+0.5 dBm steps:
+
+| power | Newton (copy → secant) | pump s (copy → secant) | gain drift |
+|---|---:|---:|---:|
+| −23.0 dBm | 4 → **3** | 0.50 → **0.34** | 3.9e-8 dB |
+| −22.5 dBm | 5 → **4** | 0.66 → **0.45** | 3.6e-9 dB |
+| −22.0 dBm (fold) | **8 → 5** | **0.95 → 0.54** | 7.5e-8 dB |
+
+At the −22 dBm fold: **−37 % Newton steps, −43 % runtime**, same
+`VALID_CONVERGED`, gain drift ≪ 0.01 dB (≈1e-8). ~32 % faster over the whole warm
+column. Stacks on top of `schur_cpu_rcfast`. Code:
+`exp10_full_ipm_pump_map_warmstart.py` (`secant_guess` + warm-pass loop); tests in
+`tests/test_exp10_gate.py`. Optional next step if pushing *past* the fold: a
+pseudo-arclength predictor/corrector (secant alone can overshoot the turning
+point) — not needed while the map tops out at −22.
+
 ## Overarching conclusion
 
 Across **every** backend above — mean_tangent, spectral/real coupled, banded,
@@ -143,14 +174,13 @@ Jacobi/Neumann, factor-reuse, pseudo-transient, Anderson, GPU — the same truth
 > only winning lever is making that exact factor cheap via
 > symbolic-factorization reuse (Pardiso / KLU) = `schur_cpu_rcfast`.**
 
-Stop looking for a cheaper / approximate / LU-free *preconditioner*. The two
-remaining orthogonal levers, both about **doing fewer / cheaper Newton steps**
-rather than cheapening the solve, are:
+Stop looking for a cheaper / approximate / LU-free *preconditioner*. The winning
+levers are orthogonal to the solve — **do fewer / cheaper Newton steps**:
 
-1. **Fewer Newton steps at the fold** — a power-axis secant/tangent (or
-   pseudo-arclength) **predictor** across map cells (current WIP:
-   `feat/pump-fold-predictor`). Changes only the initial guess, not the physics.
-2. **Faster assemble spmv** — the ~33 ms `M.data = M_const + W @ khat_source`.
+1. ✅ **Fewer Newton steps at the fold** — the power-axis secant predictor (§8):
+   −37 % Newton / −43 % runtime at −22 dBm, gain-identical. Done.
+2. **Faster assemble spmv** — the ~33 ms `M.data = M_const + W @ khat_source`
+   (still open, the next micro-optimization).
 
 ## Where the code lives
 

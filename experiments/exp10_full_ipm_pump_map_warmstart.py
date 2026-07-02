@@ -581,6 +581,28 @@ def run_cold_pass_inprocess(
     return rows
 
 
+def secant_guess(
+    x_prevprev: np.ndarray, x_prev: np.ndarray,
+    cur_prevprev: float, cur_prev: float, cur: float,
+) -> np.ndarray:
+    """Linear extrapolation of the pump state along the pump-current axis.
+
+    Given the last two converged solutions ``x_prevprev`` (at ``cur_prevprev``)
+    and ``x_prev`` (at ``cur_prev``), predict the solution at ``cur``:
+
+        X_guess = x_prev + beta * (x_prev - x_prevprev),
+        beta    = (cur - cur_prev) / (cur_prev - cur_prevprev).
+
+    The current amplitude is the natural continuation parameter (the source term
+    is linear in it). Only the initial guess changes -- physics is untouched.
+    """
+    denom = cur_prev - cur_prevprev
+    if abs(denom) < 1e-30:
+        return x_prev
+    beta = (cur - cur_prev) / denom
+    return x_prev + beta * (x_prev - x_prevprev)
+
+
 def run_warm_pass_inprocess(
     points: list[GridPoint], pass_dir: Path, engine: InProcessEngine,
     *, fail_fast: bool = False,
@@ -600,28 +622,59 @@ def run_warm_pass_inprocess(
     rows: list[dict[str, Any]] = []
     total = len(points)
     done = 0
+    predictor = getattr(engine.args, "inproc_fold_predictor", "none")
+    scale = engine.args.pump_current_jc_scale
     for j in sorted(by_col):
         column = sorted(by_col[j], key=lambda p: p.power_dbm)
         prev_X: np.ndarray | None = None
+        # Last two converged (injected_current, X) for the secant predictor.
         last_good_X: np.ndarray | None = None
+        last_good_cur: float | None = None
+        prevprev_X: np.ndarray | None = None
+        prevprev_cur: float | None = None
         for point in column:
-            warm_from = prev_X if not fail_fast else last_good_X
-            mode = "warm" if warm_from is not None else "seed"
-            row, X = engine.solve_point(point, pass_dir, mode=mode, warm_X=warm_from)
+            cur = point.current_a * scale
+            base_X = prev_X if not fail_fast else last_good_X
+            mode = "warm" if base_X is not None else "seed"
+
+            # Predict the guess from the last two converged states. base_X is the
+            # most recent converged solution (at last_good_cur) whenever it is set.
+            use_secant = (
+                predictor == "secant" and base_X is not None
+                and prevprev_X is not None and prevprev_cur is not None
+                and last_good_cur is not None and prevprev_X.shape == base_X.shape
+            )
+            guess = (secant_guess(prevprev_X, base_X, prevprev_cur, last_good_cur, cur)
+                     if use_secant else base_X)
+            pred_tag = "secant" if use_secant else "none"
+
+            row, X = engine.solve_point(point, pass_dir, mode=mode, warm_X=guess)
+
+            # Overshoot guard: a bad extrapolation past the fold -> retry once
+            # from the plain warm start before paying the reseed.
+            if row["status"] != "PASS" and use_secant:
+                row, X = engine.solve_point(point, pass_dir, mode="warm", warm_X=base_X)
+                pred_tag = "secant_fallback"
+
             retried = False
             if row["status"] != "PASS" and mode == "warm" and not fail_fast:
                 row, X = engine.solve_point(point, pass_dir, mode="seed", warm_X=None)
                 retried = row["status"] == "PASS"
             row["warm_retry_reseed"] = retried
+            row["pump_predictor"] = pred_tag
             rows.append(row)
             done += 1
             print(f"[warm {done}/{total}] P={point.power_dbm:.4g} dBm "
-                  f"fp={point.pump_freq_ghz:.4g} GHz {mode}{'+reseed' if retried else ''} "
+                  f"fp={point.pump_freq_ghz:.4g} GHz {mode}"
+                  f"{'+' + pred_tag if pred_tag != 'none' else ''}"
+                  f"{'+reseed' if retried else ''} "
                   f"status={row['status']} gain={row.get('gain_db')} "
+                  f"newton={row.get('pump_newton_total')} "
                   f"pump_s={row.get('pump_runtime_s'):.3f}", flush=True)
             if row["status"] == "PASS":
+                prevprev_X, prevprev_cur = last_good_X, last_good_cur
+                last_good_X, last_good_cur = X, cur
                 prev_X = X
-                last_good_X = X
             else:
                 prev_X = None  # non-fail-fast path re-seeds next point
     rows.sort(key=lambda r: r["point_index"])
@@ -736,10 +789,11 @@ def write_points_csv(path: Path, rows: list[dict[str, Any]]) -> None:
     keys = [
         "pass", "point_index", "i_power", "j_freq", "pump_power_dbm",
         "pump_freq_ghz", "pump_current_peak_a", "status", "pump_status",
-        "gain_status", "warm_started", "warm_retry_reseed", "gain_db", "gain_vs_off_db",
+        "gain_status", "warm_started", "warm_retry_reseed", "pump_predictor",
+        "gain_db", "gain_vs_off_db",
         "gain_vs_pumpdiag_db", "signal_ghz", "linear_rel_residual",
         "pump_runtime_s", "pump_factor_runtime_s", "pump_newton_total",
-        "pump_coeff_rel", "pump_time_rel", "pump_branch_current_max",
+        "pump_gmres_total", "pump_coeff_rel", "pump_time_rel", "pump_branch_current_max",
         "gain_total_runtime_s", "elapsed_s", "pump_dir",
     ]
     with path.open("w", newline="", encoding="utf-8") as f:
@@ -895,6 +949,14 @@ def parse_args() -> argparse.Namespace:
                    help="Force an early factor refresh when the previous Newton step's "
                    "GMRES iterations crossed this threshold (staleness guard for "
                    "--inproc-precond-reuse). 0 disables.")
+    p.add_argument("--inproc-fold-predictor", choices=["none", "secant"],
+                   default="none",
+                   help="In-process warm pass: build the next power point's initial "
+                   "guess by extrapolating along the pump-current axis from the last "
+                   "two converged solutions (secant), instead of copying the previous "
+                   "solution. Cuts Newton steps near the fold where the state moves "
+                   "fast with power. Physics unchanged (initial guess only); a failed "
+                   "predicted solve falls back to the plain warm start.")
     p.add_argument("--outdir", type=Path, default=ROOT / "outputs" / "exp10_pump_map_warmstart")
     p.add_argument("--ipm-dir", type=Path, default=ROOT / "outputs" / "ipm_python_design")
 

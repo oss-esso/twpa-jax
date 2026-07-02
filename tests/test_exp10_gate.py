@@ -78,6 +78,38 @@ def test_gain_drift_over_gate_fails() -> None:
     assert gate.max_gain_drift_db == pytest_approx(0.5)
 
 
+def test_secant_guess_uniform_step_doubles_the_delta() -> None:
+    import numpy as np
+
+    # Uniform current spacing -> beta = 1 -> X_guess = 2*prev - prevprev.
+    x_pp = np.array([1.0 + 0j, 2.0 + 0j])
+    x_p = np.array([2.0 + 0j, 3.0 + 0j])
+    g = exp10.secant_guess(x_pp, x_p, 1.0, 2.0, 3.0)
+    assert np.allclose(g, np.array([3.0, 4.0]))
+
+
+def test_secant_guess_is_exact_on_affine_state() -> None:
+    import numpy as np
+
+    # A state that is exactly affine in the current is predicted with zero error,
+    # including a non-uniform target step.
+    def state(cur: float) -> np.ndarray:
+        return np.array([0.5 + 1.0 * cur, -2.0 + 0.25 * cur], dtype=np.complex128)
+
+    g = exp10.secant_guess(state(1.0), state(2.0), 1.0, 2.0, 2.5)
+    assert np.allclose(g, state(2.5))
+
+
+def test_secant_guess_degenerate_denominator_returns_prev() -> None:
+    import numpy as np
+
+    x_pp = np.array([1.0 + 0j, 2.0 + 0j])
+    x_p = np.array([2.0 + 0j, 3.0 + 0j])
+    # Equal currents -> no secant available -> fall back to the last solution.
+    g = exp10.secant_guess(x_pp, x_p, 2.0, 2.0, 3.0)
+    assert np.allclose(g, x_p)
+
+
 def pytest_approx(value: float, rel: float = 1e-9):
     import pytest
 
