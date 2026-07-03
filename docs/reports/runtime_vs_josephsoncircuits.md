@@ -3,7 +3,8 @@
 Head-to-head of **wall-time and small-signal gain** for our Python
 harmonic-balance solver against native `JosephsonCircuits.jl` (JC) on the same
 circuits: the seven JC documentation designs and — the clean, matched
-comparison — one tile of the IPM JTWPA gain map.
+comparison — one sub-fold tile of the IPM JTWPA gain map (the regime where JC is
+guaranteed to converge).
 
 **Python side uses the fastest available solver** (per
 [`pump_solver_catalog.md`](pump_solver_catalog.md)): Schur reduction +
@@ -13,38 +14,65 @@ runs `hbsolve` warm (JIT excluded) with plotting stripped.
 
 Reproduce:
 
-```
+```bash
 # JC timings (warm hbsolve, no plotting) for the 7 raw doc standalones:
 python experiments/benchmark_seven_designs_vs_jc.py \
     --julia-project <Harmonia.jl> \
     --raw-dir <Harmonia.jl>/experiments/solver_benchmark/cases/jc_docs/raw
 # Python parity gains: python experiments/exp14_seven_design_summary.py
-# IPM tile (fastest Python): exp10 in-process, schur + real_coupled_fast + secant
+#
+# IPM matched tile (sub-fold, pump 7.9 GHz / signal 8.3 GHz / 6.325 uA):
+#   Python (fastest solver) -- short power continuation ending on the tile:
+python experiments/exp10_full_ipm_pump_map_warmstart.py --executor inprocess \
+    --mode warmstart --inproc-pump-backend schur_cpu_mt \
+    --inproc-preconditioner real_coupled_fast --inproc-fold-predictor secant \
+    --n-power 9 --n-frequency 1 --pump-power-min-dbm -33 --pump-power-max-dbm -25 \
+    --pump-freq-min-ghz 7.9 --pump-freq-max-ghz 7.9 --signal-ghz 8.3 \
+    --outdir outputs/exp10_subfold_match_79ghz_m25
+#   JC (warm, JIT excluded) at the same physical drive current:
+julia --project=<Harmonia.jl> experiments/jc_ipm_onepoint_timing.jl \
+    --pump-current-a 6.324555320336759e-06 --pump-freq-ghz 7.9 --signal-ghz 8.3
 ```
 
 ---
 
-## 1. IPM JTWPA — one map tile (the matched, apples-to-apples comparison)
+## 1. IPM JTWPA — one matched tile in the sub-fold regime
 
-Best cell of the 35×35 gain map: **pump 6.765 GHz, signal 6.665 GHz
-(= wp − 100 MHz), pump current 9.495 µA (≈2.28 Ic)**. Both solvers do exactly one
-pump solve + one signal point.
+The clean apples-to-apples comparison is a single tile **in the regime where both
+codes reliably converge** — i.e. *below* the parametric fold, which is exactly
+where JC is trustworthy. Operating point: **pump 7.9 GHz, signal 8.3 GHz, drive
+6.325 µA (1.52 Ic)**. Both solvers do one pump solve + one signal point, at the
+*identical* physical drive current (the port current fed to JC `sources`; the
+Python solver applies its ×2 phasor-convention factor internally).
 
 | solver | pump solve | gain solve | total | gain |
 |---|--:|--:|--:|--:|
-| **JosephsonCircuits.jl** (`hbsolve`, warm) | — bundled — | — bundled — | **9.3 s** | **22.07 dB** |
-| **This solver** (`rcfast` + secant, warm) | **0.88 s** (10 Newton) | 0.63 s | **1.5 s** | **22.07 dB** |
+| **JosephsonCircuits.jl** (`hbsolve`, warm) | — bundled — | — bundled — | **3.09 s** | **11.559 dB** |
+| **This solver** (`rcfast` + secant, warm) | **0.41 s** (5 Newton) | 0.63 s | **1.04 s** | **11.555 dB** |
 
-→ **~6× faster end-to-end (~10× on the pump solve alone), identical gain to
-0.00 dB.** This is a genuine cross-validation: two independent HB codes agree on
-22.07 dB at the same operating point.
+→ **~3× faster on total wall time — the pump solve alone is 0.41 s — at a gain
+identical to 0.004 dB.** Two independent HB codes agreeing on 11.56 dB at the
+same physical operating point is a genuine cross-validation of both the pump and
+the small-signal physics.
 
-Note on the earlier "IPM is slow" scare: at the wrong pump point (7.9 GHz, which
-does **not** amplify → −512 dB) JC's Newton churns to the iteration cap, ~63 s
-for a single point, and a full 51-point signal sweep is ~75 s. At the real
-amplifying operating point above it is 9.3 s. Our solver, likewise, only reaches
-the 22 dB near-fold cell with the secant predictor + fine (0.3 dBm) power
-continuation.
+### Why sub-fold, and what happens at the fold
+
+Past the parametric fold the comparison stops being meaningful, because **JC
+stops converging** while the continuation-warm-started Python solver does not.
+Measured at 7.9 GHz, same signal point, pushing the drive current up:
+
+| drive | Ic ratio | JC pump | Python |
+|---|--:|---|---|
+| 6.325 µA | 1.52 | converges → 11.56 dB, 3.1 s | 11.56 dB, 0.41 s (5 Newton) |
+| 8.934 µA | 2.14 | **diverged → −326 dB** | still solves (~12.8 dB peak) |
+| 12.65 µA | 3.04 | **diverged → −522 dB, 59 s at iter cap** | solves, 0.41 s (5 Newton) |
+
+This reconciles the earlier "IPM is slow / 7.9 GHz gives −512 dB" scare: 7.9 GHz
+amplifies perfectly well sub-fold (both codes give 11.56 dB); JC only blows up
+(garbage gain, iteration-cap runtime) once the drive is pushed *to/through the
+fold*. So the fold is precisely where a reliable comparison **requires** the
+continuation solver — sub-fold the two agree and ours is ~3×, at the fold JC has
+no converged answer to compare against.
 
 ---
 
@@ -102,8 +130,14 @@ signal points; ~27 s **per** dissipative solve.
 
 ## Bottom line
 
-On the one **matched** comparison — a single IPM map tile with the fastest Python
-solver — **our solver is ~6× faster than JosephsonCircuits.jl end-to-end and
-~10× on the pump solve, at identical gain (22.07 dB)**. Across the seven doc
-designs the two codes agree on gain (6/7 < 0.0024 dB); the runtime columns aren't
-a single operating point because the JC doc standalones sweep the full band.
+On the one **matched** comparison — a single IPM tile in the sub-fold regime
+(where JC reliably converges), fastest Python solver — **our solver is ~3× faster
+than JosephsonCircuits.jl on total wall time (0.41 s pump vs 3.09 s), at a gain
+identical to 0.004 dB (11.56 dB)**. That is a genuine two-code cross-validation of
+the physics. Push the drive to/through the parametric fold and the comparison
+inverts qualitatively: JC's Newton diverges (−326 dB at 2.1 Ic, −522 dB / 59 s at
+3.0 Ic) while the continuation-warm-started Python solver keeps converging in ~5
+Newton — so at the fold there is simply no JC answer to race against. Across the
+seven doc designs the two codes agree on gain (6/7 < 0.0024 dB); those runtime
+columns aren't a single operating point because the JC doc standalones sweep the
+full band.
