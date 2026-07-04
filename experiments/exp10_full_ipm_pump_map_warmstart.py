@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import gc
 import json
 import math
 import shutil
@@ -447,8 +448,14 @@ class InProcessEngine:
         self.out_idx = self.ipm09.port_to_index[args.out_port]
         self.ic_median = float(np.median(self.ipm08.Ic))
         self.ports = list(self.ipm08.port_to_index.values())
-        # Schur partition is constant in power -> cache one per pump frequency.
+        # Schur partition is constant in power -> cache per pump frequency, but
+        # LRU-bounded: each partition holds a large factorized `_fast_coupled`
+        # block, and the warm pass finishes one frequency column before moving
+        # on, so only the current column's partition is live. Caching every
+        # frequency unbounded is what OOMs large maps (50 partitions ~ 16 GB).
+        # Keep the last few (insertion-ordered dict acts as the LRU).
         self._schur_part_cache: dict[float, Any] = {}
+        self._schur_cache_max = max(1, int(getattr(args, "inproc_schur_cache_size", 2)))
 
     def _settings(self) -> exp08.NewtonKrylovSettings:
         return exp08.NewtonKrylovSettings(
@@ -497,11 +504,16 @@ class InProcessEngine:
         use_schur = a.inproc_pump_backend == "schur_cpu_mt"
         t_schur = time.perf_counter()
         if use_schur:
-            part = self._schur_part_cache.get(point.pump_freq_ghz)
+            cache = self._schur_part_cache
+            # pop-then-reinsert so the used key becomes most-recent (LRU order).
+            part = cache.pop(point.pump_freq_ghz, None)
             sprob = (SchurReducedProblem(full=full_problem, partition=part)
                      if part is not None
                      else build_schur_problem(full_problem, self.ports))
-            self._schur_part_cache[point.pump_freq_ghz] = sprob.part
+            cache[point.pump_freq_ghz] = sprob.part
+            while len(cache) > self._schur_cache_max:
+                del cache[next(iter(cache))]  # evict oldest -> frees its splu
+                gc.collect()
             solve_problem = sprob
         else:
             solve_problem = full_problem
@@ -1060,6 +1072,12 @@ def parse_args() -> argparse.Namespace:
                    "assembled sparse Schur complement (constant per frequency) and "
                    "solves the retained system -- 2.5-4.5x faster at the high-power "
                    "fold, gain identical. Pair with --inproc-preconditioner mean_tangent.")
+    p.add_argument("--inproc-schur-cache-size", type=int, default=2,
+                   help="Max per-frequency Schur partitions kept in memory (LRU). "
+                   "Each partition holds a large factorized block; the warm pass "
+                   "only needs the current frequency column's partition, so an "
+                   "unbounded cache over 50 frequencies OOMs (~16 GB). 2 keeps a "
+                   "small reuse window while bounding RAM regardless of map size.")
     p.add_argument("--inproc-precond-reuse", type=int, default=1,
                    help="Reuse the preconditioner factor for up to N consecutive Newton "
                    "steps (modified-Newton). 1 (default) refactors every step. N>1 "
