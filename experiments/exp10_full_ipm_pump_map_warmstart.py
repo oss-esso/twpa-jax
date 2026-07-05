@@ -687,6 +687,47 @@ def secant_guess(
     return x_prev + beta * (x_prev - x_prevprev)
 
 
+SKIP_PAST_FOLD = "SKIP_PAST_FOLD"
+
+# Row fields that a solved point fills but a skipped one leaves empty.
+_SKIP_NONE_FIELDS = (
+    "gain_db", "gain_vs_off_db", "gain_vs_pumpdiag_db", "signal_ghz",
+    "linear_rel_residual", "gain_total_runtime_s", "gain_wall_runtime_s",
+    "gain_gamma_hat_runtime_s", "gain_khat_build_runtime_s",
+    "gain_khat_off_runtime_s", "gain_matrix_assemble_runtime_s",
+    "gain_factor_solve_runtime_s", "gain_baseline_off_runtime_s",
+    "gain_baseline_pumpdiag_runtime_s", "pump_runtime_s", "pump_wall_runtime_s",
+    "pump_setup_runtime_s", "pump_schur_setup_runtime_s",
+    "pump_solve_wall_runtime_s", "pump_write_runtime_s", "pump_factor_runtime_s",
+    "pump_preconditioner_assembly_runtime_s",
+    "pump_preconditioner_numeric_factor_runtime_s", "pump_coeff_rel",
+    "pump_time_rel", "pump_newton_total", "pump_gmres_total",
+    "pump_branch_current_max",
+)
+
+
+def past_fold_skip_row(point: GridPoint) -> dict[str, Any]:
+    """Synthetic row for a cell skipped by the per-column fold short-circuit.
+
+    Once a frequency column fails to reach full drive at some pump power, every
+    higher-power cell is past the harmonic-balance fold -- a turning point with
+    no re-convergence above it -- so it is marked past-fold without solving.
+    Gain is NaN (a map hole), matching a genuine over-fold failure, and the row
+    costs no solver time.
+    """
+    row: dict[str, Any] = {
+        "point_index": point.index, "i_power": point.i_power,
+        "j_freq": point.j_freq, "pump_power_dbm": point.power_dbm,
+        "pump_freq_ghz": point.pump_freq_ghz,
+        "pump_current_peak_a": point.current_a, "warm_started": False,
+        "pump_status": SKIP_PAST_FOLD, "gain_status": SKIP_PAST_FOLD,
+        "status": SKIP_PAST_FOLD, "warm_retry_reseed": False,
+        "pump_predictor": "skip", "elapsed_s": 0.0, "pump_dir": "",
+    }
+    row.update({k: None for k in _SKIP_NONE_FIELDS})
+    return row
+
+
 def run_warm_pass_inprocess(
     points: list[GridPoint], pass_dir: Path, engine: InProcessEngine,
     *, fail_fast: bool = False,
@@ -708,6 +749,7 @@ def run_warm_pass_inprocess(
     done = 0
     predictor = getattr(engine.args, "inproc_fold_predictor", "none")
     scale = engine.args.pump_current_jc_scale
+    patience = int(getattr(engine.args, "fold_skip_patience", 0))
     for j in sorted(by_col):
         column = sorted(by_col[j], key=lambda p: p.power_dbm)
         prev_X: np.ndarray | None = None
@@ -716,7 +758,8 @@ def run_warm_pass_inprocess(
         last_good_cur: float | None = None
         prevprev_X: np.ndarray | None = None
         prevprev_cur: float | None = None
-        for point in column:
+        consec_fail = 0  # consecutive non-converged points at increasing power
+        for idx, point in enumerate(column):
             cur = point.current_a * scale
             base_X = prev_X if not fail_fast else last_good_X
             mode = "warm" if base_X is not None else "seed"
@@ -759,8 +802,24 @@ def run_warm_pass_inprocess(
                 prevprev_X, prevprev_cur = last_good_X, last_good_cur
                 last_good_X, last_good_cur = X, cur
                 prev_X = X
+                consec_fail = 0
             else:
                 prev_X = None  # non-fail-fast path re-seeds next point
+                consec_fail += 1
+
+            # Per-column fold short-circuit: after `patience` consecutive
+            # non-converged points at increasing power, the column is past the
+            # HB fold (a turning point -- no re-convergence above it), so mark
+            # every remaining higher-power cell past-fold without solving.
+            if patience > 0 and consec_fail >= patience and idx + 1 < len(column):
+                skipped = column[idx + 1:]
+                for rest in skipped:
+                    rows.append(past_fold_skip_row(rest))
+                done += len(skipped)
+                print(f"[warm {done}/{total}] fp={point.pump_freq_ghz:.4g} GHz "
+                      f"fold short-circuit: skipped {len(skipped)} past-fold "
+                      f"cells above P={point.power_dbm:.4g} dBm", flush=True)
+                break
     rows.sort(key=lambda r: r["point_index"])
     return rows
 
@@ -1058,6 +1117,14 @@ def parse_args() -> argparse.Namespace:
                    help="In-process warm pass: skip reseed/fallback recovery on a failed "
                    "point and keep warm-starting from the last converged neighbour, so "
                    "over-fold points fail in ~one stalled solve. For high-power fold maps.")
+    p.add_argument("--fold-skip-patience", type=int, default=0,
+                   help="Per-column fold short-circuit (in-process warm pass): after "
+                   "this many consecutive non-converged points at increasing power, "
+                   "skip the remaining higher-power cells in the column (marked "
+                   "SKIP_PAST_FOLD, gain NaN) without solving. The HB fold is a turning "
+                   "point with no re-convergence above it, so those cells are guaranteed "
+                   "past-fold. 2 preserves near-monotone columns; 0 disables (default). "
+                   "This is the dominant runtime win on hot/over-fold maps.")
     p.add_argument("--inproc-preconditioner",
                    choices=["mean_tangent", "real_coupled", "real_coupled_fast",
                             "spectral_coupled", "linear"],

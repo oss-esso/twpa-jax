@@ -68,7 +68,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--ripple-grid-ghz", type=float, nargs=3,
                    default=(4.0, 11.0, 1401), metavar=("START", "STOP", "N"))
     p.add_argument("--signal-grid-ghz", type=float, nargs=3,
-                   default=(4.0, 11.0, 121), metavar=("START", "STOP", "N"))
+                   default=(4.0, 11.0, 501), metavar=("START", "STOP", "N"))
     p.add_argument("--sidebands", type=int, default=10)
     p.add_argument("--gamma-nt", type=int, default=96)
     p.add_argument("--pump-mode-count", type=int, default=10)

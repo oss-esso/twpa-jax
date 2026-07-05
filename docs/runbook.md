@@ -68,6 +68,7 @@ predictor), warm-started up each pump-power column, through the fold:
 python experiments/exp10_full_ipm_pump_map_warmstart.py --executor inprocess \
     --mode warmstart --inproc-pump-backend schur_cpu_mt \
     --inproc-preconditioner real_coupled_fast --inproc-fold-predictor secant \
+    --inproc-fail-fast --fold-skip-patience 2 \
     --ipm-dir outputs/ipm_python_design \
     --n-power 50 --n-frequency 50 \
     --pump-power-min-dbm -30 --pump-power-max-dbm -20 \
@@ -79,6 +80,7 @@ python experiments/exp10_full_ipm_pump_map_warmstart.py --executor inprocess \
 python experiments/exp10_full_ipm_pump_map_warmstart.py --executor inprocess \
     --mode warmstart --inproc-pump-backend schur_cpu_mt \
     --inproc-preconditioner real_coupled_fast --inproc-fold-predictor secant \
+    --inproc-fail-fast --fold-skip-patience 2 \
     --ipm-dir outputs/ipm_python_design_3c \
     --n-power 50 --n-frequency 50 \
     --pump-power-min-dbm -36 --pump-power-max-dbm -28 \
@@ -95,6 +97,8 @@ Key flags:
 | `--inproc-pump-backend schur_cpu_mt` | Schur-reduced sparse backend (2.5–4.5× faster at the fold) |
 | `--inproc-preconditioner real_coupled_fast` | exact coupled Jacobian, GMRES in ~1 iter |
 | `--inproc-fold-predictor secant` | extrapolate the guess along the power axis (fewer Newton steps near the fold) |
+| `--inproc-fail-fast` | over-fold points fail in ~one stalled solve (skip reseed/fallback recovery); keep warm-starting from the last converged neighbour |
+| `--fold-skip-patience 2` | **speed**: after 2 consecutive over-fold failures going up a column, skip the rest of the column unsolved (`SKIP_PAST_FOLD`, NaN gain). See note below. |
 | `--inproc-schur-cache-size N` | **memory cap**: max per-frequency Schur partitions kept (default 2). See note below. |
 | `--n-power / --n-frequency` | grid size |
 | `--pump-power-min/max-dbm` | external power window (dBm) |
@@ -113,12 +117,31 @@ around frequency ~35, worse for the larger 3c. The cache is now **LRU-bounded**
 stays flat. **No chunking needed anymore.** Eviction+rebuild is numerically
 identical (partitions are deterministic from the design matrices).
 
+**Speed note (fold short-circuit, added 2026-07-05):** on a hot/over-fold map
+the non-converging cells dominate runtime (~65–71 Newton iters and 5–8 s each vs
+2–4 iters / ~0.9 s for a PASS). Measured wasted share: zoom map **79%**, 2c **51%**.
+Within a frequency column the HB fold is a turning point (no re-convergence
+above it), so `--fold-skip-patience 2` marks every cell above the fold
+`SKIP_PAST_FOLD` **without solving** — validated to leave every accepted cell
+bit-identical (0 lost PASS cells). Pair it with `--inproc-fail-fast`. Together
+they take a hot 50×50 from ~130 min toward the PASS-only floor (~30 min).
+`SKIP_PAST_FOLD` cells read as NaN gain (map holes), same as a real over-fold
+failure.
+
 Plot:
 
 ```bash
-python experiments/plot_exp10_gain_map.py outputs/exp10_pump_map_trailing_50x50_3c --signal-ghz 7.0
-# -> <outdir>/gain_map_warm.png  (grey = non-converged cells, red star = peak)
+# NOTE: do NOT pass --signal-ghz on a trailing map — it stamps a single wrong
+# "signal X GHz" in the title. Omit it and the title reads the trailing
+# convention ("trailing signal ws = fp − 100 MHz") from map_summary.json.
+python experiments/plot_exp10_gain_map.py outputs/exp10_pump_map_trailing_50x50_3c
+# -> <outdir>/gain_map_warm.png  (grey = non-converged/skipped cells, red star = peak)
 ```
+
+**Solver-effort diagnostics** (per-point wall time / Newton / GMRES colormaps,
+one PNG per metric per map folder) — the scratchpad `plot_solvetime_maps.py`
+reads `elapsed_s`, `pump_newton_total`, `pump_gmres_total` from `map_points.csv`.
+Handy for confirming where a map spends its time (the fold triangle).
 
 ### 2. Passive ripple → +120° placement → gain (exp17)
 

@@ -34,14 +34,34 @@ def edges_from_centers(centers: np.ndarray) -> np.ndarray:
     return np.concatenate([[first], mid, [last]])
 
 
-def read_signal_ghz(map_dir: Path) -> float | None:
+def signal_label(map_dir: Path, override_ghz: float | None) -> str:
+    """Describe the readout signal for the plot title.
+
+    A map sweeps the *pump* frequency; the signal is either a fixed absolute
+    frequency (``--signal-ghz`` / summary ``signal_ghz``) or, by default, a
+    trailing tone at ``ws = fp - detuning`` that tracks the pump per column. A
+    single "signal X GHz" label is wrong for the trailing case, so describe the
+    convention instead.
+    """
+    if override_ghz is not None:
+        return f"signal {override_ghz:g} GHz"
     summ = map_dir / "map_summary.json"
-    if summ.exists():
-        try:
-            return float(json.loads(summ.read_text())["signal_ghz"])
-        except (KeyError, ValueError, TypeError):
-            return None
-    return None
+    if not summ.exists():
+        return "signal ?"
+    try:
+        meta = json.loads(summ.read_text())
+    except (ValueError, OSError):
+        return "signal ?"
+    fixed = meta.get("signal_ghz")
+    if fixed is not None:
+        return f"signal {float(fixed):g} GHz"
+    det = meta.get("signal_detuning_mhz")
+    if det is not None:
+        return f"trailing signal (ws = fp - {float(det):g} MHz)"
+    conv = meta.get("signal_convention")
+    if isinstance(conv, str) and conv.lower().startswith("ws ="):
+        return f"trailing {conv.replace('wp', 'fp')}"
+    return "signal ?"
 
 
 def plot_grid(
@@ -112,8 +132,7 @@ def main() -> None:
     arrays = np.load(map_dir / "map_arrays.npz", allow_pickle=True)
     powers = arrays["pump_power_dbm"]
     freqs = arrays["pump_frequency_ghz"]
-    signal_ghz = args.signal_ghz if args.signal_ghz is not None else read_signal_ghz(map_dir)
-    sig = f"signal {signal_ghz:g} GHz" if signal_ghz is not None else "signal ?"
+    sig = signal_label(map_dir, args.signal_ghz)
     shape = f"{len(powers)}x{len(freqs)}"
 
     if "gain_db_warm" in arrays.files:

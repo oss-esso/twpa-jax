@@ -147,6 +147,87 @@ def plot_point(
     return out
 
 
+_VARIANTS = (
+    ("cold_snap", "C0", "cold @ +120 snapped fp"),
+    ("cold_orig", "C1", "cold @ original map fp"),
+    ("map_warm", "C2", "map warm solution (as-run)"),
+)
+
+
+def plot_compare_point(
+    pt: dict[str, Any],
+    design: str,
+    rf: np.ndarray,
+    r42: np.ndarray,
+    r21: np.ndarray,
+    r24: np.ndarray,
+    outdir: Path,
+) -> Path:
+    """3-panel compare figure: pump-off ripple, S21 pump-on, S24 pump-on.
+
+    Panels 2-3 overlay the three pump variants (cold @ snapped fp, cold @
+    original fp, map's own warm solution) so the snap-into-a-dip vs warm-branch
+    cause of a low +120-degree gain is visible directly.
+    """
+    snap_fp = pt["snap_fp_ghz"]
+    orig_fp = pt["map_fp_ghz"]
+    ref = pt["ref_peak_ghz"]
+    variants = pt["variants"]
+
+    fig, ax = plt.subplots(3, 1, figsize=(9, 10))
+    fig.suptitle(
+        f"{design} IPM JTWPA - map-cell compare (point {pt['point']})   "
+        f"map {pt['map_gain_db']:.1f} dB @ {orig_fp:.3f} GHz "
+        f"({pt['map_power_dbm']:.1f} dBm, {pt['ic_ratio']:.2f} Ic)   "
+        f"snap {orig_fp:.3f}->{snap_fp:.3f} GHz "
+        f"({pt['map_offset_deg']:+.0f}->+120 deg)",
+        fontsize=9,
+    )
+
+    # Panel 1: pump OFF passive ripple + placement.
+    a = ax[0]
+    a.plot(rf, r42, lw=1.3, color="0.35", label="|S42| coupled")
+    a.plot(rf, r21, lw=1.1, color="C7", alpha=0.9, label="|S21| through")
+    if r24 is not None:
+        a.plot(rf, r24, lw=1.1, color="C9", alpha=0.7, label="|S24|")
+    a.axvline(ref, color="C3", ls="-", lw=1.3, label=f"S42 peak {ref:.3f}")
+    a.axvline(snap_fp, color="C0", ls="--", lw=1.6, label=f"snapped fp {snap_fp:.3f} (+120)")
+    a.axvline(orig_fp, color="C1", ls=":", lw=1.6, label=f"original map fp {orig_fp:.3f}")
+    xs = [ref, snap_fp, orig_fp]
+    a.set_xlim(min(xs) - 1.0, max(xs) + 1.0)
+    a.set_ylabel("PUMP OFF\n|S| (dB)")
+    a.grid(True, alpha=0.3)
+    a.legend(fontsize=7, loc="lower right", ncol=2)
+
+    # Panels 2-3: S21 / S24 pump ON, three variants overlaid.
+    for panel, key, ylabel in ((1, "s21", "S21 gain"), (2, "s24", "S24 mag")):
+        a = ax[panel]
+        for tag, color, lbl in _VARIANTS:
+            v = variants.get(tag, {})
+            path = v.get(key)
+            if not path:
+                continue
+            fx, gy = read_sweep(Path(path))
+            if not fx.size:
+                continue
+            peak = v.get("peak_s21_db", float("nan")) if key == "s21" else float("nan")
+            suffix = f"  (peak {peak:.1f} dB)" if key == "s21" and np.isfinite(peak) else ""
+            a.plot(fx, gy, lw=1.6, color=color, label=f"{lbl}{suffix}")
+        a.axvline(pt["ws_snap_ghz"], color="C0", ls="--", lw=1.0, alpha=0.7)
+        a.axvline(pt["ws_orig_ghz"], color="C1", ls=":", lw=1.0, alpha=0.7)
+        a.set_ylabel(f"PUMP ON\n{ylabel} (dB)")
+        a.grid(True, alpha=0.3)
+        a.legend(fontsize=7, loc="upper right")
+
+    ax[-1].set_xlabel("Signal frequency (GHz)")
+    fig.tight_layout(rect=(0, 0, 1, 0.96))
+    outdir.mkdir(parents=True, exist_ok=True)
+    out = outdir / f"ripple_map_compare_{design}_point{pt['point']}_fp{round(orig_fp*1000)}.png"
+    fig.savefig(out, dpi=150)
+    plt.close(fig)
+    return out
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--rundir", type=Path, required=True,
@@ -163,6 +244,18 @@ def main() -> None:
     rf = passive["freq_ghz"]
     r42 = passive["s42_db"]
     r21 = passive["s21_db"]
+    r24 = passive["s24_db"] if "s24_db" in passive.files else None
+
+    if manifest.get("compare"):
+        for pt in manifest["points"]:
+            out = plot_compare_point(pt, label, rf, r42, r21, r24, rundir / "plots")
+            w = pt["variants"].get("map_warm", {}).get("peak_s21_db", float("nan"))
+            cs = pt["variants"].get("cold_snap", {}).get("peak_s21_db", float("nan"))
+            co = pt["variants"].get("cold_orig", {}).get("peak_s21_db", float("nan"))
+            print(f"[{label}] point {pt['point']} map {pt['map_gain_db']:.1f} dB: "
+                  f"cold_snap {cs:.1f} | cold_orig {co:.1f} | map_warm {w:.1f} "
+                  f"-> {out.name}")
+        return
 
     for pt in manifest["points"]:
         out = plot_point(pt, label, rf, r42, r21, rundir / "plots")
