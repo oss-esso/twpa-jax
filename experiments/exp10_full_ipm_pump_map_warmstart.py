@@ -40,6 +40,7 @@ import shutil
 import subprocess
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -80,6 +81,19 @@ def signal_ghz_for(pump_freq_ghz: float, args: argparse.Namespace) -> float:
     if getattr(args, "signal_ghz", None) is not None:
         return float(args.signal_ghz)
     return float(pump_freq_ghz) - float(args.signal_detuning_mhz) / 1000.0
+
+
+def spectrum_offsets_mhz(args: argparse.Namespace) -> list[float]:
+    """Signal offsets (MHz, relative to fp) for the per-cell spectrum mode.
+
+    Symmetric ladder around the pump: +/- start, +/- (start+step), ... e.g.
+    start=100, step=250, count=5 -> +/-100, +/-350, +/-600, +/-850, +/-1100.
+    The -detuning trailing point (default -100) is a member, so the spectrum
+    contains the map's headline signal.
+    """
+    pos = [args.signal_offset_start_mhz + i * args.signal_offset_step_mhz
+           for i in range(args.signal_offset_count_per_side)]
+    return [float(-x) for x in reversed(pos)] + [float(x) for x in pos]
 
 
 def finite_or_none(value: Any) -> float | None:
@@ -587,12 +601,21 @@ class InProcessEngine:
             "gain_gamma_hat_runtime_s", "gain_khat_build_runtime_s",
             "gain_khat_off_runtime_s", "gain_matrix_assemble_runtime_s",
             "gain_factor_solve_runtime_s", "gain_baseline_off_runtime_s",
-            "gain_baseline_pumpdiag_runtime_s")})
+            "gain_baseline_pumpdiag_runtime_s",
+            "spectrum_peak_gain_db", "spectrum_peak_signal_ghz")})
         row["gain_status"] = "ERROR"
 
         if converged:
-            g, gain_timing = self._gain(pump_dir, gain_dir, point.pump_freq_ghz)
+            g, gain_timing, spectrum = self._gain(pump_dir, gain_dir, point.pump_freq_ghz)
             row.update(gain_timing)
+            if spectrum is not None:
+                row["_spectrum"] = spectrum  # dropped from CSV; -> map_spectrum.npz
+                gains = [gd for gd, st in zip(spectrum["gain_db"], spectrum["status"])
+                         if st == "VALID_SOLVED"]
+                if gains:
+                    k = int(np.nanargmax(spectrum["gain_db"]))
+                    row["spectrum_peak_gain_db"] = float(spectrum["gain_db"][k])
+                    row["spectrum_peak_signal_ghz"] = float(spectrum["signal_ghz"][k])
             if g is not None and g.status == "VALID_SOLVED":
                 row["gain_status"] = "VALID_SOLVED"
                 row["gain_db"] = float(g.gain_db)
@@ -629,26 +652,70 @@ class InProcessEngine:
             self.ipm09.Bphi @ sp.diags(gamma_off, offsets=0, format="csr") @ self.ipm09.Bphi.T
         ).astype(np.complex128).tocsr()
         khat_off_runtime_s = time.perf_counter() - t0
-        g = exp09.solve_gain_one(
-            ipm=self.ipm09, khat=khat, khat_off_0=khat_off_0, omega_p=pump.omega_p,
-            signal_ghz=signal_ghz_for(freq_ghz, a), sidebands=a.sidebands,
-            signal_m=0, idler_m=-2,
-            source_index=self.source_idx, out_index=self.out_idx,
-            source_current_a=1.0, source_port=a.source_port, out_port=a.out_port,
-            z0_ohm=a.z0_ohm, loss_model="current_complex_c",
-        )
+
+        # Signal-frequency-independent Floquet conversion base: built once here,
+        # reused by the trailing solve and every spectrum point (the dominant
+        # speedup for multi-signal cells).
+        khat_big_base = None
+        khat_base_runtime_s = 0.0
+        if a.signal_spectrum:
+            t0 = time.perf_counter()
+            khat_big_base = exp09.assemble_khat_conversion_base(self.ipm09, khat, ms)
+            khat_base_runtime_s = time.perf_counter() - t0
+
+        g = self._solve_signal(khat, khat_off_0, khat_big_base, pump.omega_p,
+                               signal_ghz_for(freq_ghz, a))
+
+        spectrum = None
+        if a.signal_spectrum:
+            offs = spectrum_offsets_mhz(a)
+
+            def one(off: float) -> tuple[float, float, Any]:
+                fs = float(freq_ghz) + off / 1000.0
+                gg = self._solve_signal(khat, khat_off_0, khat_big_base,
+                                        pump.omega_p, fs)
+                return off, fs, gg
+
+            if a.signal_workers > 1:
+                with ThreadPoolExecutor(max_workers=a.signal_workers) as pool:
+                    items = list(pool.map(one, offs))
+            else:
+                items = [one(off) for off in offs]
+            spectrum = {
+                "offsets_mhz": [it[0] for it in items],
+                "signal_ghz": [it[1] for it in items],
+                "gain_db": [float(it[2].gain_db) for it in items],
+                "status": [it[2].status for it in items],
+            }
+
         timing = {
             "gain_wall_runtime_s": time.perf_counter() - t_all,
             "gain_total_runtime_s": time.perf_counter() - t_all,
             "gain_gamma_hat_runtime_s": gamma_runtime_s,
-            "gain_khat_build_runtime_s": khat_runtime_s,
+            "gain_khat_build_runtime_s": khat_runtime_s + khat_base_runtime_s,
             "gain_khat_off_runtime_s": khat_off_runtime_s,
             "gain_matrix_assemble_runtime_s": float(g.assemble_runtime_s),
             "gain_factor_solve_runtime_s": float(g.factor_solve_runtime_s),
             "gain_baseline_off_runtime_s": float(g.baseline_off_runtime_s),
             "gain_baseline_pumpdiag_runtime_s": float(g.baseline_pumpdiag_runtime_s),
         }
-        return g, timing
+        return g, timing, spectrum
+
+    def _solve_signal(self, khat, khat_off_0, khat_big_base, omega_p, signal_ghz):
+        a = self.args
+        common = dict(
+            ipm=self.ipm09, khat=khat, khat_off_0=khat_off_0,
+            khat_big_base=khat_big_base, omega_p=omega_p, signal_ghz=signal_ghz,
+            sidebands=a.sidebands, signal_m=0, idler_m=-2,
+            source_index=self.source_idx, out_index=self.out_idx,
+            source_current_a=1.0, source_port=a.source_port, out_port=a.out_port,
+            z0_ohm=a.z0_ohm, loss_model="current_complex_c",
+            linear_solver=a.signal_solver,
+        )
+        if a.signal_backend == "schur":
+            return exp09.solve_gain_one_schur(
+                **common, include_baselines=not a.skip_baselines)
+        return exp09.solve_gain_one(**common)
 
 
 def run_cold_pass_inprocess(
@@ -945,6 +1012,7 @@ def write_points_csv(path: Path, rows: list[dict[str, Any]]) -> None:
         "gain_khat_build_runtime_s", "gain_khat_off_runtime_s",
         "gain_matrix_assemble_runtime_s", "gain_factor_solve_runtime_s",
         "gain_baseline_off_runtime_s", "gain_baseline_pumpdiag_runtime_s",
+        "spectrum_peak_gain_db", "spectrum_peak_signal_ghz",
         "elapsed_s", "pump_dir",
     ]
     with path.open("w", newline="", encoding="utf-8") as f:
@@ -960,6 +1028,33 @@ def gain_grid(rows: list[dict[str, Any]], n_power: int, n_freq: int) -> np.ndarr
         if value is not None and r["status"] == "PASS":
             grid[int(r["i_power"]), int(r["j_freq"])] = value
     return grid
+
+
+def write_spectrum(
+    path: Path, rows: list[dict[str, Any]], powers: np.ndarray,
+    freqs: np.ndarray, offsets: list[float],
+) -> None:
+    """Write the per-cell signal spectrum as a (n_power, n_freq, n_offset) cube.
+
+    Reads the ``_spectrum`` payload each PASS row carries (offsets aligned to
+    ``offsets``); non-solved cells stay NaN. ``signal_ghz`` is fp+offset, so the
+    absolute signal axis is per (offset, j_freq) -- stored as a 2D helper too.
+    """
+    n_off = len(offsets)
+    cube = np.full((powers.size, freqs.size, n_off), np.nan, dtype=float)
+    off_arr = np.asarray(offsets, dtype=float)
+    for r in rows:
+        spec = r.get("_spectrum")
+        if not spec or r["status"] != "PASS":
+            continue
+        i, j = int(r["i_power"]), int(r["j_freq"])
+        for k, (gd, st) in enumerate(zip(spec["gain_db"], spec["status"])):
+            if st == "VALID_SOLVED" and k < n_off:
+                cube[i, j, k] = float(gd)
+    signal_ghz = freqs[None, :] + off_arr[:, None] / 1000.0  # (n_off, n_freq)
+    np.savez(path, pump_power_dbm=powers, pump_frequency_ghz=freqs,
+             signal_offset_mhz=off_arr, gain_spectrum_db=cube,
+             signal_ghz=signal_ghz)
 
 
 def write_arrays(
@@ -1187,6 +1282,29 @@ def parse_args() -> argparse.Namespace:
                    help="Signal detuning below the pump when --signal-ghz is not "
                    "set: ws = wp - detuning (default 100 MHz).")
 
+    # Per-cell signal spectrum: solve a ladder of signal frequencies around each
+    # pump cell (reusing one Floquet conversion base), not just the single
+    # trailing point. The trailing gain_db / map_arrays are unchanged; the
+    # spectrum is an additive (n_power, n_freq, n_offset) cube in map_spectrum.npz.
+    p.add_argument("--signal-spectrum", action="store_true",
+                   help="Solve a spectrum of signal frequencies per cell (see below); "
+                   "writes map_spectrum.npz. Reuses exp09's khat conversion base so "
+                   "each extra signal point is cheap.")
+    p.add_argument("--signal-offset-start-mhz", type=float, default=100.0,
+                   help="First |offset| from fp for the spectrum ladder (MHz).")
+    p.add_argument("--signal-offset-step-mhz", type=float, default=250.0,
+                   help="Spacing between spectrum offsets (MHz).")
+    p.add_argument("--signal-offset-count-per-side", type=int, default=5,
+                   help="Offsets per side; 5 -> 10 points (+/-100,+/-350,... MHz).")
+    p.add_argument("--signal-workers", type=int, default=1,
+                   help="Threads over spectrum signal points (1 = serial).")
+    p.add_argument("--signal-backend", choices=["direct", "schur"], default="direct",
+                   help="Signal linear backend for the gain solve.")
+    p.add_argument("--signal-solver", choices=["superlu", "pardiso"], default="superlu",
+                   help="Sparse solver for the signal system.")
+    p.add_argument("--skip-baselines", action="store_true",
+                   help="Skip off/pumpdiag baseline solves (schur backend); gain_db stays valid.")
+
     p.add_argument("--pump-port", type=int, default=4)
     p.add_argument("--source-port", type=int, default=1)
     p.add_argument("--out-port", type=int, default=2)
@@ -1337,6 +1455,12 @@ def main() -> int:
     if "gain_db_cold" in grids and "gain_db_warm" in grids:
         grids["gain_drift_db"] = np.abs(grids["gain_db_warm"] - grids["gain_db_cold"])
     write_arrays(outdir / "map_arrays.npz", powers, freqs, grids)
+
+    if args.signal_spectrum and warm_rows:
+        offsets = spectrum_offsets_mhz(args)
+        write_spectrum(outdir / "map_spectrum.npz", warm_rows, powers, freqs, offsets)
+        print(f"wrote {outdir / 'map_spectrum.npz'} "
+              f"({len(offsets)} signal offsets/cell)", flush=True)
 
     elapsed = time.perf_counter() - start
     write_summary(outdir, args, cold_rows, warm_rows, gate, elapsed)

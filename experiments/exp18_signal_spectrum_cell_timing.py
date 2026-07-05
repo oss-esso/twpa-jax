@@ -19,6 +19,7 @@ import json
 import shutil
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -53,6 +54,12 @@ def parse_args() -> argparse.Namespace:
                    help="5 gives 10 spectrum points: +/-100, +/-350, ... MHz.")
     p.add_argument("--reps", type=int, default=1,
                    help="Repeat independent pump+gain cells; median reported.")
+    p.add_argument("--signal-backend", choices=["direct", "schur"], default="direct")
+    p.add_argument("--signal-solver", choices=["superlu", "pardiso"], default="superlu")
+    p.add_argument("--signal-workers", type=int, default=1,
+                   help="Threads for spectrum signal points; 1 is serial.")
+    p.add_argument("--skip-baselines", action="store_true",
+                   help="Skip off/pumpdiag baseline solves in Schur backend; gain_db remains valid.")
     p.add_argument("--overwrite", action="store_true")
     p.add_argument("--sidebands", type=int, default=args.sidebands)
     p.add_argument("--gamma-nt", type=int, default=args.gamma_nt)
@@ -78,6 +85,8 @@ def parse_args() -> argparse.Namespace:
     args.signal_ghz = None
     args.pump_mode_policy = "positive_odd_jc"
     return args
+
+
 def offsets_mhz(args: argparse.Namespace) -> list[float]:
     pos = [args.offset_start_mhz + i * args.offset_step_mhz
            for i in range(args.offset_count_per_side)]
@@ -106,6 +115,11 @@ def compute_gain_context(engine: exp10.InProcessEngine, pump_dir: Path, fp_ghz: 
     khat_runtime_s = time.perf_counter() - t0
 
     t0 = time.perf_counter()
+    ms = exp09.sideband_list(args.sidebands)
+    khat_big_base = exp09.assemble_khat_conversion_base(engine.ipm09, khat, ms)
+    khat_base_runtime_s = time.perf_counter() - t0
+
+    t0 = time.perf_counter()
     gamma_off = engine.ipm09.Ic / engine.ipm09.phi0
     khat_off_0 = (
         engine.ipm09.Bphi @ sp.diags(gamma_off, offsets=0, format="csr") @ engine.ipm09.Bphi.T
@@ -115,19 +129,22 @@ def compute_gain_context(engine: exp10.InProcessEngine, pump_dir: Path, fp_ghz: 
     return {
         "pump": pump,
         "khat": khat,
+        "khat_big_base": khat_big_base,
         "khat_off_0": khat_off_0,
         "gamma_runtime_s": gamma_runtime_s,
         "khat_build_runtime_s": khat_runtime_s,
+        "khat_base_runtime_s": khat_base_runtime_s,
         "khat_off_runtime_s": khat_off_runtime_s,
         "precompute_runtime_s": time.perf_counter() - t_all,
     }
 
 
 def solve_signal(engine: exp10.InProcessEngine, ctx: dict[str, Any], signal_ghz: float, args: argparse.Namespace) -> exp09.GainResult:
-    return exp09.solve_gain_one(
+    common = dict(
         ipm=engine.ipm09,
         khat=ctx["khat"],
         khat_off_0=ctx["khat_off_0"],
+        khat_big_base=ctx.get("khat_big_base"),
         omega_p=ctx["pump"].omega_p,
         signal_ghz=signal_ghz,
         sidebands=args.sidebands,
@@ -140,13 +157,20 @@ def solve_signal(engine: exp10.InProcessEngine, ctx: dict[str, Any], signal_ghz:
         out_port=args.out_port,
         z0_ohm=args.z0_ohm,
         loss_model="current_complex_c",
+        linear_solver=args.signal_solver,
     )
+    if args.signal_backend == "schur":
+        return exp09.solve_gain_one_schur(
+            **common,
+            include_baselines=not args.skip_baselines,
+        )
+    return exp09.solve_gain_one(**common)
 
 
 def write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
     fields = [
         "rep", "kind", "offset_mhz", "signal_ghz", "status", "gain_db",
-        "linear_rel_residual", "precompute_runtime_s", "assemble_runtime_s",
+        "linear_rel_residual", "conversion_unknowns", "matrix_nnz", "precompute_runtime_s", "assemble_runtime_s",
         "factor_solve_runtime_s", "baseline_off_runtime_s",
         "baseline_pumpdiag_runtime_s", "point_signal_runtime_s",
     ]
@@ -215,6 +239,7 @@ def main() -> int:
             "rep": rep, "kind": "single_trailing", "offset_mhz": -args.signal_detuning_mhz,
             "signal_ghz": single.signal_ghz, "status": single.status,
             "gain_db": single.gain_db, "linear_rel_residual": single.linear_rel_residual,
+            "conversion_unknowns": single.conversion_unknowns, "matrix_nnz": single.matrix_nnz,
             "precompute_runtime_s": ctx["precompute_runtime_s"],
             "assemble_runtime_s": single.assemble_runtime_s,
             "factor_solve_runtime_s": single.factor_solve_runtime_s,
@@ -224,20 +249,30 @@ def main() -> int:
         })
 
         spec_ctx = compute_gain_context(engine, pump_dir, args.pump_freq_ghz, args)
-        spectrum_wall_sum = 0.0
-        spectrum_results: list[exp09.GainResult] = []
-        for off in offs:
+
+        def one_spectrum_point(off: float) -> tuple[float, exp09.GainResult, float]:
             fs = args.pump_freq_ghz + off / 1000.0
             t0 = time.perf_counter()
             g = solve_signal(engine, spec_ctx, fs, args)
-            dt = time.perf_counter() - t0
-            spectrum_wall_sum += dt
+            return off, g, time.perf_counter() - t0
+
+        spectrum_results: list[exp09.GainResult] = []
+        spectrum_t0 = time.perf_counter()
+        if args.signal_workers > 1:
+            with ThreadPoolExecutor(max_workers=args.signal_workers) as pool:
+                spectrum_items = list(pool.map(one_spectrum_point, offs))
+        else:
+            spectrum_items = [one_spectrum_point(off) for off in offs]
+        spectrum_wall = time.perf_counter() - spectrum_t0
+
+        for idx, (off, g, dt) in enumerate(spectrum_items):
             spectrum_results.append(g)
             point_rows.append({
                 "rep": rep, "kind": "spectrum", "offset_mhz": off,
                 "signal_ghz": g.signal_ghz, "status": g.status,
                 "gain_db": g.gain_db, "linear_rel_residual": g.linear_rel_residual,
-                "precompute_runtime_s": spec_ctx["precompute_runtime_s"] if len(spectrum_results) == 1 else 0.0,
+                "conversion_unknowns": g.conversion_unknowns, "matrix_nnz": g.matrix_nnz,
+                "precompute_runtime_s": spec_ctx["precompute_runtime_s"] if idx == 0 else 0.0,
                 "assemble_runtime_s": g.assemble_runtime_s,
                 "factor_solve_runtime_s": g.factor_solve_runtime_s,
                 "baseline_off_runtime_s": g.baseline_off_runtime_s,
@@ -245,7 +280,7 @@ def main() -> int:
                 "point_signal_runtime_s": dt,
             })
 
-        spectrum_signal_total = spec_ctx["precompute_runtime_s"] + spectrum_wall_sum
+        spectrum_signal_total = spec_ctx["precompute_runtime_s"] + spectrum_wall
         rep_summary = {
             "rep": rep,
             "pump_status": row["pump_status"],
@@ -261,6 +296,10 @@ def main() -> int:
             "spectrum_over_single_signal": spectrum_signal_total / max(single_signal_total, 1e-300),
             "spectrum_over_single_cell": (row["pump_wall_runtime_s"] + spectrum_signal_total) / max(row["pump_wall_runtime_s"] + single_signal_total, 1e-300),
             "avg_extra_signal_point_s": (spectrum_signal_total - single_signal_total) / max(len(offs) - 1, 1),
+            "signal_workers": args.signal_workers,
+            "signal_backend": args.signal_backend,
+            "signal_solver": args.signal_solver,
+            "skip_baselines": bool(args.skip_baselines),
             "single_gain_db": single.gain_db,
             "spectrum_gain_db_min": min(g.gain_db for g in spectrum_results),
             "spectrum_gain_db_max": max(g.gain_db for g in spectrum_results),
@@ -284,6 +323,10 @@ def main() -> int:
         "settings": {
             "ipm_dir": str(args.ipm_dir),
             "sidebands": args.sidebands,
+            "signal_backend": args.signal_backend,
+            "signal_solver": args.signal_solver,
+            "signal_workers": args.signal_workers,
+            "skip_baselines": bool(args.skip_baselines),
             "gamma_nt": args.gamma_nt,
             "pump_backend": args.inproc_pump_backend,
             "preconditioner": args.inproc_preconditioner,
@@ -309,7 +352,7 @@ def main() -> int:
     md = [
         "# exp18 signal-spectrum cell timing",
         "",
-        f"Cell: fp={args.pump_freq_ghz:g} GHz, P={args.pump_power_dbm:g} dBm, {len(offs)} spectrum points.",
+        f"Cell: fp={args.pump_freq_ghz:g} GHz, P={args.pump_power_dbm:g} dBm, {len(offs)} spectrum points, backend={args.signal_backend}, solver={args.signal_solver}, workers={args.signal_workers}.",
         "",
         "| metric | median s |",
         "| --- | ---: |",
@@ -332,6 +375,5 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
 
 

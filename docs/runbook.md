@@ -289,3 +289,24 @@ at the map's own `(fp, pump current)`.
 | Figures | `outputs/*.png` (next to each run) | `scripts/outputs/*.png` |
 
 `outputs/` (twpa_jax) and `../runs/` (Harmonia) are gitignored / regenerable.
+
+
+ Commands for the three spectrum maps
+
+  Using the validated fast path (schur_cpu_mt + real_coupled_fast + secant + fail-fast + fold short-circuit) with the spectrum on, sidebands 6 + 6 workers (your near-fold accuracy/speed pick):
+
+  cd C:\Users\Edoardo\Documents\EPFL\Thesis\twpa_jax
+
+  # common flags
+  $C = "--executor inprocess --mode warmstart --inproc-pump-backend schur_cpu_mt --inproc-preconditioner real_coupled_fast --inproc-fold-predictor secant --inproc-fail-fast --fold-skip-patience 2
+  --signal-detuning-mhz 100 --signal-spectrum --sidebands 6 --signal-workers 6 --n-power 50 --n-frequency 50 --overwrite"
+
+  # 2c  (-30 -> -20 dBm x 7.0-8.0 GHz)
+  python experiments/exp10_full_ipm_pump_map_warmstart.py $C.Split(' ') --ipm-dir outputs/ipm_python_design    --pump-power-min-dbm -30 --pump-power-max-dbm -20 --pump-freq-min-ghz 7.0
+  --pump-freq-max-ghz 8.0 --outdir outputs/exp10_spectrum_2c_m30_m20 ;
+  # 2c peak  (-24 -> -18 dBm x 7.1-7.4 GHz)
+  python experiments/exp10_full_ipm_pump_map_warmstart.py $C.Split(' ') --ipm-dir outputs/ipm_python_design    --pump-power-min-dbm -24 --pump-power-max-dbm -18 --pump-freq-min-ghz 7.1
+  --pump-freq-max-ghz 7.4 --outdir outputs/exp10_spectrum_2c_m24_m18 ;
+  # 3c  (-36 -> -20 dBm x 7.0-8.0 GHz, full fold coverage)
+  python experiments/exp10_full_ipm_pump_map_warmstart.py $C.Split(' ') --ipm-dir outputs/ipm_python_design_3c --pump-power-min-dbm -36 --pump-power-max-dbm -20 --pump-freq-min-ghz 7.0
+  --pump-freq-max-ghz 8.0 --outdir outputs/exp10_spectrum_3c
