@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import numpy as np
 
-from twpa_solver.model.ipm import IPMConfig, build_ipm_jtwpa
-from twpa_solver.residuals.aft_hb import PumpAFTConfig, PumpAFTResidual
-from twpa_solver.solvers.scipy_least_squares import solve_least_squares
+from twpa_solver_old.model.ipm import IPMConfig, build_ipm_jtwpa
+from twpa_solver_old.residuals.aft_hb import PumpAFTConfig, PumpAFTResidual
+from twpa_solver_old.solvers.scipy_least_squares import solve_least_squares
 
 
 def test_ipm_topology_assembles_matrices_and_ports() -> None:

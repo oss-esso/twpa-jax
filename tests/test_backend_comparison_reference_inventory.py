@@ -1,6 +1,6 @@
 import csv
 
-from twpa_solver.experiments.compare_backend_5x5_to_jc_reference import main
+from twpa_solver_old.experiments.compare_backend_5x5_to_jc_reference import main
 
 
 def _write_rows(path, status="VALID_CONVERGED", gain="1.0"):

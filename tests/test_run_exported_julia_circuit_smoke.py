@@ -1,6 +1,6 @@
 import csv
 
-from twpa_solver.experiments.run_exported_julia_circuit_map import main
+from twpa_solver_old.experiments.run_exported_julia_circuit_map import main
 
 from test_import_old_ipm_json_tiny_fixture import write_tiny_export
 

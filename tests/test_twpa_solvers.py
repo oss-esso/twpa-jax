@@ -2,13 +2,13 @@ from __future__ import annotations
 
 import numpy as np
 
-from twpa_solver.residuals.two_tone import make_two_tone_grid
-from twpa_solver.solvers.anderson import anderson_accelerate
-from twpa_solver.solvers.arclength import ArclengthPoint, trace_scalar_branch
-from twpa_solver.solvers.deflation import cluster_solutions
-from twpa_solver.solvers.mor import fit_reduced_model, evaluate_reduced_model
-from twpa_solver.solvers.scipy_least_squares import solve_least_squares
-from twpa_solver.solvers.shooting import solve_periodic_shooting
+from twpa_solver_old.residuals.two_tone import make_two_tone_grid
+from twpa_solver_old.solvers.anderson import anderson_accelerate
+from twpa_solver_old.solvers.arclength import ArclengthPoint, trace_scalar_branch
+from twpa_solver_old.solvers.deflation import cluster_solutions
+from twpa_solver_old.solvers.mor import fit_reduced_model, evaluate_reduced_model
+from twpa_solver_old.solvers.scipy_least_squares import solve_least_squares
+from twpa_solver_old.solvers.shooting import solve_periodic_shooting
 
 
 def test_arclength_traces_toy_fold_scaffold() -> None:

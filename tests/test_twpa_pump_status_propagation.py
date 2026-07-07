@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from twpa_solver.experiments.run_ipm_25x25_gain_map import _row_from_solution_status
+from twpa_solver_old.experiments.run_ipm_25x25_gain_map import _row_from_solution_status
 
 
 def test_nonconverged_pump_status_masks_gain_row() -> None:

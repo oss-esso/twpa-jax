@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from twpa_solver.model.nonlinearities import JosephsonNonlinearity
+from twpa_solver_old.model.nonlinearities import JosephsonNonlinearity
 
 
 def test_josephson_derivative_matches_finite_difference() -> None:

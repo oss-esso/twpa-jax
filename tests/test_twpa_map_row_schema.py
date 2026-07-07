@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from twpa_solver.experiments.run_ipm_25x25_gain_map import REQUIRED_PARITY_ROW_FIELDS
+from twpa_solver_old.experiments.run_ipm_25x25_gain_map import REQUIRED_PARITY_ROW_FIELDS
 
 
 def test_parity_row_schema_contains_required_fields() -> None:

@@ -1,7 +1,7 @@
 import numpy as np
 
-from twpa_solver.importers.julia_circuit_json import import_julia_circuit_json
-from twpa_solver.model.units import CONSTANTS
+from twpa_solver_old.importers.julia_circuit_json import import_julia_circuit_json
+from twpa_solver_old.model.units import CONSTANTS
 
 from test_import_old_ipm_json_tiny_fixture import write_tiny_export
 

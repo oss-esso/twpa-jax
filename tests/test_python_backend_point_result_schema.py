@@ -1,6 +1,6 @@
 import json
 
-from twpa_solver.experiments.solve_old_ipm_backend_point import main
+from twpa_solver_old.experiments.solve_old_ipm_backend_point import main
 
 from test_import_old_ipm_json_tiny_fixture import write_tiny_export
 

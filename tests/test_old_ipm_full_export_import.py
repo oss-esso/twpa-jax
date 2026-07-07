@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from twpa_solver.importers.julia_circuit_json import import_julia_circuit_json
+from twpa_solver_old.importers.julia_circuit_json import import_julia_circuit_json
 
 
 def test_full_old_ipm_export_import_assembly():

@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import numpy as np
 
-from twpa_solver.model.blocks import DirectionalCouplerBlock
-from twpa_solver.model.topology import (
+from twpa_solver_old.model.blocks import DirectionalCouplerBlock
+from twpa_solver_old.model.topology import (
     CircuitBuilder,
     coupled_inductor_branch_current,
 )

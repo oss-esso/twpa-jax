@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from twpa_solver.model.graph import Branch, branch_fluxes, incidence_matrix
+from twpa_solver_old.model.graph import Branch, branch_fluxes, incidence_matrix
 
 
 def test_incidence_matrix_branch_flux_consistency() -> None:

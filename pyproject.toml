@@ -3,7 +3,7 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "twpa-full"
+name = "twpa-solver"
 version = "0.1.0"
 description = "TWPA/KITWPA harmonic-balance simulation tools"
 requires-python = ">=3.10"
@@ -12,8 +12,7 @@ dependencies = [
   "scipy",
   "matplotlib",
   "pytest",
-  "jax",
-  "jaxlib",
+  "pyparadiso",
 ]
 
 [project.scripts]

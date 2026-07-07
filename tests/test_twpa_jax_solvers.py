@@ -3,7 +3,7 @@ from __future__ import annotations
 import jax.numpy as jnp
 import numpy as np
 
-from twpa_solver.solvers.jax_dense_newton import solve_jax_dense_newton
+from twpa_solver_old.solvers.jax_dense_newton import solve_jax_dense_newton
 
 
 def test_jax_dense_newton_solves_tiny_problem() -> None:

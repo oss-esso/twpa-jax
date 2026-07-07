@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import numpy as np
 
-from twpa_solver.solvers.continuation import continue_parameter, snake_grid_indices
-from twpa_solver.solvers.scipy_least_squares import solve_least_squares
+from twpa_solver_old.solvers.continuation import continue_parameter, snake_grid_indices
+from twpa_solver_old.solvers.scipy_least_squares import solve_least_squares
 
 
 def test_continuation_reaches_parameter_path() -> None:

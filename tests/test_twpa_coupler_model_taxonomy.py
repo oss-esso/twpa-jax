@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from twpa_solver.model.blocks import COUPLER_MODEL_TAXONOMY
-from twpa_solver.model.ipm import IPMConfig, build_ipm_topology
+from twpa_solver_old.model.blocks import COUPLER_MODEL_TAXONOMY
+from twpa_solver_old.model.ipm import IPMConfig, build_ipm_topology
 
 
 def test_coupler_model_taxonomy_contains_required_labels() -> None:

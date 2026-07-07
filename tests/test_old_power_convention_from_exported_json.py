@@ -1,7 +1,7 @@
 import json
 import math
 
-from twpa_solver.model.units import dbm_to_old_julia_peak_current
+from twpa_solver_old.model.units import dbm_to_old_julia_peak_current
 
 
 def test_old_power_convention_from_exported_json(tmp_path):

@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import numpy as np
 
-from twpa_solver.model.ipm import IPMConfig, build_ipm_jtwpa_physical_coupler
-from twpa_solver.residuals.aft_hb import PumpAFTConfig, PumpAFTResidual
-from twpa_solver.residuals.conversion import build_conversion_sparameters
-from twpa_solver.residuals.linear import solve_linear_sparameters
-from twpa_solver.solvers.scipy_least_squares import solve_least_squares
+from twpa_solver_old.model.ipm import IPMConfig, build_ipm_jtwpa_physical_coupler
+from twpa_solver_old.residuals.aft_hb import PumpAFTConfig, PumpAFTResidual
+from twpa_solver_old.residuals.conversion import build_conversion_sparameters
+from twpa_solver_old.residuals.linear import solve_linear_sparameters
+from twpa_solver_old.solvers.scipy_least_squares import solve_least_squares
 
 
 def test_physical_coupler_ipm_assembles_and_solves_linear_sparams() -> None:

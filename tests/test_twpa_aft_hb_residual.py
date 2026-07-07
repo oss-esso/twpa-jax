@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import numpy as np
 
-from twpa_solver.model.ipm import IPMConfig, build_ipm_jtwpa
-from twpa_solver.residuals.aft_hb import PumpAFTConfig, PumpAFTResidual
+from twpa_solver_old.model.ipm import IPMConfig, build_ipm_jtwpa
+from twpa_solver_old.residuals.aft_hb import PumpAFTConfig, PumpAFTResidual
 
 
 def test_zero_amplitude_zero_source_residual_is_zero() -> None:

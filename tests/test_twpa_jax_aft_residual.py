@@ -4,10 +4,10 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from twpa_solver.model.ipm import IPMConfig, build_ipm_jtwpa_reduced_marker
-from twpa_solver.residuals.aft_hb import PumpAFTConfig, PumpAFTResidual
-from twpa_solver.residuals.jax_aft_hb import JaxPumpAFTResidual
-from twpa_solver.solvers.jax_dense_newton import solve_jax_dense_newton
+from twpa_solver_old.model.ipm import IPMConfig, build_ipm_jtwpa_reduced_marker
+from twpa_solver_old.residuals.aft_hb import PumpAFTConfig, PumpAFTResidual
+from twpa_solver_old.residuals.jax_aft_hb import JaxPumpAFTResidual
+from twpa_solver_old.solvers.jax_dense_newton import solve_jax_dense_newton
 
 
 def test_jax_aft_residual_matches_numpy() -> None:

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from twpa_solver.model.ipm import (
+from twpa_solver_old.model.ipm import (
     OLD_JULIA_TARGET_JUNCTIONS,
     IPMConfig,
     build_ipm_topology,

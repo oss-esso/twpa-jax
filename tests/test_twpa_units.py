@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import numpy as np
 
-from twpa_solver.model.ports import voltage_current_to_waves
-from twpa_solver.model.units import current_peak_to_dbm, dbm_to_current_peak
+from twpa_solver_old.model.ports import voltage_current_to_waves
+from twpa_solver_old.model.units import current_peak_to_dbm, dbm_to_current_peak
 
 
 def test_dbm_current_roundtrip() -> None:

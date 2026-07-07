@@ -4,8 +4,8 @@ from argparse import Namespace
 
 import numpy as np
 
-from twpa_solver.experiments.run_ipm_25x25_gain_map import _compute_drive_convention
-from twpa_solver.model.units import dbm_to_old_julia_peak_current
+from twpa_solver_old.experiments.run_ipm_25x25_gain_map import _compute_drive_convention
+from twpa_solver_old.model.units import dbm_to_old_julia_peak_current
 
 
 def test_old_julia_offset_sets_source_power_and_peak_current() -> None:

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from twpa_solver.experiments.solver_readiness import readiness_rows
+from twpa_solver_old.experiments.solver_readiness import readiness_rows
 
 
 def test_solver_readiness_has_single_allowed_class_per_solver() -> None:

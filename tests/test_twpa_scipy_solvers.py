@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import numpy as np
 
-from twpa_solver.solvers.scipy_least_squares import solve_least_squares
-from twpa_solver.solvers.scipy_root import solve_root
+from twpa_solver_old.solvers.scipy_least_squares import solve_least_squares
+from twpa_solver_old.solvers.scipy_root import solve_root
 
 
 def test_scipy_least_squares_solves_toy_nonlinear_problem() -> None:

@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import numpy as np
 
-from twpa_solver.model.ipm import IPMConfig, build_ipm_jtwpa_reduced_marker
-from twpa_solver.residuals.aft_hb import PumpAFTConfig, PumpAFTResidual
-from twpa_solver.residuals.conversion import build_conversion_sparameters
+from twpa_solver_old.model.ipm import IPMConfig, build_ipm_jtwpa_reduced_marker
+from twpa_solver_old.residuals.aft_hb import PumpAFTConfig, PumpAFTResidual
+from twpa_solver_old.residuals.conversion import build_conversion_sparameters
 
 
 def _pump_solution_with_cos_amplitude(residual: PumpAFTResidual, amplitude_wb: float) -> np.ndarray:

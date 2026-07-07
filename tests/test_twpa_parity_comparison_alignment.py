@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from twpa_solver.experiments.compare_python_to_old_julia_map import compare_rows
+from twpa_solver_old.experiments.compare_python_to_old_julia_map import compare_rows
 
 
 def test_parity_comparison_aligns_by_frequency_and_external_power() -> None:

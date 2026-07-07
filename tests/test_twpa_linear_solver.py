@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import numpy as np
 
-from twpa_solver.model.ipm import IPMConfig, build_ipm_jtwpa
-from twpa_solver.residuals.linear import solve_linear_sparameters
+from twpa_solver_old.model.ipm import IPMConfig, build_ipm_jtwpa
+from twpa_solver_old.residuals.linear import solve_linear_sparameters
 
 
 def test_passive_linearized_ladder_returns_finite_reciprocal_sparameters() -> None:

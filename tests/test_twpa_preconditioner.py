@@ -3,11 +3,11 @@ from __future__ import annotations
 import jax.numpy as jnp
 import numpy as np
 
-from twpa_solver.model.ipm import IPMConfig, build_ipm_jtwpa_reduced_marker
-from twpa_solver.residuals.aft_hb import PumpAFTConfig, PumpAFTResidual
-from twpa_solver.residuals.jax_aft_hb import JaxPumpAFTResidual
-from twpa_solver.solvers.jax_newton_krylov import solve_jax_newton_krylov
-from twpa_solver.solvers.preconditioners import build_linear_passive_preconditioner
+from twpa_solver_old.model.ipm import IPMConfig, build_ipm_jtwpa_reduced_marker
+from twpa_solver_old.residuals.aft_hb import PumpAFTConfig, PumpAFTResidual
+from twpa_solver_old.residuals.jax_aft_hb import JaxPumpAFTResidual
+from twpa_solver_old.solvers.jax_newton_krylov import solve_jax_newton_krylov
+from twpa_solver_old.solvers.preconditioners import build_linear_passive_preconditioner
 
 
 def test_linear_passive_preconditioner_solves_same_tiny_residual() -> None:
