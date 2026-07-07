@@ -25,11 +25,18 @@ The conjugate ``K_{k+q}`` coupling is kept exactly (it is what collapses GMRES).
 
 from __future__ import annotations
 
+import os
 import time
+from contextlib import nullcontext
 
 import numpy as np
 import scipy.sparse as sp
 import scipy.sparse.linalg as spla
+
+try:
+    from threadpoolctl import threadpool_limits
+except Exception:  # pragma: no cover - optional dependency
+    threadpool_limits = None
 
 try:
     from pypardiso import PyPardisoSolver
@@ -74,6 +81,41 @@ class _KhatDataMap:
         return self._map @ gamma_hat_ell
 
 
+def _env_true(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+_LOGGED_FACTOR_BACKENDS: set[str] = set()
+
+
+def _log_factor_backend_once(backend: str, detail: str = "") -> None:
+    if not _env_true("TWPA_PARDISO_LOG"):
+        return
+    key = backend
+    if key in _LOGGED_FACTOR_BACKENDS:
+        return
+    _LOGGED_FACTOR_BACKENDS.add(key)
+
+    msg = f"[real_coupled_fast] factor_backend={backend}"
+    if detail:
+        msg += f" {detail}"
+    print(msg)
+
+
+def _pardiso_thread_context():
+    """Limit MKL/PARDISO threads for stable sparse factorization."""
+    if threadpool_limits is None:
+        return nullcontext()
+    raw = os.environ.get("TWPA_PARDISO_THREADS", "1").strip()
+    try:
+        limit = int(raw)
+    except ValueError:
+        limit = 1
+    if limit <= 0:
+        return nullcontext()
+    return threadpool_limits(limits=limit, user_api="blas")
+
+
 class FastCoupledPreconditioner:
     """Precompute the real-coupled assembly scatter + symbolic factorization once.
 
@@ -102,6 +144,15 @@ class FastCoupledPreconditioner:
         self._analyzed = False
         self.last_assembly_runtime_s = 0.0
         self.last_factor_runtime_s = 0.0
+        self.last_pardiso_error = ""
+        self.last_factor_backend = ""
+        self.pardiso_strict = _env_true("TWPA_REQUIRE_PARDISO")
+
+        if self.pardiso_strict and not self.use_pardiso:
+            raise RuntimeError(
+                "TWPA_REQUIRE_PARDISO=1, but pypardiso is not available "
+                "or this preconditioner was constructed with use_pardiso=False."
+            )
 
     def _gamma_hat_array(self, gamma_t: np.ndarray) -> np.ndarray:
         return self._phase_matrix @ gamma_t
@@ -253,26 +304,73 @@ class FastCoupledPreconditioner:
 
     def _factor(self) -> None:
         t0 = time.perf_counter()
+
         if self.use_pardiso:
-            A = self.M
-            if self._pardiso is None:
-                # M has a symmetric sparsity pattern but nonsymmetric values;
-                # mtype=1 lets Pardiso exploit that structure without dropping
-                # the exact conjugate coupling terms.
-                self._pardiso = PyPardisoSolver(mtype=1)
-                self._pardiso.set_statistical_info_off()
-                self._pardiso.factorize(A)  # phase 12: analysis + numeric
-                self._analyzed = True
-            else:
-                self._pardiso._check_A(A)
-                self._pardiso.set_phase(22)  # numeric only, reuse analysis
-                self._pardiso._call_pardiso(A, np.zeros(A.shape[0]))
+            A = self.M.tocsr()
+            try:
+                if self._pardiso is None:
+                    # Real-packed Jacobian/preconditioner: real but generally
+                    # nonsymmetric. Use MKL PARDISO's real-unsymmetric type.
+                    self._pardiso = PyPardisoSolver(mtype=11)
+                    self._pardiso.set_statistical_info_off()
+                    with _pardiso_thread_context():
+                        self._pardiso.factorize(A)  # analysis + numeric
+                    self._analyzed = True
+                else:
+                    self._pardiso._check_A(A)
+                    self._pardiso.set_phase(22)  # numeric only, reuse analysis
+                    with _pardiso_thread_context():
+                        self._pardiso._call_pardiso(A, np.zeros(A.shape[0]))
+
+                self._lu = None
+                self.last_pardiso_error = ""
+                self.last_factor_backend = "pardiso"
+                _log_factor_backend_once("pardiso")
+
+            except Exception as exc:
+                self.last_pardiso_error = repr(exc)
+                self.last_factor_backend = "pardiso_failed"
+
+                if self.pardiso_strict:
+                    raise RuntimeError(
+                        "PARDISO factorization failed while "
+                        "TWPA_REQUIRE_PARDISO=1."
+                    ) from exc
+
+                self.use_pardiso = False
+                self._pardiso = None
+                self._analyzed = False
+                self._lu = spla.splu(self.M.tocsc())
+                self.last_factor_backend = "superlu_fallback"
+                _log_factor_backend_once("superlu_fallback", f"error={self.last_pardiso_error}")
         else:
             self._lu = spla.splu(self.M.tocsc())
+            self.last_factor_backend = "superlu"
+            _log_factor_backend_once("superlu")
         self.last_factor_runtime_s = time.perf_counter() - t0
 
     def solve(self, b_real: np.ndarray) -> np.ndarray:
-        if self.use_pardiso:
-            self._pardiso.set_phase(33)
-            return self._pardiso._call_pardiso(self.M, b_real)
+        if self.use_pardiso and self._pardiso is not None:
+            try:
+                self._pardiso.set_phase(33)
+                with _pardiso_thread_context():
+                    return self._pardiso._call_pardiso(self.M.tocsr(), b_real)
+            except Exception as exc:
+                self.last_pardiso_error = repr(exc)
+                self.last_factor_backend = "pardiso_solve_failed"
+
+                if self.pardiso_strict:
+                    raise RuntimeError(
+                        "PARDISO solve failed while TWPA_REQUIRE_PARDISO=1."
+                    ) from exc
+
+                self.use_pardiso = False
+                self._pardiso = None
+                self._analyzed = False
+                self._lu = spla.splu(self.M.tocsc())
+                self.last_factor_backend = "superlu_fallback"
+
+        if self._lu is None:
+            self._lu = spla.splu(self.M.tocsc())
+            self.last_factor_backend = "superlu"
         return self._lu.solve(b_real)

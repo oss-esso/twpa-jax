@@ -120,14 +120,40 @@ def parse_explicit_modes(spec: str) -> list[int]:
     return [int(t) for t in toks]
 
 
-def _modes_from_design_meta(design_meta: dict[str, Any]) -> list[int] | None:
+def _unwrap_design_meta(design_meta: dict[str, Any]) -> dict[str, Any]:
+    """Return the innermost design metadata block used for basis decisions."""
+    meta = design_meta
+    decision_keys = {
+        "features",
+        "pump_modes",
+        "pump_sources",
+        "Nmodulationharmonics",
+        "Npumpharmonics",
+    }
+
+    while isinstance(meta, dict):
+        if decision_keys & set(meta):
+            return meta
+        nested = meta.get("metadata")
+        if not isinstance(nested, dict) or nested is meta:
+            return meta
+        meta = nested
+
+    return {}
+
+
+def _modes_from_design_meta(
+    design_meta: dict[str, Any],
+    *,
+    harmonics: int,
+) -> list[int] | None:
     """Try to read an explicit positive pump mode list from design metadata.
 
     Returns None if the design does not record enough to derive a scalar
     positive mode list. Raises for multi-pump designs that need multi-index
     pump-mode tuples (not representable by a scalar mode policy).
     """
-    meta = design_meta.get("metadata", design_meta)
+    meta = _unwrap_design_meta(design_meta)
     features = meta.get("features", {})
 
     if features.get("multi_pump", False):
@@ -142,6 +168,18 @@ def _modes_from_design_meta(design_meta: dict[str, Any]) -> list[int] | None:
         flat = [int(m) for m in explicit if int(m) >= 1]
         if flat:
             return sorted(set(flat))
+
+    if features.get("needs_dc", False):
+        return list(range(1, harmonics + 1))
+
+    pump_sources = meta.get("pump_sources", [])
+    for src in pump_sources if isinstance(pump_sources, list) else []:
+        if not isinstance(src, dict):
+            continue
+        mode = src.get("mode")
+        modes = mode if isinstance(mode, (list, tuple)) else [mode]
+        if any(int(m) == 0 for m in modes if m is not None):
+            return list(range(1, harmonics + 1))
 
     # JC records Nmodulationharmonics; for an unbiased single-pump 4WM design
     # the nonlinear pump modes are the odd list [1, 3, ..., 2K-1].
@@ -187,7 +225,7 @@ def resolve_pump_basis(
         if explicit_modes:
             modes = parse_explicit_modes(explicit_modes)
         elif design_meta is not None:
-            modes = _modes_from_design_meta(design_meta)
+            modes = _modes_from_design_meta(design_meta, harmonics=harmonics)
         if modes is None:
             if mode_count is not None:
                 modes = positive_odd_modes(mode_count)

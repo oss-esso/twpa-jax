@@ -86,6 +86,25 @@ def _env_true(name: str) -> bool:
     return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
 
 
+_LOGGED_FACTOR_BACKENDS: set[str] = set()
+
+
+def _log_factor_backend_once(backend: str, detail: str = "") -> None:
+    if not _env_true("TWPA_PARDISO_LOG"):
+        return
+
+    key = backend
+    if key in _LOGGED_FACTOR_BACKENDS:
+        return
+
+    _LOGGED_FACTOR_BACKENDS.add(key)
+
+    msg = f"[real_coupled_fast] factor_backend={backend}"
+    if detail:
+        msg += f" {detail}"
+    print(msg)
+
+
 def _pardiso_thread_context():
     """Limit MKL/PARDISO threads for stable sparse factorization.
 
@@ -318,8 +337,7 @@ class FastCoupledPreconditioner:
                 self._lu = None
                 self.last_pardiso_error = ""
                 self.last_factor_backend = "pardiso"
-                if _env_true("TWPA_PARDISO_LOG"):
-                    print("[real_coupled_fast] factor_backend=pardiso")
+                _log_factor_backend_once("pardiso")
 
             except Exception as exc:
                 self.last_pardiso_error = repr(exc)
@@ -338,14 +356,12 @@ class FastCoupledPreconditioner:
                 self._analyzed = False
                 self._lu = spla.splu(self.M.tocsc())
                 self.last_factor_backend = "superlu_fallback"
-                if _env_true("TWPA_PARDISO_LOG"):
-                    print(f"[real_coupled_fast] factor_backend=superlu_fallback error={self.last_pardiso_error}")
+                _log_factor_backend_once("superlu_fallback", f"error={self.last_pardiso_error}")
 
         else:
             self._lu = spla.splu(self.M.tocsc())
             self.last_factor_backend = "superlu"
-            if _env_true("TWPA_PARDISO_LOG"):
-                print("[real_coupled_fast] factor_backend=superlu")
+            _log_factor_backend_once("superlu")
 
         self.last_factor_runtime_s = time.perf_counter() - t0
 

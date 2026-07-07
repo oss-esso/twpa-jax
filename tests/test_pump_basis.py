@@ -97,8 +97,56 @@ def test_auto_jc_reads_nmodulationharmonics() -> None:
     assert basis.modes == pb.positive_odd_modes(10)
 
 
+def test_auto_jc_uses_dense_for_dc_biased_designs() -> None:
+    design_meta = {
+        "metadata": {
+            "Nmodulationharmonics": [8],
+            "pump_sources": [
+                {"port": 2, "mode": [0], "current_a": 140.3e-6},
+                {"port": 2, "mode": [1], "current_a": 0.7e-6},
+            ],
+            "features": {
+                "single_pump": True,
+                "multi_pump": False,
+                "needs_dc": True,
+            },
+        }
+    }
+    basis = pb.resolve_pump_basis(
+        policy="auto_jc",
+        omega_p=1.0,
+        harmonics=8,
+        mode_count=None,
+        explicit_modes=None,
+        design_meta=design_meta,
+    )
+    assert basis.modes == [1, 2, 3, 4, 5, 6, 7, 8]
+
+
 def test_auto_jc_rejects_multi_pump() -> None:
     design_meta = {"metadata": {"features": {"multi_pump": True}}}
+    with pytest.raises(ValueError, match="multi-pump"):
+        pb.resolve_pump_basis(
+            policy="auto_jc",
+            omega_p=1.0,
+            harmonics=3,
+            mode_count=None,
+            explicit_modes=None,
+            design_meta=design_meta,
+        )
+
+
+def test_auto_jc_rejects_multi_pump_after_saved_summary_nesting() -> None:
+    design_meta = {
+        "metadata": {
+            "nodes": 4,
+            "jj_branches": 2,
+            "metadata": {
+                "Nmodulationharmonics": [8, 8],
+                "features": {"multi_pump": True},
+            },
+        }
+    }
     with pytest.raises(ValueError, match="multi-pump"):
         pb.resolve_pump_basis(
             policy="auto_jc",
