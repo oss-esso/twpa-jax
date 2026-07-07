@@ -39,6 +39,7 @@ if str(_HERE) not in sys.path:
 
 from exp07_python_ipm_design_builder import (  # noqa: E402
     IPMParams,
+    apply_lj_scatter,
     build_matrices,
     make_coupler_discrete,
     make_ipm,
@@ -83,13 +84,22 @@ DESIGNS: dict[str, dict[str, Any]] = {
 # Design build
 # =============================================================================
 
-def build_design(design: str, ipm_dir: str | Path) -> Path:
+def build_design(
+    design: str,
+    ipm_dir: str | Path,
+    *,
+    lj_scatter_sigma: float = 0.0,
+    lj_scatter_seed: int = 1,
+) -> Path:
     """Build a 2- or 3-coupler IPM design and write its matrices.
 
     Args:
         design: ``"2c"`` or ``"3c"``.
         ipm_dir: Output directory for the exp07 design artifacts (C/G/K/Bphi
             .npz, ipm_arrays.npz, ipm_summary.json).
+        lj_scatter_sigma: Multiplicative Gaussian sigma for Josephson Lj values.
+            Use ``0.01`` for 1 percent junction scatter.
+        lj_scatter_seed: RNG seed for deterministic scatter.
 
     Returns:
         The resolved ``ipm_dir`` path.
@@ -104,10 +114,15 @@ def build_design(design: str, ipm_dir: str | Path) -> Path:
     params = replace(IPMParams(), **spec["overrides"])
     coupler = make_coupler_discrete(params, spec["coupler_mode"])
     circuit, ends = make_ipm(params, coupler)
+    scatter_meta = apply_lj_scatter(
+        circuit,
+        sigma=lj_scatter_sigma,
+        seed=lj_scatter_seed,
+    )
     mats = build_matrices(circuit)
 
     out = Path(ipm_dir)
-    write_outputs(str(out), circuit, params, coupler, ends, mats)
+    write_outputs(str(out), circuit, params, coupler, ends, mats, extra_summary=scatter_meta)
     return out
 
 

@@ -140,6 +140,33 @@ solves), and GPU-friendly matvec-only preconditioners (Jacobi, Neumann-8) don't
 converge at the fold. **Naive GPU port loses end-to-end.** GPU only pays at much
 larger harmonic content (nt/sidebands) where the matvec dominates.
 
+### 7a. Direct LU on the *production* coupled Jacobian — measured GPU vs CPU
+
+Closes the "no validated GPU LU runtime" gap. Same **real matrix** that
+`schur_cpu_rcfast` factorizes every Newton step — the real-packed
+`real_coupled_fast` Jacobian of a near-fold 2c cell (fp=7.0 GHz, −22 dBm),
+**50360×50360, nnz 3.0M (59.8/row)** — factored + solved on each backend
+(best-of-N; all residuals ‖Ax−b‖/‖b‖ ≈ 2–5×10⁻¹⁶). RTX 3060 Laptop (6 GB),
+CUDA 12.x / CuPy. Bench: `experiments/benchmark_gpu_lu.py`.
+
+| backend | factor | solve | per step | note |
+|---|---:|---:|---:|---|
+| CPU SuperLU (SciPy) | 147 ms | 6.4 ms | 153 ms | one-shot reference |
+| **CPU Pardiso** (phase-23, numeric-reuse) | **22 ms** | 14 ms | **≈36 ms** | symbolic reused — the **production** per-Newton cost ✅ |
+| GPU `cupyx.splu` | 147 ms *(CPU SuperLU!)* | **844 ms** | — | **not** a GPU factor; only the trisolve is on-device, and it is serial. +146 ms H2D transfer of M |
+| GPU cuSOLVER `csrlsvqr` (true device factor+solve) | — | — | **1222 ms** | a genuine GPU sparse factorization, no symbolic reuse |
+
+**GPU LU loses decisively.** Two honest GPU framings, both bad:
+`cupyx.scipy.sparse.linalg.splu` is a **CPU** SuperLU factor with only the
+triangular solve on the GPU — and that trisolve is **844 ms** (vs 6–14 ms on CPU)
+because sparse back-substitution is inherently sequential. A *real* device
+factorization (cuSOLVER `csrlsvqr`) fuses factor+solve at **1222 ms** — ~8× slower
+than one-shot CPU SuperLU and **~34× slower** than the ~36 ms warm-Pardiso step
+used in production. The **host→device transfer of M alone (146 ms) exceeds a full
+warm CPU Newton step.** This directly confirms §7's "sequential triangular solves"
+diagnosis on the real matrix. CPU `schur_cpu_rcfast` (Pardiso numeric-reuse)
+remains the measured winner; **no GPU LU path beats it for this HB structure.**
+
 ---
 
 ## 8. Newton-count reduction: power-axis secant predictor ✅

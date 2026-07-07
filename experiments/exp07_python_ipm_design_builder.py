@@ -890,6 +890,56 @@ def build_matrices(circuit: list[Element]) -> dict[str, Any]:
     }
 
 
+def apply_lj_scatter(
+    circuit: list[Element],
+    *,
+    sigma: float,
+    seed: int,
+    clip_min: float = 0.5,
+    clip_max: float = 1.5,
+) -> dict[str, Any]:
+    """Apply deterministic multiplicative Gaussian scatter to Josephson Lj."""
+    sigma = float(sigma)
+    if sigma < 0.0:
+        raise ValueError("lj scatter sigma must be non-negative")
+    if clip_min <= 0.0 or clip_max <= 0.0 or clip_min > clip_max:
+        raise ValueError("lj scatter clip bounds must be positive and ordered")
+
+    jj = [e for e in circuit if e.kind == "josephson_inductor"]
+    meta: dict[str, Any] = {
+        "lj_scatter_enabled": bool(sigma > 0.0),
+        "lj_scatter_sigma": sigma,
+        "lj_scatter_seed": int(seed),
+        "lj_scatter_count": len(jj),
+        "lj_scatter_clip_min": float(clip_min),
+        "lj_scatter_clip_max": float(clip_max),
+    }
+    if not jj or sigma == 0.0:
+        return meta
+
+    rng = np.random.default_rng(int(seed))
+    factors = rng.normal(loc=1.0, scale=sigma, size=len(jj))
+    factors = np.clip(factors, clip_min, clip_max)
+    base_lj = np.array([float(e.value) for e in jj], dtype=float)
+    new_lj = base_lj * factors
+    for e, value in zip(jj, new_lj):
+        e.value = float(value)
+
+    meta.update(
+        {
+            "lj_scatter_factor_min": float(np.min(factors)),
+            "lj_scatter_factor_max": float(np.max(factors)),
+            "lj_scatter_factor_mean": float(np.mean(factors)),
+            "lj_scatter_factor_std": float(np.std(factors, ddof=0)),
+            "lj_base_min_h": float(np.min(base_lj)),
+            "lj_base_max_h": float(np.max(base_lj)),
+            "lj_scattered_min_h": float(np.min(new_lj)),
+            "lj_scattered_max_h": float(np.max(new_lj)),
+        }
+    )
+    return meta
+
+
 # =============================================================================
 # Outputs / drawing
 # =============================================================================
@@ -908,6 +958,7 @@ def write_outputs(
     coupler: CouplerDiscrete,
     ends: dict[str, int],
     mats: dict[str, Any] | None,
+    extra_summary: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     os.makedirs(outdir, exist_ok=True)
 
@@ -946,6 +997,8 @@ def write_outputs(
             "port4": "bottom pump source side; counter-propagating relative to signal 1->2",
         },
     }
+    if extra_summary:
+        summary.update(extra_summary)
 
     if mats is not None:
         summary["matrices"] = {
@@ -1073,6 +1126,10 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--coupler-mode", choices=["cached", "optimize"], default="cached")
     p.add_argument("--write-matrices", action="store_true")
     p.add_argument("--draw", action="store_true")
+    p.add_argument("--lj-scatter-sigma", type=float, default=0.0)
+    p.add_argument("--lj-scatter-seed", type=int, default=1)
+    p.add_argument("--lj-scatter-clip-min", type=float, default=0.5)
+    p.add_argument("--lj-scatter-clip-max", type=float, default=1.5)
     return p.parse_args()
 
 
@@ -1082,6 +1139,13 @@ def main() -> None:
     params = IPMParams()
     coupler = make_coupler_discrete(params, args.coupler_mode)
     circuit, ends = make_ipm(params, coupler)
+    scatter_meta = apply_lj_scatter(
+        circuit,
+        sigma=args.lj_scatter_sigma,
+        seed=args.lj_scatter_seed,
+        clip_min=args.lj_scatter_clip_min,
+        clip_max=args.lj_scatter_clip_max,
+    )
 
     mats = build_matrices(circuit) if args.write_matrices else None
 
@@ -1092,6 +1156,7 @@ def main() -> None:
         coupler=coupler,
         ends=ends,
         mats=mats,
+        extra_summary=scatter_meta,
     )
     print_summary(summary)
 
@@ -1101,4 +1166,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

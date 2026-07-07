@@ -1292,7 +1292,7 @@ def parse_args() -> argparse.Namespace:
                    "each extra signal point is cheap.")
     p.add_argument("--signal-offset-start-mhz", type=float, default=100.0,
                    help="First |offset| from fp for the spectrum ladder (MHz).")
-    p.add_argument("--signal-offset-step-mhz", type=float, default=250.0,
+    p.add_argument("--signal-offset-step-mhz", type=float, default=500.0, #250
                    help="Spacing between spectrum offsets (MHz).")
     p.add_argument("--signal-offset-count-per-side", type=int, default=5,
                    help="Offsets per side; 5 -> 10 points (+/-100,+/-350,... MHz).")
