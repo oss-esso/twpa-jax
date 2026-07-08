@@ -670,9 +670,8 @@ class InProcessEngine:
             khat_big_base = exp09.assemble_khat_conversion_base(self.ipm09, khat, ms)
             khat_base_runtime_s = time.perf_counter() - t0
 
-        g = self._solve_signal(khat, khat_off_0, khat_big_base, pump.omega_p,
-                               signal_ghz_for(freq_ghz, a))
-
+        target_signal_ghz = signal_ghz_for(freq_ghz, a)
+        g = None
         spectrum = None
         if a.signal_spectrum:
             offs = spectrum_offsets_mhz(a)
@@ -694,6 +693,15 @@ class InProcessEngine:
                 "gain_db": [float(it[2].gain_db) for it in items],
                 "status": [it[2].status for it in items],
             }
+            for _, fs, gg in items:
+                if abs(float(fs) - target_signal_ghz) <= 1e-9:
+                    g = gg
+                    break
+
+        if g is None:
+            g = self._solve_signal(
+                khat, khat_off_0, khat_big_base, pump.omega_p, target_signal_ghz
+            )
 
         timing = {
             "gain_wall_runtime_s": time.perf_counter() - t_all,

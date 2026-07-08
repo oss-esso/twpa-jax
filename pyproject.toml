@@ -9,6 +9,7 @@ description = "TWPA/KITWPA harmonic-balance simulation tools"
 requires-python = ">=3.10"
 dependencies = [
   "numpy",
+  "pandas",
   "scipy",
   "matplotlib",
   "pytest",
