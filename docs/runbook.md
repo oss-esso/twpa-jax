@@ -320,11 +320,12 @@ at the map's own `(fp, pump current)`.
 
 cd D:\Projects\Thesis\twpa_jax
 
-$C = "--executor inprocess --mode warmstart --inproc-pump-backend schur_cpu_mt --inproc-preconditioner real_coupled_fast --inproc-fold-predictor secant --inproc-fail-fast --fold-skip-patience 2 --inproc-schur-cache-size 2 --signal-detuning-mhz 100 --signal-backend schur --signal-solver pardiso --skip-baselines --sidebands 6 --signal-workers 6 --pump-mode-count 10 --nt 40 --inproc-max-newton 16 --inproc-solve-deadline 14 --n-power 100 --n-frequency 100 --frequency-chunk-size 10 --no-signal-spectrum --overwrite"
+$C = "--executor inprocess --mode warmstart --inproc-pump-backend schur_cpu_mt --inproc-preconditioner real_coupled_fast --inproc-fold-predictor secant --inproc-fail-fast --fold-skip-patience 2 --inproc-schur-cache-size 2 --signal-detuning-mhz 100 --signal-backend direct --signal-solver superlu --sidebands 6 --signal-workers 6 --pump-mode-count 10 --nt 40 --inproc-max-newton 16 --inproc-solve-deadline-s 14 --n-power 100 --n-frequency 100 --frequency-chunk-size 10 --no-signal-spectrum --overwrite"
 
-python scripts/run_gain_map.py $C.Split(' ') --ipm-dir outputs/ipm_python_design --pump-power-min-dbm -35 --pump-power-max-dbm -22.5 --pump-freq-min-ghz 7.5 --pump-freq-max-ghz 8.5 --outdir outputs/solver_nospectrum_2c_noscatter_m35_m22p5_7p5_8p5_100x100_sb10_failfast
+python scripts/run_gain_map.py $C.Split(' ') --ipm-dir outputs/ipm_python_design --pump-power-min-dbm -35 --pump-power-max-dbm -22.5 --pump-freq-min-ghz 7.0 --pump-freq-max-ghz 8.8
+ --outdir outputs/solver_nospectrum_2c_noscatter_m35_m22p5_7p5_8p5_100x100_sb10_failfast
 
-python scripts/run_gain_map.py $C.Split(' ') --ipm-dir outputs/ipm_python_design_3c/ipm_python_design_3c --pump-power-min-dbm -38 --pump-power-max-dbm -20 --pump-freq-min-ghz 7.25 --pump-freq-max-ghz 7.75 --outdir outputs/solver_nospectrum_3c_noscatter_m38_m20_7p25_7p75_100x100_sb10_failfast
+python scripts/run_gain_map.py $C.Split(' ') --ipm-dir outputs/ipm_python_design_3c --pump-power-min-dbm -38 --pump-power-max-dbm -20 --pump-freq-min-ghz 7.25 --pump-freq-max-ghz 7.75 --outdir outputs/solver_nospectrum_3c_noscatter_m38_m20_7p25_7p75_100x100_sb10_failfast
 
 @'
 import csv, subprocess, sys
@@ -332,7 +333,7 @@ from pathlib import Path
 
 runs = [
     ("2c", Path("outputs/solver_nospectrum_2c_noscatter_m35_m22p5_7p5_8p5_100x100_sb10_failfast"), Path("outputs/ipm_python_design")),
-    ("3c", Path("outputs/solver_nospectrum_3c_noscatter_m38_m20_7p25_7p75_100x100_sb10_failfast"), Path("outputs/ipm_python_design_3c/ipm_python_design_3c")),
+    ("3c", Path("outputs/solver_nospectrum_3c_noscatter_m38_m20_7p25_7p75_100x100_sb10_failfast"), Path("outputs/ipm_python_design_3c")),
 ]
 
 half_span_ghz = 2.5
@@ -346,9 +347,9 @@ for design, run_dir, ipm_dir in runs:
 
     for rank, r in enumerate(rows[:3], start=1):
         fp = float(r["pump_freq_ghz"])
+        # pump_dir in map_points.csv is already repo-root-relative (it contains
+        # run_dir/chunks/.../pump), so use it as-is -- do NOT prepend run_dir.
         pump_dir = Path(r["pump_dir"])
-        if not pump_dir.is_absolute():
-            pump_dir = run_dir / pump_dir
 
         out = run_dir / "candidate_sweeps" / f"{design}_rank_{rank:03d}_point_{int(r['point_index']):04d}"
         s21 = out / "s21"
@@ -375,34 +376,61 @@ for design, run_dir, ipm_dir in runs:
 @'
 import csv
 from pathlib import Path
+
 import matplotlib.pyplot as plt
 
-for d in Path("outputs").glob("solver_nospectrum_*_100x100_sb10_failfast/candidate_sweeps/*"):
+from twpa_solver.plotting.metrics import dense_fit_curve
+
+
+def load(path):
+    rows = [r for r in csv.DictReader(path.open(encoding="utf-8"))
+            if r["status"] == "VALID_SOLVED"]
+    return ([float(r["signal_ghz"]) for r in rows],
+            [float(r["gain_db"]) for r in rows])
+
+
+for d in Path("outputs").glob(
+    "solver_nospectrum_*_100x100_sb10_failfast/candidate_sweeps/*"
+):
     s21_csv = d / "s21" / "gain_sweep.csv"
     s24_csv = d / "s24" / "gain_sweep.csv"
     if not s21_csv.exists() or not s24_csv.exists():
         continue
 
-    def load(path):
-        rows = list(csv.DictReader(path.open(encoding="utf-8")))
-        rows = [r for r in rows if r["status"] == "VALID_SOLVED"]
-        return [float(r["signal_ghz"]) for r in rows], [float(r["gain_db"]) for r in rows]
-
     f21, g21 = load(s21_csv)
     f24, g24 = load(s24_csv)
+    if len(f21) < 2 or len(f24) < 2:
+        continue
 
-    plt.figure(figsize=(10, 5.5))
-    plt.plot(f21, g21, label="S21 gain", lw=1.8)
-    plt.plot(f24, g24, label="S24", lw=1.8)
-    plt.xlabel("Signal frequency / GHz")
-    plt.ylabel("Gain / dB")
-    plt.grid(alpha=0.25)
-    plt.legend()
-    plt.tight_layout()
+    # S21 (gain) and S24 in two stacked subplots, shared signal-frequency axis.
+    fig, (ax21, ax24) = plt.subplots(2, 1, figsize=(10, 8), sharex=True)
 
+    ax21.plot(f21, g21, color="#1f77b4", lw=1.8, label="S21 gain")
+    try:  # savgol + cubic-spline envelope, same fit as plot_gain_map candidates
+        _, _, f_dense, g_dense, _ = dense_fit_curve(
+            f21, g21, n_dense=2000, window_frac=0.05, polyorder=3
+        )
+        ax21.plot(f_dense, g_dense, color="#ff7f0e", ls="--", lw=2.0, label="S21 fit")
+    except ValueError:
+        pass
+    ax21.set_ylabel("Gain / dB")
+    ax21.set_title(d.name)
+    ax21.legend(loc="best")
+
+    ax24.plot(f24, g24, color="#2ca02c", lw=1.8, label="S24")
+    ax24.set_xlabel("Signal frequency / GHz")
+    ax24.set_ylabel("Gain / dB")
+    ax24.legend(loc="best")
+
+    for ax in (ax21, ax24):
+        ax.minorticks_on()
+        ax.grid(which="major", alpha=0.5, linewidth=1.3)
+        ax.grid(which="minor", alpha=0.25, linewidth=0.7)
+
+    fig.tight_layout()
     out = d / "gain_s21_s24_spectrum"
-    plt.savefig(out.with_suffix(".png"), dpi=200)
-    plt.savefig(out.with_suffix(".pdf"))
-    plt.savefig(out.with_suffix(".svg"))
-    plt.close()
+    fig.savefig(out.with_suffix(".png"), dpi=200)
+    fig.savefig(out.with_suffix(".pdf"))
+    fig.savefig(out.with_suffix(".svg"))
+    plt.close(fig)
 '@ | python -

@@ -1694,14 +1694,21 @@ def run_frequency_chunks(
         )
         log_path = outdir / f"chunk_{chunk_index:03d}.log"
         with log_path.open("w", encoding="utf-8") as log:
-            rc = subprocess.run(
+            proc = subprocess.Popen(
                 cmd,
                 cwd=str(ROOT),
-                stdout=log,
+                stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
-                check=False,
-            ).returncode
+                bufsize=1,
+            )
+            assert proc.stdout is not None
+            for line in proc.stdout:
+                log.write(line)
+                log.flush()
+                sys.stdout.write(line)
+                sys.stdout.flush()
+            rc = proc.wait()
         elapsed = time.perf_counter() - t0
         print(f"chunk {chunk_index} rc={rc} elapsed={elapsed:.1f}s log={log_path}", flush=True)
         if rc != 0:

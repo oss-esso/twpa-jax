@@ -13,13 +13,14 @@ dependencies = [
   "scipy",
   "matplotlib",
   "pytest",
-  "pyparadiso",
+  "pypardiso",
 ]
 
 [project.scripts]
 twpa = "twpa.cli:main"
 
 [tool.setuptools.packages.find]
+where = ["src", "."]
 include = ["twpa*", "twpa_solver*"]
 
 [tool.pytest.ini_options]

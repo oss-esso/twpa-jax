@@ -234,6 +234,42 @@ def plot_status_map(
     save_figure(fig, outpath, save_pdf=save_pdf, save_svg=save_svg)
 
 
+def plot_simple_gain_map(
+    points_df: pd.DataFrame,
+    outpath: Path | str,
+    *,
+    save_pdf: bool = False,
+    save_svg: bool = False,
+) -> None:
+    """Plot the trailing-signal gain grid straight from the point table.
+
+    Used for maps run without a per-cell signal spectrum: there is no fitted
+    peak gain, so fall back to the single trailing gain (``gain_db``) each cell
+    already carries. Non-converged cells are left blank.
+    """
+    df = points_df.copy()
+    df["gain_value"] = pd.to_numeric(df.get("gain_db"), errors="coerce")
+    if "status" in df.columns:
+        passed = df["status"].map(lambda s: str(s).upper().startswith("PASS"))
+        df.loc[~passed, "gain_value"] = np.nan
+    pivot = df.pivot_table(
+        index="pump_power_dbm",
+        columns="pump_freq_ghz",
+        values="gain_value",
+        aggfunc="first",
+    ).sort_index().sort_index(axis=1)
+    x = pivot.columns.to_numpy(dtype=float)
+    y = pivot.index.to_numpy(dtype=float)
+    z = pivot.to_numpy(dtype=float)
+    fig, ax = plt.subplots(figsize=THESIS_FIGSIZE_MAP)
+    mesh = ax.pcolormesh(_edges(x), _edges(y), z, shading="auto")
+    fig.colorbar(mesh, ax=ax, label="Trailing-signal gain (dB)")
+    ax.set_xlabel("Pump frequency fp / GHz")
+    ax.set_ylabel("Pump power Pp / dBm")
+    ax.set_title("Trailing-signal gain")
+    save_figure(fig, outpath, save_pdf=save_pdf, save_svg=save_svg)
+
+
 def plot_runtime_map(
     points_df: pd.DataFrame,
     outpath: Path | str,

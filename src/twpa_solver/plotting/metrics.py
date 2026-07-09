@@ -146,6 +146,62 @@ def find_operation_band_from_fit(
     return float(f[left]), float(f[right]), mask
 
 
+def minus3db_band(
+    freq_ghz: np.ndarray,
+    gain_db: np.ndarray,
+    *,
+    drop_db: float = 3.0,
+) -> dict[str, Any] | None:
+    """Measure the operation band directly from the raw sweep (no smoothing).
+
+    Walks out from the global-max sample until the gain drops ``drop_db`` below
+    the peak, linearly interpolating each crossing. Unlike the spline-envelope
+    fit this preserves razor-thin near-fold gain peaks, so the reported -3 dB
+    bandwidth is the real one rather than a smoothed-over overestimate. Returns
+    ``None`` for <2 finite samples. ``band_clipped`` flags an edge that ran into
+    the sweep boundary (widen the sweep to resolve it).
+    """
+    f = np.asarray(freq_ghz, dtype=float).reshape(-1)
+    g = np.asarray(gain_db, dtype=float).reshape(-1)
+    mask = np.isfinite(f) & np.isfinite(g)
+    f, g = f[mask], g[mask]
+    if f.size < 2:
+        return None
+    order = np.argsort(f)
+    f, g = f[order], g[order]
+    peak_i = int(np.argmax(g))
+    peak = float(g[peak_i])
+    threshold = peak - float(drop_db)
+
+    clipped = False
+    left = float(f[0])
+    for j in range(peak_i, 0, -1):
+        if g[j - 1] < threshold:
+            left = float(np.interp(threshold, [g[j - 1], g[j]], [f[j - 1], f[j]]))
+            break
+    else:
+        clipped = True
+    right = float(f[-1])
+    for j in range(peak_i, f.size - 1):
+        if g[j + 1] < threshold:
+            right = float(np.interp(threshold, [g[j + 1], g[j]], [f[j + 1], f[j]]))
+            break
+    else:
+        clipped = True
+
+    bandwidth = float(right - left)
+    gbp = float(10.0 ** (peak / 10.0) * bandwidth)
+    return {
+        "peak_gain_db": peak,
+        "peak_freq_ghz": float(f[peak_i]),
+        "band_left_ghz": left,
+        "band_right_ghz": right,
+        "bandwidth_ghz": bandwidth,
+        "gbp_ghz": gbp,
+        "band_clipped": clipped,
+    }
+
+
 def _invalid_metrics(metadata: dict[str, Any], status: str) -> SpectrumFitMetrics:
     nan = float("nan")
     return SpectrumFitMetrics(
