@@ -153,13 +153,23 @@ def run_command(
 # Metric extraction
 # =============================================================================
 
-def pump_metrics(report: dict[str, Any] | None) -> dict[str, float | None]:
+def _final_failure_reason(report: dict[str, Any] | None) -> str | None:
+    if report is None:
+        return None
+    reports = report.get("reports", [])
+    final = reports[-1] if reports else {}
+    reason = final.get("failure_reason")
+    return str(reason) if reason else None
+
+
+def pump_metrics(report: dict[str, Any] | None) -> dict[str, Any]:
     if report is None:
         return {k: None for k in (
             "pump_runtime_s", "pump_factor_runtime_s",
             "pump_preconditioner_assembly_runtime_s",
             "pump_preconditioner_numeric_factor_runtime_s", "pump_coeff_rel",
             "pump_time_rel", "pump_newton_total", "pump_branch_current_max",
+            "pump_failure_reason",
         )}
     reports = report.get("reports", [])
     final = reports[-1] if reports else {}
@@ -173,6 +183,7 @@ def pump_metrics(report: dict[str, Any] | None) -> dict[str, float | None]:
         "pump_time_rel": finite_or_none(final.get("time_rel")),
         "pump_newton_total": int(sum(int(r.get("newton_iterations", 0)) for r in reports)),
         "pump_branch_current_max": finite_or_none(summ.get("branch_i_max_abs")),
+        "pump_failure_reason": _final_failure_reason(report),
     }
 
 
@@ -477,6 +488,8 @@ class InProcessEngine:
         # Keep the last few (insertion-ordered dict acts as the LRU).
         self._schur_part_cache: dict[float, Any] = {}
         self._schur_cache_max = max(1, int(getattr(args, "inproc_schur_cache_size", 2)))
+        self._signal_schur_part_cache: dict[tuple[Any, ...], Any] = {}
+        self._signal_schur_cache_max = max(1, int(getattr(args, "inproc_schur_cache_size", 2)))
 
     def _settings(self) -> exp08.NewtonKrylovSettings:
         return exp08.NewtonKrylovSettings(
@@ -601,6 +614,7 @@ class InProcessEngine:
             "pump_newton_total": int(sum(r.newton_iterations for r in reports)),
             "pump_gmres_total": int(sum(r.gmres_iterations_total for r in reports)),
             "pump_branch_current_max": finite_or_none(summary.get("branch_i_max_abs")),
+            "pump_failure_reason": (reports[-1].failure_reason if reports else None),
         }
         row.update({k: None for k in (
             "gain_db", "gain_vs_off_db", "gain_vs_pumpdiag_db", "signal_ghz",
@@ -718,6 +732,26 @@ class InProcessEngine:
 
     def _solve_signal(self, khat, khat_off_0, khat_big_base, omega_p, signal_ghz):
         a = self.args
+        schur_part = None
+        if a.signal_backend == "schur":
+            key = (
+                round(float(omega_p), 3),
+                round(float(signal_ghz), 12),
+                int(a.sidebands),
+                int(self.source_idx),
+                int(self.out_idx),
+                "current_complex_c",
+            )
+            schur_part = self._signal_schur_part_cache.get(key)
+            if schur_part is None:
+                schur_part = exp09.build_signal_schur_partition(
+                    self.ipm09, omega_p, signal_ghz, a.sidebands,
+                    self.source_idx, self.out_idx,
+                    loss_model="current_complex_c",
+                )
+                self._signal_schur_part_cache[key] = schur_part
+                if len(self._signal_schur_part_cache) > self._signal_schur_cache_max:
+                    self._signal_schur_part_cache.pop(next(iter(self._signal_schur_part_cache)))
         common = dict(
             circuit=self.ipm09, khat=khat, khat_off_0=khat_off_0,
             khat_big_base=khat_big_base, omega_p=omega_p, signal_ghz=signal_ghz,
@@ -729,7 +763,8 @@ class InProcessEngine:
         )
         if a.signal_backend == "schur":
             return exp09.solve_gain_one_schur(
-                **common, include_baselines=not a.skip_baselines)
+                **common, include_baselines=not a.skip_baselines,
+                schur_part=schur_part)
         return exp09.solve_gain_one(**common)
 
 
@@ -805,6 +840,7 @@ def past_fold_skip_row(point: GridPoint) -> dict[str, Any]:
         "pump_status": SKIP_PAST_FOLD, "gain_status": SKIP_PAST_FOLD,
         "status": SKIP_PAST_FOLD, "warm_retry_reseed": False,
         "pump_predictor": "skip", "elapsed_s": 0.0, "pump_dir": "",
+        "pump_failure_reason": "skipped after consecutive pump failures in column",
     }
     row.update({k: None for k in _SKIP_NONE_FIELDS})
     return row
@@ -860,8 +896,9 @@ def run_warm_pass_inprocess(
             row, X = engine.solve_point(point, pass_dir, mode=mode, warm_X=guess)
 
             # Overshoot guard: a bad extrapolation past the fold -> retry once
-            # from the plain warm start before paying the reseed.
-            if row["status"] != "PASS" and use_secant:
+            # from the plain warm start before paying the reseed. Fail-fast
+            # mode intentionally pays only one solve per cell.
+            if row["status"] != "PASS" and use_secant and not fail_fast:
                 row, X = engine.solve_point(point, pass_dir, mode="warm", warm_X=base_X)
                 pred_tag = "secant_fallback"
 
@@ -1015,6 +1052,7 @@ def write_points_csv(path: Path, rows: list[dict[str, Any]]) -> None:
         "pass", "point_index", "i_power", "j_freq", "pump_power_dbm",
         "pump_freq_ghz", "pump_current_peak_a", "status", "pump_status",
         "gain_status", "warm_started", "warm_retry_reseed", "pump_predictor",
+        "pump_failure_reason", "gain_failure_reason",
         "gain_db", "gain_vs_off_db",
         "gain_vs_pumpdiag_db", "signal_ghz", "linear_rel_residual",
         "pump_runtime_s", "pump_wall_runtime_s", "pump_setup_runtime_s",
@@ -1207,7 +1245,7 @@ def write_summary(
 # CLI
 # =============================================================================
 
-def parse_args() -> argparse.Namespace:
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--mode", choices=["cold", "warmstart", "both"], default="warmstart")
     p.add_argument("--executor", choices=["subprocess", "inprocess"], default="inprocess",
@@ -1277,6 +1315,16 @@ def parse_args() -> argparse.Namespace:
 
     p.add_argument("--n-power", type=int, default=50)
     p.add_argument("--n-frequency", type=int, default=50)
+    p.add_argument("--frequency-chunk-size", type=int, default=10,
+                   help="Run frequency columns in separate worker processes of this "
+                   "many columns each, then merge. 10 is the standard memory-safe "
+                   "map behavior; 0 disables chunking.")
+    p.add_argument("--resume-chunks", action=argparse.BooleanOptionalAction, default=True,
+                   help="With --frequency-chunk-size, skip chunk workers whose "
+                   "map_points.csv/map_summary.json already look complete.")
+    p.add_argument("--chunk-worker", action="store_true", help=argparse.SUPPRESS)
+    p.add_argument("--frequency-index-start", type=int, default=None, help=argparse.SUPPRESS)
+    p.add_argument("--frequency-index-stop", type=int, default=None, help=argparse.SUPPRESS)
     # External power window. With 35 dB attenuation + 50 ohm this spans physical
     # pump ~0.5..1.6 x median Ic; after the JC 2x scale the JTWPA gain ridge runs
     # from onset (~0 dB) up to ~12 dB near JC's 1.5 Ic operating point.
@@ -1301,7 +1349,7 @@ def parse_args() -> argparse.Namespace:
     # pump cell (reusing one Floquet conversion base), not just the single
     # trailing point. The trailing gain_db / map_arrays are unchanged; the
     # spectrum is an additive (n_power, n_freq, n_offset) cube in map_spectrum.npz.
-    p.add_argument("--signal-spectrum", action="store_true",
+    p.add_argument("--signal-spectrum", action=argparse.BooleanOptionalAction, default=True,
                    help="Solve a spectrum of signal frequencies per cell (see below); "
                    "writes map_spectrum.npz. Reuses exp09's khat conversion base so "
                    "each extra signal point is cheap.")
@@ -1379,11 +1427,9 @@ def parse_args() -> argparse.Namespace:
 
     # Production defaults for the standard gain-map workflow.
     p.set_defaults(
-        signal_spectrum=True,
-        inproc_fail_fast=True,
     )
 
-    return p.parse_args()
+    return p.parse_args(argv)
 
 
 def build_points(args: argparse.Namespace) -> tuple[list[GridPoint], np.ndarray, np.ndarray]:
@@ -1430,8 +1476,243 @@ def select_spotcheck_points(points: list[GridPoint], n: int) -> list[GridPoint]:
     return chosen[:n]
 
 
+_CHUNK_STRIP_VALUE_OPTS = {
+    "--outdir",
+    "--frequency-index-start",
+    "--frequency-index-stop",
+    "--frequency-chunk-size",
+    "--n-frequency",
+    "--pump-freq-min-ghz",
+    "--pump-freq-max-ghz",
+    "--gate-spotcheck",
+}
+_CHUNK_STRIP_FLAGS = {
+    "--chunk-worker",
+    "--overwrite",
+    "--resume-chunks",
+    "--no-resume-chunks",
+}
+
+
+def frequency_chunk_ranges(n_frequency: int, chunk_size: int) -> list[tuple[int, int]]:
+    """Return half-open frequency-column chunks."""
+    n = int(n_frequency)
+    size = int(chunk_size)
+    if n <= 0:
+        return []
+    if size <= 0 or size >= n:
+        return [(0, n)]
+    return [(start, min(start + size, n)) for start in range(0, n, size)]
+
+
+def _strip_chunk_driver_args(argv: list[str]) -> list[str]:
+    """Remove parent/chunk-routing options before spawning a chunk worker."""
+    cleaned: list[str] = []
+    skip_next = False
+    for token in argv:
+        if skip_next:
+            skip_next = False
+            continue
+        if token in _CHUNK_STRIP_FLAGS:
+            continue
+        if token in _CHUNK_STRIP_VALUE_OPTS:
+            skip_next = True
+            continue
+        if any(token.startswith(f"{opt}=") for opt in _CHUNK_STRIP_VALUE_OPTS):
+            continue
+        cleaned.append(token)
+    return cleaned
+
+
+def chunk_worker_command(
+    base_argv: list[str],
+    *,
+    outdir: Path,
+    n_frequency: int,
+    pump_freq_min_ghz: float,
+    pump_freq_max_ghz: float,
+) -> list[str]:
+    """Build the self-invocation used for one frequency-column chunk."""
+    return [
+        sys.executable,
+        str(Path(__file__).resolve()),
+        *_strip_chunk_driver_args(base_argv),
+        "--chunk-worker",
+        "--gate-spotcheck",
+        "0",
+        "--n-frequency",
+        str(int(n_frequency)),
+        "--pump-freq-min-ghz",
+        f"{float(pump_freq_min_ghz):.12g}",
+        "--pump-freq-max-ghz",
+        f"{float(pump_freq_max_ghz):.12g}",
+        "--outdir",
+        str(outdir),
+        "--overwrite",
+    ]
+
+
+def _expected_chunk_row_count(args: argparse.Namespace, start_col: int, stop_col: int) -> int:
+    n_cols = max(0, int(stop_col) - int(start_col))
+    pass_count = 2 if args.mode == "both" else 1
+    return int(args.n_power) * n_cols * pass_count
+
+
+def chunk_is_complete(
+    chunk_dir: Path,
+    args: argparse.Namespace,
+    start_col: int,
+    stop_col: int,
+) -> bool:
+    points_path = chunk_dir / "map_points.csv"
+    summary_path = chunk_dir / "map_summary.json"
+    if not points_path.exists() or not summary_path.exists():
+        return False
+    if args.signal_spectrum and args.mode in ("warmstart", "both") and not (chunk_dir / "map_spectrum.npz").exists():
+        return False
+    try:
+        with points_path.open("r", encoding="utf-8", newline="") as f:
+            n_rows = max(0, sum(1 for _ in f) - 1)
+    except OSError:
+        return False
+    return n_rows == _expected_chunk_row_count(args, start_col, stop_col)
+
+
+def read_chunk_rows(
+    chunk_specs: list[tuple[Path, int, int]],
+    *,
+    global_n_frequency: int,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    cold_rows: list[dict[str, Any]] = []
+    warm_rows: list[dict[str, Any]] = []
+    for chunk_dir, start_col, _stop_col in chunk_specs:
+        points_path = chunk_dir / "map_points.csv"
+        with points_path.open("r", encoding="utf-8", newline="") as f:
+            for row in csv.DictReader(f):
+                cleaned = {k: _csv_value(v) for k, v in row.items()}
+                pass_name = str(cleaned.pop("pass", ""))
+                if "j_freq" in cleaned and "i_power" in cleaned:
+                    global_j = int(start_col) + int(cleaned["j_freq"])
+                    cleaned["j_freq"] = global_j
+                    cleaned["point_index"] = int(cleaned["i_power"]) * int(global_n_frequency) + global_j
+                if pass_name == "cold":
+                    cold_rows.append(cleaned)
+                elif pass_name == "warm":
+                    warm_rows.append(cleaned)
+    cold_rows.sort(key=lambda r: int(r["point_index"]))
+    warm_rows.sort(key=lambda r: int(r["point_index"]))
+    return cold_rows, warm_rows
+
+
+def _csv_value(value: Any) -> Any:
+    if value == "":
+        return None
+    if not isinstance(value, str):
+        return value
+    for caster in (int, float):
+        try:
+            return caster(value)
+        except ValueError:
+            pass
+    return value
+
+
+def merge_chunk_spectra(
+    outpath: Path,
+    chunk_specs: list[tuple[Path, int, int]],
+    powers: np.ndarray,
+    freqs: np.ndarray,
+) -> bool:
+    """Merge full-shape per-chunk spectrum cubes into one canonical NPZ."""
+    merged: np.ndarray | None = None
+    offsets: np.ndarray | None = None
+    for chunk_dir, start_col, stop_col in chunk_specs:
+        path = chunk_dir / "map_spectrum.npz"
+        if not path.exists():
+            continue
+        with np.load(path, allow_pickle=True) as data:
+            cube = np.asarray(data["gain_spectrum_db"], dtype=float)
+            if merged is None:
+                merged = np.full((powers.size, freqs.size, cube.shape[2]), np.nan, dtype=float)
+                offsets = np.asarray(data["signal_offset_mhz"], dtype=float)
+            if cube.shape[1] == freqs.size:
+                mask = np.isfinite(cube)
+                merged[mask] = cube[mask]
+            else:
+                expected_cols = int(stop_col) - int(start_col)
+                if cube.shape[1] != expected_cols:
+                    raise ValueError(
+                        f"chunk {chunk_dir} spectrum has {cube.shape[1]} frequency columns; "
+                        f"expected {expected_cols}"
+                    )
+                merged[:, start_col:stop_col, :] = cube
+    if merged is None or offsets is None:
+        return False
+    signal_ghz = freqs[None, :] + offsets[:, None] / 1000.0
+    np.savez(
+        outpath,
+        pump_power_dbm=powers,
+        pump_frequency_ghz=freqs,
+        signal_offset_mhz=offsets,
+        gain_spectrum_db=merged,
+        signal_ghz=signal_ghz,
+    )
+    return True
+
+
+def run_frequency_chunks(
+    args: argparse.Namespace,
+    raw_argv: list[str],
+    outdir: Path,
+    freqs: np.ndarray,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[tuple[Path, int, int]]]:
+    """Run the map in fresh 10-column worker processes and merge their rows."""
+    ranges = frequency_chunk_ranges(args.n_frequency, args.frequency_chunk_size)
+    chunk_root = outdir / "chunks"
+    chunk_root.mkdir(parents=True, exist_ok=True)
+    chunk_specs: list[tuple[Path, int, int]] = []
+    for chunk_index, (start_col, stop_col) in enumerate(ranges):
+        chunk_dir = chunk_root / f"chunk_{chunk_index:03d}_cols_{start_col:03d}_{stop_col - 1:03d}"
+        chunk_specs.append((chunk_dir, start_col, stop_col))
+        fp0 = float(freqs[start_col])
+        fp1 = float(freqs[stop_col - 1])
+        if args.resume_chunks and chunk_is_complete(chunk_dir, args, start_col, stop_col):
+            print(f"\n=== chunk {chunk_index} : already complete, skipping ===", flush=True)
+            continue
+        print(
+            f"\n=== chunk {chunk_index} : cols [{start_col}..{stop_col - 1}] "
+            f"fp {fp0:.4f}..{fp1:.4f} GHz ({stop_col - start_col} cols) ===",
+            flush=True,
+        )
+        t0 = time.perf_counter()
+        cmd = chunk_worker_command(
+            raw_argv,
+            outdir=chunk_dir,
+            n_frequency=stop_col - start_col,
+            pump_freq_min_ghz=fp0,
+            pump_freq_max_ghz=fp1,
+        )
+        log_path = outdir / f"chunk_{chunk_index:03d}.log"
+        with log_path.open("w", encoding="utf-8") as log:
+            rc = subprocess.run(
+                cmd,
+                cwd=str(ROOT),
+                stdout=log,
+                stderr=subprocess.STDOUT,
+                text=True,
+                check=False,
+            ).returncode
+        elapsed = time.perf_counter() - t0
+        print(f"chunk {chunk_index} rc={rc} elapsed={elapsed:.1f}s log={log_path}", flush=True)
+        if rc != 0:
+            raise RuntimeError(f"frequency chunk {chunk_index} failed with return code {rc}")
+    cold_rows, warm_rows = read_chunk_rows(chunk_specs, global_n_frequency=args.n_frequency)
+    return cold_rows, warm_rows, chunk_specs
+
+
 def main() -> int:
-    args = parse_args()
+    raw_argv = sys.argv[1:]
+    args = parse_args(raw_argv)
 
     if args.allow_superlu_fallback:
         os.environ.pop("TWPA_REQUIRE_PARDISO", None)
@@ -1441,30 +1722,57 @@ def main() -> int:
     if args.log_factor_backend:
         os.environ["TWPA_PARDISO_LOG"] = "1"
     outdir = args.outdir
-    if outdir.exists() and args.overwrite:
+    use_chunk_driver = (
+        not args.chunk_worker
+        and args.executor == "inprocess"
+        and int(args.frequency_chunk_size) > 0
+        and int(args.n_frequency) > int(args.frequency_chunk_size)
+    )
+    if outdir.exists() and args.overwrite and not use_chunk_driver:
         shutil.rmtree(outdir)
     outdir.mkdir(parents=True, exist_ok=True)
 
     points, powers, freqs = build_points(args)
+    if args.frequency_index_start is not None or args.frequency_index_stop is not None:
+        start_col = 0 if args.frequency_index_start is None else int(args.frequency_index_start)
+        stop_col = args.n_frequency if args.frequency_index_stop is None else int(args.frequency_index_stop)
+        if start_col < 0 or stop_col > args.n_frequency or start_col >= stop_col:
+            raise ValueError(
+                f"invalid frequency chunk [{start_col}, {stop_col}) for "
+                f"n_frequency={args.n_frequency}"
+            )
+        points = [p for p in points if start_col <= p.j_freq < stop_col]
     start = time.perf_counter()
 
     cold_rows: list[dict[str, Any]] = []
     warm_rows: list[dict[str, Any]] = []
+    chunk_specs: list[tuple[Path, int, int]] = []
 
-    engine = InProcessEngine(args) if args.executor == "inprocess" else None
-    cold_pass = (lambda pts, d: run_cold_pass_inprocess(pts, d, engine)) if engine else \
-        (lambda pts, d: run_cold_pass(pts, d, args))
-    warm_pass = (lambda pts, d: run_warm_pass_inprocess(pts, d, engine, fail_fast=args.inproc_fail_fast)) if engine else \
-        (lambda pts, d: run_warm_pass(pts, d, args))
-    print(f"executor={args.executor}", flush=True)
+    if use_chunk_driver:
+        print(
+            f"executor={args.executor} frequency_chunk_size={args.frequency_chunk_size}",
+            flush=True,
+        )
+        cold_rows, warm_rows, chunk_specs = run_frequency_chunks(args, raw_argv, outdir, freqs)
+    else:
+        engine = InProcessEngine(args) if args.executor == "inprocess" else None
+        cold_pass = (lambda pts, d: run_cold_pass_inprocess(pts, d, engine)) if engine else \
+            (lambda pts, d: run_cold_pass(pts, d, args))
+        warm_pass = (lambda pts, d: run_warm_pass_inprocess(pts, d, engine, fail_fast=args.inproc_fail_fast)) if engine else \
+            (lambda pts, d: run_warm_pass(pts, d, args))
+        print(f"executor={args.executor}", flush=True)
 
-    if args.mode in ("cold", "both"):
-        cold_rows = cold_pass(points, outdir / "cold")
-    if args.mode in ("warmstart", "both"):
-        warm_rows = warm_pass(points, outdir / "warm")
+        if args.mode in ("cold", "both"):
+            cold_rows = cold_pass(points, outdir / "cold")
+        if args.mode in ("warmstart", "both"):
+            warm_rows = warm_pass(points, outdir / "warm")
 
     # Spot-check cold recompute for a warm-only run.
     if args.mode == "warmstart" and args.gate_spotcheck > 0:
+        if "cold_pass" not in locals():
+            engine = InProcessEngine(args) if args.executor == "inprocess" else None
+            cold_pass = (lambda pts, d: run_cold_pass_inprocess(pts, d, engine)) if engine else \
+                (lambda pts, d: run_cold_pass(pts, d, args))
         spot = select_spotcheck_points(points, args.gate_spotcheck)
         print(f"spot-checking {len(spot)} point(s) cold for the gate", flush=True)
         cold_rows = cold_pass(spot, outdir / "cold_spotcheck")
@@ -1498,7 +1806,9 @@ def main() -> int:
 
     if args.signal_spectrum and warm_rows:
         offsets = spectrum_offsets_mhz(args)
-        write_spectrum(outdir / "map_spectrum.npz", warm_rows, powers, freqs, offsets)
+        merged = merge_chunk_spectra(outdir / "map_spectrum.npz", chunk_specs, powers, freqs) if chunk_specs else False
+        if not merged:
+            write_spectrum(outdir / "map_spectrum.npz", warm_rows, powers, freqs, offsets)
         print(f"wrote {outdir / 'map_spectrum.npz'} "
               f"({len(offsets)} signal offsets/cell)", flush=True)
 

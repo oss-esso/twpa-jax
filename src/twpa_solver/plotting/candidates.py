@@ -31,6 +31,7 @@ def _is_converged_status(status: Any) -> bool:
 def compute_all_fit_metrics(data: MapData, config: PlotConfig) -> pd.DataFrame:
     """Compute fitted metrics for every point in a saved map."""
     rows: list[dict[str, Any]] = []
+    diagnostic_columns = ("pump_status", "gain_status", "pump_failure_reason", "gain_failure_reason")
     for _, point in data.points.iterrows():
         metadata = {
             "point_index": int(point["point_index"]),
@@ -38,6 +39,9 @@ def compute_all_fit_metrics(data: MapData, config: PlotConfig) -> pd.DataFrame:
             "pump_freq_ghz": float(point["pump_freq_ghz"]),
             "status": str(point.get("status", "UNKNOWN")),
         }
+        for column in diagnostic_columns:
+            if column in point:
+                metadata[column] = point.get(column)
         if not _is_converged_status(metadata["status"]):
             row = dict(metadata)
             for name in (
@@ -73,6 +77,9 @@ def compute_all_fit_metrics(data: MapData, config: PlotConfig) -> pd.DataFrame:
                 polyorder=int(config.polyorder),
             )
             row = fit.metrics.to_dict()
+            for column in diagnostic_columns:
+                if column in metadata:
+                    row[column] = metadata[column]
             row["valid_fit"] = bool(np.isfinite(row["score_fit"]))
         except (KeyError, ValueError) as exc:
             row = dict(metadata)

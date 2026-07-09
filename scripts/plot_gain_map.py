@@ -16,6 +16,7 @@ from twpa_solver.plotting.maps import (
     plot_gbp_fit_map,
     plot_peak_gain_fit_map,
     plot_ripple_fit_map,
+    plot_runtime_map,
     plot_selected_candidate_map,
     plot_smoothness_fit_map,
     plot_status_map,
@@ -102,6 +103,7 @@ def main() -> int:
         **save_kwargs,
     )
     plot_status_map(metrics_df, maps_dir / "status_map.png", **save_kwargs)
+    plot_runtime_map(data.points, maps_dir / "runtime_map.png", **save_kwargs)
     plot_selected_candidate_map(
         metrics_df,
         candidates,

@@ -10,15 +10,26 @@ import numpy as np
 from twpa_solver.plotting.metrics import SpectrumFit
 from twpa_solver.plotting.style import THESIS_FIGSIZE_SPECTRUM, save_figure
 
+ERROR_BIN_WIDTH_DB = 0.25
 
-def _band_raw_gain(fit: SpectrumFit) -> np.ndarray:
-    m = fit.metrics
-    mask = (
-        (fit.freq_ghz >= m.band_left_ghz_fit)
-        & (fit.freq_ghz <= m.band_right_ghz_fit)
-        & np.isfinite(fit.gain_db_raw)
-    )
-    return fit.gain_db_raw[mask]
+
+def _fit_error(fit: SpectrumFit) -> np.ndarray:
+    mask = np.isfinite(fit.freq_ghz) & np.isfinite(fit.gain_db_raw)
+    if not np.any(mask):
+        return np.asarray([], dtype=float)
+    envelope_at_samples = np.interp(fit.freq_ghz[mask], fit.f_dense_ghz, fit.g_dense_db)
+    return fit.gain_db_raw[mask] - envelope_at_samples
+
+
+def _symmetric_error_edges(values: np.ndarray, *, bin_width: float = ERROR_BIN_WIDTH_DB) -> np.ndarray:
+    finite = np.asarray(values, dtype=float)
+    finite = finite[np.isfinite(finite)]
+    if finite.size == 0:
+        limit = bin_width
+    else:
+        limit = max(float(np.nanmax(np.abs(finite))), bin_width)
+        limit = np.ceil(limit / bin_width) * bin_width
+    return np.arange(-limit, limit + 0.5 * bin_width, bin_width)
 
 
 def plot_candidate_spectrum(
@@ -30,10 +41,17 @@ def plot_candidate_spectrum(
     save_svg: bool = False,
 ) -> None:
     """Plot raw gain, fitted envelope, operation band, and band histogram."""
-    fig = plt.figure(figsize=THESIS_FIGSIZE_SPECTRUM)
+    fig = plt.figure(figsize=THESIS_FIGSIZE_SPECTRUM, constrained_layout=True)
     gs = fig.add_gridspec(1, 2, width_ratios=[4.0, 1.4], wspace=0.04)
-    ax = fig.add_subplot(gs[0, 0])
-    axh = fig.add_subplot(gs[0, 1], sharey=ax)
+
+    ax = fig.add_subplot(gs[:, 0])
+    axh = fig.add_subplot(gs[:, 1])
+
+    axh.yaxis.tick_right()
+    axh.yaxis.set_label_position("right")
+    axh.tick_params(axis="y", left=False, labelleft=False, right=True, labelright=True)
+    axh.spines["left"].set_visible(False)
+    axh.spines["right"].set_visible(True)
 
     m = fit.metrics
     ax.plot(fit.freq_ghz, fit.gain_db_raw, color="#1f77b4", lw=1.5, label="Gain")
@@ -72,35 +90,42 @@ def plot_candidate_spectrum(
         bbox={"boxstyle": "round,pad=0.35", "fc": "white", "alpha": 0.85},
     )
 
-    band_gain = _band_raw_gain(fit)
-    if band_gain.size:
-        hist, edges = np.histogram(band_gain, bins=min(20, max(3, band_gain.size)), density=True)
+    fit_error = _fit_error(fit)
+    if fit_error.size:
+        edges = _symmetric_error_edges(fit_error)
+        hist, edges = np.histogram(
+            fit_error,
+            bins=edges,
+            density=False,
+        )
         centers = 0.5 * (edges[:-1] + edges[1:])
         axh.barh(centers, hist, height=np.diff(edges), alpha=0.35, color="#2ca25f")
-        if band_gain.size >= 3 and np.nanstd(band_gain) > 0.0:
+        if fit_error.size >= 3 and np.nanstd(fit_error) > 0.0:
             try:
                 from scipy.stats import gaussian_kde
 
-                kde = gaussian_kde(band_gain)
-                y = np.linspace(float(np.min(band_gain)), float(np.max(band_gain)), 300)
-                axh.plot(kde(y), y, color="black", lw=1.2)
+                kde = gaussian_kde(fit_error)
+                y = np.linspace(float(edges[0]), float(edges[-1]), 300)
+                bin_width = float(np.mean(np.diff(edges)))
+                axh.plot(kde(y) * fit_error.size * bin_width, y, color="black", lw=1.2)
             except (ImportError, ValueError, np.linalg.LinAlgError):
                 pass
-        mean = float(np.mean(band_gain))
-        sigma = float(np.std(band_gain))
+        mean = float(np.mean(fit_error))
+        sigma = float(np.std(fit_error))
         axh.axhline(mean, color="black", ls="--", lw=1.0)
         axh.axhline(mean + sigma, color="black", ls=":", lw=0.9)
         axh.axhline(mean - sigma, color="black", ls=":", lw=0.9)
+        axh.set_ylim(float(edges[0]), float(edges[-1]))
         axh.text(
             0.97,
             0.97,
-            f"sigma = {sigma:.3g} dB\nGmax = {m.peak_gain_db_fit:.2f} dB",
+            f"mean = {mean:.3g} dB\nsigma = {sigma:.3g} dB",
             transform=axh.transAxes,
             va="top",
             ha="right",
             fontsize=9,
         )
-    axh.set_xlabel("Density")
-    axh.tick_params(axis="y", labelleft=False)
+    axh.set_xlabel("Count")
+    axh.set_ylabel("Gain - envelope / dB")
     axh.grid(alpha=0.2)
     save_figure(fig, outpath, save_pdf=save_pdf, save_svg=save_svg)

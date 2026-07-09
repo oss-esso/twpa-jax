@@ -1,11 +1,18 @@
 from __future__ import annotations
 
 import math
+import os
+import threading
 import time
+from contextlib import nullcontext
 
 import numpy as np
 import scipy.sparse as sp
 import scipy.sparse.linalg as spla
+try:
+    from threadpoolctl import threadpool_limits
+except Exception:  # pragma: no cover - optional dependency
+    threadpool_limits = None
 
 from twpa_solver.core.circuit import CircuitMatrices
 from twpa_solver.core.linear import dynamic_block, port_s_from_unit_current_response
@@ -14,6 +21,65 @@ from twpa_solver.pump.backends.schur_partition import (
     build_partition,
 )
 from twpa_solver.signal.gain import GainResult, db10, gain_db_from_s
+
+
+def _pardiso_thread_context():
+    """Limit MKL/PARDISO threads for stable Windows sparse factorization.
+
+    The pump preconditioner uses the same guard because this mixed
+    OpenBLAS+MKL setup can make PARDISO fail during reordering (error -3) with
+    its default thread count. Keep the signal path on PARDISO, but make the call
+    deterministic unless TWPA_PARDISO_THREADS explicitly disables the limit.
+    """
+    if threadpool_limits is None:
+        return nullcontext()
+    raw = os.environ.get("TWPA_PARDISO_THREADS", "1").strip()
+    try:
+        limit = int(raw)
+    except ValueError:
+        limit = 1
+    if limit <= 0:
+        return nullcontext()
+    return threadpool_limits(limits=limit, user_api="blas")
+
+
+_PARDISO_TLS = threading.local()
+
+
+def _same_csr_pattern(a: sp.csr_matrix, b: sp.csr_matrix | None) -> bool:
+    return (
+        b is not None
+        and a.shape == b.shape
+        and a.nnz == b.nnz
+        and np.array_equal(a.indptr, b.indptr)
+        and np.array_equal(a.indices, b.indices)
+    )
+
+
+def _pardiso_spsolve_reuse(A: sp.spmatrix, b: np.ndarray) -> np.ndarray:
+    """Solve with PARDISO while reusing symbolic analysis for a stable pattern."""
+    from pypardiso import PyPardisoSolver
+
+    A = A.tocsr()
+    A.sum_duplicates()
+    A.eliminate_zeros()
+    A.sort_indices()
+    pattern = getattr(_PARDISO_TLS, "pattern", None)
+    solver = getattr(_PARDISO_TLS, "solver", None)
+    with _pardiso_thread_context():
+        if solver is None or not _same_csr_pattern(A, pattern):
+            solver = PyPardisoSolver(mtype=11)
+            solver.set_statistical_info_off()
+            solver.factorize(A)
+            _PARDISO_TLS.solver = solver
+            _PARDISO_TLS.pattern = A.copy()
+        else:
+            solver._check_A(A)
+            solver.set_phase(22)  # numeric factorization; reuse analysis
+            solver._call_pardiso(A, np.zeros(A.shape[0], dtype=np.float64))
+        bb = solver._check_b(A, np.asarray(b, dtype=np.float64))
+        solver.set_phase(33)
+        return solver._call_pardiso(A, bb).squeeze()
 
 def sideband_list(sidebands: int) -> list[int]:
     return list(range(-sidebands, sidebands + 1))
@@ -134,7 +200,6 @@ def solve_linear_system(A: sp.spmatrix, b: np.ndarray, linear_solver: str = "sup
     if linear_solver == "superlu":
         return spla.spsolve(A, b)
     if linear_solver == "pardiso":
-        from pypardiso import spsolve as pardiso_spsolve
         if np.iscomplexobj(A.data) or np.iscomplexobj(b):
             A = A.tocsr()
             Ar = sp.bmat(
@@ -142,10 +207,10 @@ def solve_linear_system(A: sp.spmatrix, b: np.ndarray, linear_solver: str = "sup
                 format="csr",
             )
             br = np.concatenate([np.asarray(b).real, np.asarray(b).imag])
-            yr = pardiso_spsolve(Ar, br)
+            yr = _pardiso_spsolve_reuse(Ar, br)
             n = b.size
             return np.asarray(yr[:n] + 1j * yr[n:], dtype=np.complex128)
-        return pardiso_spsolve(A.tocsr(), b)
+        return _pardiso_spsolve_reuse(A, b)
     raise ValueError(f"unknown linear_solver={linear_solver!r}")
 
 
@@ -291,6 +356,24 @@ def _retained_khat(khat: dict[int, sp.csr_matrix], retained: np.ndarray, shape: 
     return out
 
 
+def build_signal_schur_partition(
+    circuit: CircuitMatrices,
+    omega_p: float,
+    signal_ghz: float,
+    sidebands: int,
+    source_index: int,
+    out_index: int,
+    loss_model: str = "current_complex_c",
+):
+    """Build the signal Schur partition shared by one frequency column."""
+    omega_s = 2.0 * math.pi * signal_ghz * 1e9
+    ms = sideband_list(sidebands)
+    linear_blocks = [dynamic_block(circuit, omega_s + m * omega_p, loss_model=loss_model) for m in ms]
+    part = build_partition(linear_blocks, circuit.Bphi, [source_index, out_index])
+    assemble_schur_complements(part)
+    return part
+
+
 def solve_gain_one_schur(
     circuit: CircuitMatrices,
     khat: dict[int, sp.csr_matrix],
@@ -310,6 +393,7 @@ def solve_gain_one_schur(
     include_baselines: bool = True,
     linear_solver: str = "superlu",
     khat_big_base: sp.spmatrix | None = None,
+    schur_part=None,
 ) -> GainResult:
     """Schur-reduced signal solve; direct semantics, smaller coupled matrix."""
     omega_s = 2.0 * math.pi * signal_ghz * 1e9
@@ -318,9 +402,12 @@ def solve_gain_one_schur(
         raise ValueError(f"signal_m={signal_m} not in sideband set {ms}")
 
     t0 = time.perf_counter()
-    linear_blocks = [dynamic_block(circuit, omega_s + m * omega_p, loss_model=loss_model) for m in ms]
-    part = build_partition(linear_blocks, circuit.Bphi, [source_index, out_index])
-    assemble_schur_complements(part)
+    part = schur_part
+    if part is None:
+        part = build_signal_schur_partition(
+            circuit, omega_p, signal_ghz, sidebands, source_index, out_index,
+            loss_model=loss_model,
+        )
     mred = part.m
     khat_n = _retained_khat(khat, part.retained, (mred, mred))
     zero = sp.csr_matrix((mred, mred), dtype=np.complex128)

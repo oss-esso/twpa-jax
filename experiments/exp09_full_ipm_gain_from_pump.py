@@ -45,6 +45,7 @@ import json
 import math
 import os
 import time
+from contextlib import nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -52,6 +53,10 @@ from typing import Any
 import numpy as np
 import scipy.sparse as sp
 import scipy.sparse.linalg as spla
+try:
+    from threadpoolctl import threadpool_limits
+except Exception:  # pragma: no cover - optional dependency
+    threadpool_limits = None
 
 import sys as _sys
 
@@ -63,6 +68,20 @@ from pump_solvers.schur_partition import build_partition, assemble_schur_complem
 # =============================================================================
 # Utilities
 # =============================================================================
+
+def _pardiso_thread_context():
+    """Limit MKL/PARDISO threads for stable Windows sparse factorization."""
+    if threadpool_limits is None:
+        return nullcontext()
+    raw = os.environ.get("TWPA_PARDISO_THREADS", "1").strip()
+    try:
+        limit = int(raw)
+    except ValueError:
+        limit = 1
+    if limit <= 0:
+        return nullcontext()
+    return threadpool_limits(limits=limit, user_api="blas")
+
 
 def db20(x: float) -> float:
     return 20.0 * math.log10(max(float(abs(x)), 1e-300))
@@ -607,10 +626,12 @@ def solve_linear_system(A: sp.spmatrix, b: np.ndarray, linear_solver: str = "sup
                 format="csr",
             )
             br = np.concatenate([np.asarray(b).real, np.asarray(b).imag])
-            yr = pardiso_spsolve(Ar, br)
+            with _pardiso_thread_context():
+                yr = pardiso_spsolve(Ar, br)
             n = b.size
             return np.asarray(yr[:n] + 1j * yr[n:], dtype=np.complex128)
-        return pardiso_spsolve(A.tocsr(), b)
+        with _pardiso_thread_context():
+            return pardiso_spsolve(A.tocsr(), b)
     raise ValueError(f"unknown linear_solver={linear_solver!r}")
 
 def solve_gain_one(

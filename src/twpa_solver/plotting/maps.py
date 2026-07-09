@@ -11,6 +11,16 @@ from matplotlib.colors import BoundaryNorm, ListedColormap
 
 from twpa_solver.plotting.style import THESIS_FIGSIZE_MAP, save_figure
 
+STATUS_LABELS = (
+    "PASS",
+    "PUMP_FAILED",
+    "GAIN_FAILED",
+    "INVALID_GAIN",
+    "FOLD_SKIPPED",
+    "TIMEOUT",
+    "UNKNOWN",
+)
+
 
 def _edges(values: np.ndarray) -> np.ndarray:
     vals = np.asarray(values, dtype=float)
@@ -198,27 +208,11 @@ def plot_status_map(
     save_pdf: bool = False,
     save_svg: bool = False,
 ) -> None:
-    labels = ["PASS", "PUMP_FAILED", "GAIN_FAILED", "INVALID_GAIN", "FOLD_SKIPPED", "TIMEOUT", "UNKNOWN"]
+    labels = list(STATUS_LABELS)
     label_to_code = {label: i for i, label in enumerate(labels)}
 
-    def code_for(status: object) -> int:
-        text = str(status).upper()
-        if text.startswith("PASS"):
-            return label_to_code["PASS"]
-        if "PUMP" in text and ("FAIL" in text or "ERROR" in text):
-            return label_to_code["PUMP_FAILED"]
-        if "GAIN" in text and ("FAIL" in text or "ERROR" in text):
-            return label_to_code["GAIN_FAILED"]
-        if "INVALID_GAIN" in text:
-            return label_to_code["INVALID_GAIN"]
-        if "FOLD" in text or "SKIP" in text:
-            return label_to_code["FOLD_SKIPPED"]
-        if "TIMEOUT" in text:
-            return label_to_code["TIMEOUT"]
-        return label_to_code["UNKNOWN"]
-
     df = metrics_df.copy()
-    df["status_code"] = df["status"].map(code_for)
+    df["status_code"] = df.apply(lambda row: label_to_code[status_label_for_row(row)], axis=1)
     pivot = df.pivot_table(
         index="pump_power_dbm",
         columns="pump_freq_ghz",
@@ -238,6 +232,124 @@ def plot_status_map(
     ax.set_ylabel("Pump power Pp / dBm")
     ax.set_title("Point status")
     save_figure(fig, outpath, save_pdf=save_pdf, save_svg=save_svg)
+
+
+def plot_runtime_map(
+    points_df: pd.DataFrame,
+    outpath: Path | str,
+    *,
+    save_pdf: bool = False,
+    save_svg: bool = False,
+) -> None:
+    """Plot per-cell runtime with total and average runtime annotations."""
+    df = points_df.copy()
+    runtime = _runtime_seconds(df)
+    df["runtime_s"] = runtime
+    pivot = df.pivot_table(
+        index="pump_power_dbm",
+        columns="pump_freq_ghz",
+        values="runtime_s",
+        aggfunc="first",
+    ).sort_index().sort_index(axis=1)
+    x = pivot.columns.to_numpy(dtype=float)
+    y = pivot.index.to_numpy(dtype=float)
+    z = pivot.to_numpy(dtype=float)
+    finite = np.isfinite(z)
+    total_s = float(np.nansum(z))
+    average_s = float(np.nanmean(z)) if np.any(finite) else float("nan")
+    solved = int(np.count_nonzero(finite))
+
+    fig = plt.figure(figsize=(12, 7))
+    gs = fig.add_gridspec(1, 2, width_ratios=[4.0, 1.25], wspace=0.08)
+    ax = fig.add_subplot(gs[0, 0])
+    ax_text = fig.add_subplot(gs[0, 1])
+    mesh = ax.pcolormesh(_edges(x), _edges(y), z, shading="auto")
+    fig.colorbar(mesh, ax=ax, label="Runtime per cell (s)")
+    ax.set_xlabel("Pump frequency fp / GHz")
+    ax.set_ylabel("Pump power Pp / dBm")
+    ax.set_title("Runtime per cell")
+
+    ax_text.axis("off")
+    ax_text.text(
+        0.0,
+        1.0,
+        "Runtime summary\n"
+        f"Total = {_format_seconds(total_s)}\n"
+        f"Average cell = {average_s:.3f} s\n"
+        f"Cells = {solved}",
+        va="top",
+        ha="left",
+        fontsize=10,
+        transform=ax_text.transAxes,
+        bbox={"boxstyle": "round,pad=0.35", "fc": "white", "ec": "0.7"},
+    )
+    save_figure(fig, outpath, save_pdf=save_pdf, save_svg=save_svg)
+
+
+def _runtime_seconds(df: pd.DataFrame) -> pd.Series:
+    if "elapsed_s" in df.columns:
+        return pd.to_numeric(df["elapsed_s"], errors="coerce")
+    total = pd.Series(np.nan, index=df.index, dtype=float)
+    parts = []
+    for column in ("pump_wall_runtime_s", "gain_wall_runtime_s"):
+        if column in df.columns:
+            parts.append(pd.to_numeric(df[column], errors="coerce").fillna(0.0))
+    if parts:
+        total = sum(parts)
+    return total
+
+
+def _format_seconds(seconds: float) -> str:
+    if not np.isfinite(seconds):
+        return "n/a"
+    if seconds < 120.0:
+        return f"{seconds:.1f} s"
+    minutes = seconds / 60.0
+    if minutes < 120.0:
+        return f"{minutes:.1f} min"
+    return f"{minutes / 60.0:.2f} h"
+
+
+def status_label_for_row(row: pd.Series | dict[str, object]) -> str:
+    """Map solver status columns to the categorical status-map label."""
+    status = _upper_value(row.get("status", "UNKNOWN"))
+    pump_status = _upper_value(row.get("pump_status", ""))
+    gain_status = _upper_value(row.get("gain_status", ""))
+    combined = " ".join(part for part in (status, pump_status, gain_status) if part)
+    if status.startswith("PASS"):
+        return "PASS"
+    if "INVALID_GAIN" in combined:
+        return "INVALID_GAIN"
+    if "FOLD" in combined or "SKIP" in combined:
+        return "FOLD_SKIPPED"
+    if "TIMEOUT" in combined:
+        return "TIMEOUT"
+    if pump_status in {"FAIL", "ERROR", "MISSING"}:
+        return "PUMP_FAILED"
+    if gain_status in {"FAIL", "ERROR", "MISSING", "UNKNOWN"} and pump_status in {
+        "",
+        "VALID_CONVERGED",
+        "PASS",
+    }:
+        return "GAIN_FAILED"
+    if "PUMP" in combined and ("FAIL" in combined or "ERROR" in combined):
+        return "PUMP_FAILED"
+    if "GAIN" in combined and ("FAIL" in combined or "ERROR" in combined):
+        return "GAIN_FAILED"
+    if status == "ERROR":
+        return "GAIN_FAILED" if pump_status == "VALID_CONVERGED" else "PUMP_FAILED"
+    return "UNKNOWN"
+
+
+def _upper_value(value: object) -> str:
+    if value is None:
+        return ""
+    try:
+        if pd.isna(value):
+            return ""
+    except (TypeError, ValueError):
+        pass
+    return str(value).upper()
 
 
 def plot_selected_candidate_map(
