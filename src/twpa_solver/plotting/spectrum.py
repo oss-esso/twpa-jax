@@ -51,19 +51,36 @@ def plot_candidate_s21_bandwidth(
     swept peak so a needle that the sweep under-resolves is still obvious.
     """
     fig, ax = plt.subplots(figsize=THESIS_FIGSIZE_SPECTRUM)
-    ax.plot(freq_ghz, gain_db, color="#1f77b4", lw=1.6, label="S21 gain")
+    raw_lw = 1.0 if (band is not None and band.get("smoothed")) else 1.6
+    ax.plot(freq_ghz, gain_db, color="#1f77b4", lw=raw_lw,
+            alpha=0.55 if raw_lw == 1.0 else 1.0, label="S21 gain")
+
+    if band is not None and band.get("_fit_gain_db") is not None:
+        ax.plot(band["_fit_freq_ghz"], band["_fit_gain_db"],
+                color="#ff7f0e", lw=2.0, label="Sav-Gol fit")
 
     if band is not None:
         peak = band["peak_gain_db"]
+        anchored = band.get("anchored", False)
+        op_label = "G @ ws (operating)" if anchored else "peak"
         ax.axvspan(band["band_left_ghz"], band["band_right_ghz"],
                    color="#2ca25f", alpha=0.18, label=f"-{drop_db:g} dB band")
         ax.axhline(peak - drop_db, color="#2ca25f", ls=":", lw=1.2)
         for edge in (band["band_left_ghz"], band["band_right_ghz"]):
             ax.axvline(edge, color="#2ca25f", ls="--", lw=1.0, alpha=0.7)
-        ax.plot([band["peak_freq_ghz"]], [peak], "o", color="#d62728", ms=6, label="peak")
+        ax.plot([band["peak_freq_ghz"]], [peak], "o", color="#d62728", ms=6, label=op_label)
+        if band.get("bridged"):
+            edges = (band["bridged_band_left_ghz"], band["bridged_band_right_ghz"])
+            for i, edge in enumerate(edges):
+                ax.axvline(edge, color="#8856a7", ls="-.", lw=1.3, alpha=0.8,
+                           label="bridged band (notch ignored)" if i == 0 else None)
+        wmax = band.get("window_max_db")
+        if wmax is not None and wmax > peak + drop_db:
+            ax.plot([band["window_max_freq_ghz"]], [wmax], "x", color="#7f7f7f",
+                    ms=7, mew=2, label="window peak (needle, off-band)")
 
-    ax.set_xlabel("Signal frequency fs / GHz")
-    ax.set_ylabel("S21 gain / dB")
+    ax.set_xlabel(r"Signal Frequency $f_s$ (GHz)")
+    ax.set_ylabel("Gain (dB)")
     ax.set_title(title or f"Candidate point {meta.get('point_index')}")
     ax.minorticks_on()
     ax.grid(which="major", alpha=0.5, linewidth=1.2)
@@ -77,13 +94,29 @@ def plot_candidate_s21_bandwidth(
     if meta.get("map_gain_db") is not None:
         lines.append(f"map gain @ ws = {meta['map_gain_db']:.2f} dB")
     if band is not None:
+        anchored = band.get("anchored", False)
+        glabel = "G @ ws" if anchored else "Gmax(swept)"
         lines += [
             "",
-            f"Gmax(swept) = {band['peak_gain_db']:.2f} dB @ {band['peak_freq_ghz']:.4f} GHz",
+            f"{glabel} = {band['peak_gain_db']:.2f} dB @ {band['peak_freq_ghz']:.4f} GHz",
             f"BW(-{drop_db:g} dB) = {band['bandwidth_ghz'] * 1e3:.1f} MHz"
             + ("  [clipped]" if band.get("band_clipped") else ""),
             f"GBP = {band['gbp_ghz']:.3g} GHz",
         ]
+        if band.get("bridged"):
+            lines += [
+                "",
+                f"bridged BW = {band['bridged_bandwidth_ghz'] * 1e3:.1f} MHz"
+                + ("  [clipped]" if band.get("bridged_band_clipped") else ""),
+                f"bridged GBP = {band['bridged_gbp_ghz']:.3g} GHz",
+                "  (fs~fp degenerate notch ignored)",
+            ]
+        wmax = band.get("window_max_db")
+        if wmax is not None and wmax > band["peak_gain_db"] + drop_db:
+            lines.append(
+                f"window peak = {wmax:.1f} dB @ {band['window_max_freq_ghz']:.4f} GHz"
+            )
+            lines.append("  (near-fold needle, off operating point)")
     ax.text(0.03, 0.97, "\n".join(lines), transform=ax.transAxes, va="top", ha="left",
             fontsize=9, bbox={"boxstyle": "round,pad=0.35", "fc": "white", "alpha": 0.85})
     save_figure(fig, outpath, save_pdf=save_pdf, save_svg=save_svg)
@@ -121,8 +154,8 @@ def plot_candidate_spectrum(
             alpha=0.18,
             label="Operation band",
         )
-    ax.set_xlabel("Signal frequency fs / GHz")
-    ax.set_ylabel("Gain / dB")
+    ax.set_xlabel(r"Signal Frequency $f_s$ (GHz)")
+    ax.set_ylabel("Gain (dB)")
     ax.set_title(title or f"Candidate point {m.point_index}")
     ax.grid(alpha=0.25)
     ax.legend(loc="best")

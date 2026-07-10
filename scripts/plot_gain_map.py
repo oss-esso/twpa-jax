@@ -34,6 +34,7 @@ from twpa_solver.plotting.spectrum import (
     plot_candidate_s21_bandwidth,
     plot_candidate_spectrum,
 )
+from twpa_solver.plotting.style import apply_thesis_style
 
 ROOT = Path(__file__).resolve().parents[1]
 EXP09 = ROOT / "experiments" / "exp09_full_ipm_gain_from_pump.py"
@@ -69,9 +70,23 @@ def build_parser() -> argparse.ArgumentParser:
     # map's gain lives) and defaults to a fine grid so near-fold needle peaks
     # are resolved for the -3 dB bandwidth measurement.
     parser.add_argument("--sweep-half-span-ghz", type=float, default=0.5,
-                        help="Half-width of the S21 sweep around ws (GHz).")
+                        help="Half-width of the S21 sweep around ws (GHz); "
+                             "ignored if --sweep-start-ghz/--sweep-stop-ghz are set.")
+    parser.add_argument("--sweep-start-ghz", type=float, default=None,
+                        help="Absolute S21 sweep start (GHz); overrides the "
+                             "ws-centred window when given with --sweep-stop-ghz.")
+    parser.add_argument("--sweep-stop-ghz", type=float, default=None,
+                        help="Absolute S21 sweep stop (GHz); overrides the "
+                             "ws-centred window when given with --sweep-start-ghz.")
     parser.add_argument("--sweep-points", type=int, default=501,
                         help="Sweep points (default 501 over +-0.5 GHz = 2 MHz).")
+    parser.add_argument("--sweep-smooth-frac", type=float, default=0.03,
+                        help="Savitzky-Golay window as a fraction of the sweep "
+                             "length for the -3 dB band/GBP fit (0 = raw sweep).")
+    parser.add_argument("--sweep-bridge-ghz", type=float, default=0.3,
+                        help="Bridge a sub-threshold gap up to this width (GHz) -- "
+                             "the degenerate notch at fs~fp -- to also report a "
+                             "band/GBP spanning both gain lobes (0 = off).")
     parser.add_argument("--source-port", type=int, default=1)
     parser.add_argument("--out-port", type=int, default=2)
     parser.add_argument("--sidebands", type=int, default=6)
@@ -142,15 +157,19 @@ def _run_candidate_sweep(
     if csv_out.exists() and not args.overwrite_sweeps:
         return csv_out
     sweep_dir.mkdir(parents=True, exist_ok=True)
-    half = float(args.sweep_half_span_ghz)
+    if args.sweep_start_ghz is not None and args.sweep_stop_ghz is not None:
+        start_ghz, stop_ghz = float(args.sweep_start_ghz), float(args.sweep_stop_ghz)
+    else:
+        half = float(args.sweep_half_span_ghz)
+        start_ghz, stop_ghz = center_ghz - half, center_ghz + half
     cmd = [
         sys.executable, str(EXP09),
         "--ipm-dir", str(args.ipm_dir),
         "--pump-dir", str(pump_dir),
         "--fallback-pump-freq-ghz", f"{fp:.12g}",
         "--sweep",
-        "--signal-start-ghz", f"{center_ghz - half:.12g}",
-        "--signal-stop-ghz", f"{center_ghz + half:.12g}",
+        "--signal-start-ghz", f"{start_ghz:.12g}",
+        "--signal-stop-ghz", f"{stop_ghz:.12g}",
         "--points", str(args.sweep_points),
         "--sidebands", str(args.sidebands),
         "--gamma-nt", str(args.gamma_nt),
@@ -194,8 +213,12 @@ def fit_gain_candidates(
     if top.empty:
         print("no PASS cells with finite gain -> no candidates to sweep")
         return
+    if args.sweep_start_ghz is not None and args.sweep_stop_ghz is not None:
+        window = f"{args.sweep_start_ghz:g}-{args.sweep_stop_ghz:g} GHz"
+    else:
+        window = f"ws +-{args.sweep_half_span_ghz:g} GHz"
     print(f"auto-picked {len(top)} candidate(s); S21 sweep {args.sweep_points} pts "
-          f"over ws +-{args.sweep_half_span_ghz} GHz via exp09")
+          f"over {window} via exp09")
     save_kwargs = {"save_pdf": args.save_pdf, "save_svg": args.save_svg}
     sweeps_root = outdir / "candidate_sweeps"
     rows_out: list[dict] = []
@@ -214,7 +237,11 @@ def fit_gain_candidates(
         if freq.size < 2:
             print(f"  skip {label}: <2 solved sweep points")
             continue
-        band = minus3db_band(freq, gain, drop_db=config.operation_drop_db)
+        band = minus3db_band(
+            freq, gain, drop_db=config.operation_drop_db, anchor_ghz=ws,
+            smooth_window_frac=(args.sweep_smooth_frac or None),
+            polyorder=config.polyorder, bridge_ghz=args.sweep_bridge_ghz,
+        )
         meta = {
             "point_index": point_index, "pump_power_dbm": pp,
             "pump_freq_ghz": fp, "map_gain_db": map_gain,
@@ -222,20 +249,30 @@ def fit_gain_candidates(
         plot_candidate_s21_bandwidth(
             freq, gain, meta, band,
             candidates_dir / f"candidate_{label}_s21.png",
-            title=f"{label} (point {point_index})",
+            title=f"Signal Gain S21",
             drop_db=config.operation_drop_db, **save_kwargs,
         )
         if band is None:
             print(f"  {label}: Pp={pp:.3f} dBm fp={fp:.4f} GHz | band undefined")
             continue
         clip = " [clipped-widen sweep]" if band.get("band_clipped") else ""
-        print(f"  {label}: Pp={pp:.3f} dBm  fp={fp:.4f} GHz  map_gain@ws={map_gain:.2f} dB "
-              f"| Gmax={band['peak_gain_db']:.2f} dB @ {band['peak_freq_ghz']:.4f} GHz "
+        needle = ""
+        if band.get("window_max_db", -np.inf) > band["peak_gain_db"] + config.operation_drop_db:
+            needle = (f"  (window peak {band['window_max_db']:.1f} dB @ "
+                      f"{band['window_max_freq_ghz']:.4f} GHz -- near-fold needle, off-band)")
+        bridged = ""
+        if band.get("bridged"):
+            bclip = " [clipped]" if band.get("bridged_band_clipped") else ""
+            bridged = (f"  || bridged(notch): BW={band['bridged_bandwidth_ghz'] * 1e3:.1f} MHz "
+                       f"GBP={band['bridged_gbp_ghz']:.3g} GHz{bclip}")
+        print(f"  {label}: Pp={pp:.3f} dBm  fp={fp:.4f} GHz "
+              f"| G@ws={band['peak_gain_db']:.2f} dB @ {band['peak_freq_ghz']:.4f} GHz "
               f"| BW(-{config.operation_drop_db:g}dB)={band['bandwidth_ghz'] * 1e3:.1f} MHz "
-              f"| GBP={band['gbp_ghz']:.3g} GHz{clip}")
+              f"| GBP={band['gbp_ghz']:.3g} GHz{clip}{needle}{bridged}")
+        band_scalar = {k: v for k, v in band.items() if not k.startswith("_")}
         rows_out.append({"candidate": label, "point_index": point_index,
                          "pump_power_dbm": pp, "pump_freq_ghz": fp,
-                         "map_gain_db": map_gain, **band})
+                         "map_gain_db": map_gain, **band_scalar})
     if rows_out:
         tables_dir = outdir / "tables"
         tables_dir.mkdir(parents=True, exist_ok=True)
@@ -246,6 +283,7 @@ def fit_gain_candidates(
 
 def main() -> int:
     args = build_parser().parse_args()
+    apply_thesis_style()
     outdir = args.outdir or (args.run_dir / "plots")
     maps_dir = outdir / "maps"
     candidates_dir = outdir / "candidates"

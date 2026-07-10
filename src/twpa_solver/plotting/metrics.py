@@ -146,20 +146,79 @@ def find_operation_band_from_fit(
     return float(f[left]), float(f[right]), mask
 
 
+def _threshold_crossing(
+    f0: float, g0: float, f1: float, g1: float, threshold: float,
+) -> float:
+    """Linear-interpolate the frequency where gain crosses ``threshold``."""
+    if g1 == g0:
+        return f1
+    return f0 + (threshold - g0) * (f1 - f0) / (g1 - g0)
+
+
+def _walk_band_edge(
+    f: np.ndarray, g: np.ndarray, start: int, step: int, threshold: float,
+    *, bridge_ghz: float = 0.0,
+) -> tuple[float, bool]:
+    """Walk from ``start`` in direction ``step`` to the -3 dB crossing.
+
+    With ``bridge_ghz > 0`` a sub-threshold gap narrower than ``bridge_ghz`` (the
+    degenerate self-pumping notch at fs ~ fp) is skipped over rather than ending
+    the band, so the returned edge sits past the notch on the far lobe. Returns
+    ``(edge_ghz, clipped)`` where ``clipped`` means the sweep boundary was hit
+    while still above threshold.
+    """
+    n = f.size
+    boundary = float(f[0] if step < 0 else f[-1])
+    j = start
+    while 0 <= j + step <= n - 1:
+        nxt = j + step
+        if g[nxt] >= threshold:
+            j = nxt
+            continue
+        crossing = _threshold_crossing(f[j], g[j], f[nxt], g[nxt], threshold)
+        if bridge_ghz > 0.0:
+            k = nxt
+            while (0 <= k <= n - 1 and g[k] < threshold
+                   and abs(f[k] - crossing) <= bridge_ghz):
+                k += step
+            if 0 <= k <= n - 1 and g[k] >= threshold and abs(f[k] - crossing) <= bridge_ghz:
+                j = k
+                continue
+        return float(crossing), False
+    return boundary, True
+
+
 def minus3db_band(
     freq_ghz: np.ndarray,
     gain_db: np.ndarray,
     *,
     drop_db: float = 3.0,
+    anchor_ghz: float | None = None,
+    smooth_window_frac: float | None = None,
+    polyorder: int = 3,
+    bridge_ghz: float = 0.0,
 ) -> dict[str, Any] | None:
-    """Measure the operation band directly from the raw sweep (no smoothing).
+    """Measure the operation band from a sweep, anchored on an operating point.
 
-    Walks out from the global-max sample until the gain drops ``drop_db`` below
-    the peak, linearly interpolating each crossing. Unlike the spline-envelope
-    fit this preserves razor-thin near-fold gain peaks, so the reported -3 dB
-    bandwidth is the real one rather than a smoothed-over overestimate. Returns
-    ``None`` for <2 finite samples. ``band_clipped`` flags an edge that ran into
-    the sweep boundary (widen the sweep to resolve it).
+    Walks out from an anchor sample until the gain drops ``drop_db`` below the
+    anchor gain, linearly interpolating each crossing.
+
+    ``anchor_ghz`` selects the operating point the band is centred on. Pass the
+    map's own trailing-signal frequency ``ws`` so the band characterises the
+    amplifier where the map actually measured it; a razor near-fold needle
+    elsewhere in a wide sweep window then no longer hijacks the reported gain and
+    bandwidth (it is reported separately as ``window_max_db``). When ``anchor_ghz``
+    is ``None`` the global-max sample is used (legacy behaviour).
+
+    ``smooth_window_frac`` (fraction of the sweep length) enables a Savitzky-Golay
+    fit before the band walk, so heavy in-band ripple no longer truncates the band
+    at a single ripple valley next to the anchor. The band, peak gain and GBP are
+    then read off the smoothed curve; ``window_max_db`` still reports the raw
+    needle. When smoothing is on, the fitted curve is returned under the
+    plot-only keys ``_fit_freq_ghz`` / ``_fit_gain_db``.
+
+    Returns ``None`` for <2 finite samples. ``band_clipped`` flags an edge that
+    ran into the sweep boundary (widen the sweep to resolve it).
     """
     f = np.asarray(freq_ghz, dtype=float).reshape(-1)
     g = np.asarray(gain_db, dtype=float).reshape(-1)
@@ -169,37 +228,63 @@ def minus3db_band(
         return None
     order = np.argsort(f)
     f, g = f[order], g[order]
-    peak_i = int(np.argmax(g))
-    peak = float(g[peak_i])
+    gmax_i = int(np.argmax(g))  # raw needle, reported regardless of smoothing
+
+    smoothed = smooth_window_frac is not None
+    if smoothed:
+        window = auto_savgol_window(f.size, float(smooth_window_frac), int(polyorder))
+        if window >= 3:
+            g_band = savgol_filter(
+                g, window_length=window,
+                polyorder=min(int(polyorder), window - 1), mode="interp",
+            )
+        else:
+            g_band = g.astype(float).copy()
+    else:
+        g_band = g
+
+    if anchor_ghz is None:
+        peak_i = int(np.argmax(g_band))
+    else:
+        peak_i = int(np.argmin(np.abs(f - float(anchor_ghz))))
+    peak = float(g_band[peak_i])
     threshold = peak - float(drop_db)
+    peak_lin = 10.0 ** (peak / 10.0)
 
-    clipped = False
-    left = float(f[0])
-    for j in range(peak_i, 0, -1):
-        if g[j - 1] < threshold:
-            left = float(np.interp(threshold, [g[j - 1], g[j]], [f[j - 1], f[j]]))
-            break
-    else:
-        clipped = True
-    right = float(f[-1])
-    for j in range(peak_i, f.size - 1):
-        if g[j + 1] < threshold:
-            right = float(np.interp(threshold, [g[j + 1], g[j]], [f[j + 1], f[j]]))
-            break
-    else:
-        clipped = True
-
+    left, clip_l = _walk_band_edge(f, g_band, peak_i, -1, threshold)
+    right, clip_r = _walk_band_edge(f, g_band, peak_i, +1, threshold)
     bandwidth = float(right - left)
-    gbp = float(10.0 ** (peak / 10.0) * bandwidth)
-    return {
+    result: dict[str, Any] = {
         "peak_gain_db": peak,
         "peak_freq_ghz": float(f[peak_i]),
         "band_left_ghz": left,
         "band_right_ghz": right,
         "bandwidth_ghz": bandwidth,
-        "gbp_ghz": gbp,
-        "band_clipped": clipped,
+        "gbp_ghz": float(peak_lin * bandwidth),
+        "band_clipped": clip_l or clip_r,
+        "anchored": anchor_ghz is not None,
+        "smoothed": smoothed,
+        "window_max_db": float(g[gmax_i]),
+        "window_max_freq_ghz": float(f[gmax_i]),
     }
+    if bridge_ghz > 0.0:
+        left_b, clip_lb = _walk_band_edge(f, g_band, peak_i, -1, threshold,
+                                          bridge_ghz=bridge_ghz)
+        right_b, clip_rb = _walk_band_edge(f, g_band, peak_i, +1, threshold,
+                                           bridge_ghz=bridge_ghz)
+        bandwidth_b = float(right_b - left_b)
+        result.update({
+            "bridged_band_left_ghz": left_b,
+            "bridged_band_right_ghz": right_b,
+            "bridged_bandwidth_ghz": bandwidth_b,
+            "bridged_gbp_ghz": float(peak_lin * bandwidth_b),
+            "bridged_band_clipped": clip_lb or clip_rb,
+            "bridged": bandwidth_b > bandwidth + 1e-9,
+        })
+    if smoothed:
+        result["_fit_freq_ghz"] = f
+        result["_fit_gain_db"] = g_band
+    return result
 
 
 def _invalid_metrics(metadata: dict[str, Any], status: str) -> SpectrumFitMetrics:

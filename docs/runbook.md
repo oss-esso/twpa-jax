@@ -325,7 +325,7 @@ $C = "--executor inprocess --mode warmstart --inproc-pump-backend schur_cpu_mt -
 python scripts/run_gain_map.py $C.Split(' ') --ipm-dir outputs/ipm_python_design --pump-power-min-dbm -35 --pump-power-max-dbm -22.5 --pump-freq-min-ghz 7.0 --pump-freq-max-ghz 8.8
  --outdir outputs/solver_nospectrum_2c_noscatter_m35_m22p5_7p5_8p5_100x100_sb10_failfast
 
-python scripts/run_gain_map.py $C.Split(' ') --ipm-dir outputs/ipm_python_design_3c --pump-power-min-dbm -38 --pump-power-max-dbm -20 --pump-freq-min-ghz 7.25 --pump-freq-max-ghz 7.75 --outdir outputs/solver_nospectrum_3c_noscatter_m38_m20_7p25_7p75_100x100_sb10_failfast
+c
 
 @'
 import csv, subprocess, sys
