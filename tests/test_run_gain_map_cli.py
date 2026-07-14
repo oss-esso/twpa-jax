@@ -25,6 +25,46 @@ def test_inproc_fail_fast_flag_enables_fast_failure(monkeypatch) -> None:
     assert args.inproc_fail_fast is True
 
 
+def test_all_intra_cell_continuation_methods_are_selectable(monkeypatch) -> None:
+    methods = {
+        "fixed",
+        "adaptive_copy",
+        "adaptive_secant",
+        "adaptive_tangent",
+        "affine",
+        "ptc",
+        "arclength",
+    }
+    for method in methods:
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            ["run_gain_map.py", "--inproc-continuation", method],
+        )
+        assert run_gain_map.parse_args().inproc_continuation == method
+
+
+def test_solve_deadline_alias_matches_canonical_flag(monkeypatch) -> None:
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["run_gain_map.py", "--inproc-solve-deadline", "14"],
+    )
+    assert run_gain_map.parse_args().inproc_solve_deadline_s == 14.0
+
+
+def test_column_arclength_recovery_is_opt_in(monkeypatch) -> None:
+    monkeypatch.setattr(sys, "argv", ["run_gain_map.py"])
+    assert run_gain_map.parse_args().column_arclength_recovery is False
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["run_gain_map.py", "--column-arclength-recovery"],
+    )
+    assert run_gain_map.parse_args().column_arclength_recovery is True
+
+
 def test_frequency_chunk_size_defaults_to_ten_columns(monkeypatch) -> None:
     monkeypatch.setattr(sys, "argv", ["run_gain_map.py"])
 
@@ -33,6 +73,39 @@ def test_frequency_chunk_size_defaults_to_ten_columns(monkeypatch) -> None:
     assert args.frequency_chunk_size == 10
     assert args.resume_chunks is True
     assert args.signal_spectrum is True
+    assert args.local_traversal_chunks is False
+
+
+def test_local_traversal_chunks_are_explicit(monkeypatch) -> None:
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["run_gain_map.py", "--local-traversal-chunks"],
+    )
+
+    args = run_gain_map.parse_args()
+
+    assert args.local_traversal_chunks is True
+
+
+def test_column_bridge_uses_generic_recovery_orchestrator(monkeypatch) -> None:
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["run_gain_map.py", "--traversal", "column", "--recovery", "bridge"],
+    )
+
+    args = run_gain_map.parse_args()
+
+    assert run_gain_map.uses_traversal_orchestrator(args) is True
+
+
+def test_legacy_column_control_keeps_legacy_orchestrator(monkeypatch) -> None:
+    monkeypatch.setattr(sys, "argv", ["run_gain_map.py"])
+
+    args = run_gain_map.parse_args()
+
+    assert run_gain_map.uses_traversal_orchestrator(args) is False
 
 
 def test_signal_spectrum_can_be_disabled(monkeypatch) -> None:

@@ -26,7 +26,9 @@ after the warm pass and folds their gain drift into the gate, so the big run is
 still guarded without paying for a full cold map.
 
 Pump current is derived from delivered power with the JC-style convention
-``I_peak = sqrt(2 * P_W / Z0)`` (after an optional ``--attenuation-db``).
+``I_peak = sqrt(2 * P_W / Z0)``, after subtracting the line loss. The loss
+defaults to the measured ``loss_A10`` model ``c + a*sqrt(f) + b*f`` (dB, f in
+GHz); pass a flat ``--attenuation-db`` to override it.
 """
 
 from __future__ import annotations
@@ -56,6 +58,7 @@ ROOT = Path(__file__).resolve().parents[1]
 EXP08 = "experiments/exp08_full_ipm_pump_solve.py"
 EXP09 = "experiments/exp09_full_ipm_gain_from_pump.py"
 
+from twpa_solver import default_loss_model  # noqa: E402
 from twpa_solver.core import load_circuit  # noqa: E402
 import twpa_solver.pump.hb as exp08  # noqa: E402
 import twpa_solver.signal as exp09  # noqa: E402
@@ -76,6 +79,31 @@ def dbm_to_peak_current_a(power_dbm: float, *, attenuation_db: float, z0_ohm: fl
     source_dbm = float(power_dbm) - float(attenuation_db)
     power_w = 1.0e-3 * 10.0 ** (source_dbm / 10.0)
     return math.sqrt(2.0 * power_w / float(z0_ohm))
+
+
+def peak_current_to_power_dbm(current_a: float, freq_ghz: float, args: argparse.Namespace) -> float:
+    """Inverse of ``dbm_to_peak_current_a``: on-chip peak current -> pump dBm.
+
+    ``I = sqrt(2 P_W / Z0)`` with ``P_W = 1e-3 * 10^((dBm - att)/10)``, so
+    ``dBm = 10*log10((I^2 Z0 / 2) / 1e-3) + att(freq)``.
+    """
+    if current_a <= 0.0:
+        return float("-inf")
+    power_w = current_a * current_a * float(args.z0_ohm) / 2.0
+    source_dbm = 10.0 * math.log10(power_w / 1.0e-3)
+    return source_dbm + attenuation_db_for(freq_ghz, args)
+
+
+def attenuation_db_for(freq_ghz: float, args: argparse.Namespace) -> float:
+    """Line attenuation (dB) at ``freq_ghz``.
+
+    Default: the measured loss_A10 model ``c + a*sqrt(f) + b*f`` (frequency
+    dependent, f in GHz). A numeric ``--attenuation-db`` overrides it with a flat
+    value.
+    """
+    if args.attenuation_db is not None:
+        return float(args.attenuation_db)
+    return float(default_loss_model().attenuation_db(float(freq_ghz)))
 
 
 def signal_ghz_for(pump_freq_ghz: float, args: argparse.Namespace) -> float:
@@ -492,12 +520,24 @@ class InProcessEngine:
         self._signal_schur_cache_max = max(1, int(getattr(args, "inproc_schur_cache_size", 2)))
 
     def _settings(self) -> exp08.NewtonKrylovSettings:
+        # Intra-cell continuation predictor: tangent uses the exact lambda-tangent
+        # Euler step; every other mode keeps the legacy (copy/secant-at-inter-cell)
+        # behaviour, i.e. no intra-cell predictor on the seed path.
+        continuation = getattr(
+            self.args,
+            "inproc_continuation",
+            "adaptive_secant",
+        )
+        cont_pred = {
+            "adaptive_secant": "secant",
+            "adaptive_tangent": "tangent",
+        }.get(continuation, "none")
         return exp08.NewtonKrylovSettings(
             newton_tol=self.args.newton_tol, max_newton=self.args.inproc_max_newton, gmres_rtol=1e-7,
             gmres_atol=0.0, gmres_restart=60, gmres_maxiter=self.args.inproc_gmres_maxiter,
             min_alpha=1.0 / 1024.0,
             preconditioner=self.args.inproc_preconditioner, compute_time_residual=True, verbose=False,
-            continuation_predictor="none", jvp_mode="aft", stall_ratio=0.8, stall_patience=4,
+            continuation_predictor=cont_pred, jvp_mode="aft", stall_ratio=0.8, stall_patience=4,
             solve_deadline_s=self.args.inproc_solve_deadline_s,
             precond_reuse=self.args.inproc_precond_reuse,
             precond_reuse_refresh_gmres=self.args.inproc_precond_refresh_gmres,
@@ -518,8 +558,54 @@ class InProcessEngine:
         )
         return problem, basis, omega
 
+    def _make_solve_problem(self, full_problem, freq_ghz: float):
+        """The problem actually solved for a cell: Schur-reduced or full.
+
+        For the Schur backend the per-frequency partition is cached (LRU); the
+        retained solution vector has a constant (port-node) shape across all
+        frequencies, so chained warm starts stay shape-compatible. The full
+        backend returns the full problem unchanged.
+        """
+        if self.args.inproc_pump_backend != "schur_cpu_mt":
+            return full_problem
+        cache = self._schur_part_cache
+        part = cache.pop(freq_ghz, None)  # pop-then-reinsert -> most-recent (LRU)
+        sprob = (SchurReducedProblem(full=full_problem, partition=part)
+                 if part is not None
+                 else build_schur_problem(full_problem, self.ports))
+        cache[freq_ghz] = sprob.part
+        while len(cache) > self._schur_cache_max:
+            del cache[next(iter(cache))]  # evict oldest -> frees its splu
+            gc.collect()
+        return sprob
+
+    def build_problem_for(self, point: GridPoint):
+        """Full pump problem bundle for a grid cell (no Schur reduction).
+
+        Used by the traversal orchestrator to rank predictor candidates by
+        residual before solving, and reused by ``solve_point`` via ``prebuilt``
+        so the (cheap) problem build is not paid twice.
+        """
+        injected = point.current_a * self.args.pump_current_jc_scale
+        full_problem, basis, omega = self._build_problem(point.pump_freq_ghz, injected)
+        return full_problem, basis, omega, injected
+
+    def residual_norm(self, full_problem, X: np.ndarray | None) -> float:
+        """Relative coefficient residual of guess ``X`` at full drive (lambda=1).
+
+        The ranking key for the residual-ranked predictor portfolio. Returns
+        ``inf`` for a missing or shape-mismatched guess so it sorts last.
+        """
+        if X is None or X.shape != full_problem.zeros().shape:
+            return float("inf")
+        try:
+            return float(full_problem.norms(X, 1.0, False)["coeff_rel"])
+        except (ValueError, FloatingPointError):
+            return float("inf")
+
     def solve_point(
         self, point: GridPoint, pass_dir: Path, *, mode: str, warm_X: np.ndarray | None,
+        prebuilt: tuple | None = None,
     ) -> tuple[dict[str, Any], np.ndarray | None]:
         a = self.args
         pdir = pass_dir / "points" / point_name(point.index, point.power_dbm, point.pump_freq_ghz)
@@ -529,46 +615,100 @@ class InProcessEngine:
         t0 = time.perf_counter()
         pump_wall_start = time.perf_counter()
 
-        injected = point.current_a * a.pump_current_jc_scale
         t_setup = time.perf_counter()
-        full_problem, basis, omega = self._build_problem(point.pump_freq_ghz, injected)
+        if prebuilt is not None:
+            full_problem, basis, omega, injected = prebuilt
+        else:
+            full_problem, basis, omega, injected = self.build_problem_for(point)
         pump_setup_runtime_s = time.perf_counter() - t_setup
         # Optional Schur-reduced backend: solve on retained nodes, reconstruct
         # the full solution for write_results/exp09 (which need full-node X).
         use_schur = a.inproc_pump_backend == "schur_cpu_mt"
         t_schur = time.perf_counter()
-        if use_schur:
-            cache = self._schur_part_cache
-            # pop-then-reinsert so the used key becomes most-recent (LRU order).
-            part = cache.pop(point.pump_freq_ghz, None)
-            sprob = (SchurReducedProblem(full=full_problem, partition=part)
-                     if part is not None
-                     else build_schur_problem(full_problem, self.ports))
-            cache[point.pump_freq_ghz] = sprob.part
-            while len(cache) > self._schur_cache_max:
-                del cache[next(iter(cache))]  # evict oldest -> frees its splu
-                gc.collect()
-            solve_problem = sprob
-        else:
-            solve_problem = full_problem
+        solve_problem = self._make_solve_problem(full_problem, point.pump_freq_ghz)
         pump_schur_setup_runtime_s = time.perf_counter() - t_schur
         solver = exp08.HarmonicNewtonKrylovSolver(self._settings())
 
         t_solve = time.perf_counter()
+        continuation_info: dict[str, Any] = {
+            "method": "direct" if mode == "warm" and warm_X is not None else None,
+            "steps": None,
+            "reached_target": None,
+            "fold_lambda": None,
+            "runtime_s": None,
+        }
         if mode == "warm" and warm_X is not None:
             X, reports = solver.solve_direct(solve_problem, warm_X)
-        elif mode == "seed" and not use_schur:
-            X_seed, _ = exp08.build_linear_phasor_seed(
-                full_problem, source_scale=1.0, method="gmres", rtol=1e-6,
-                maxiter=a.linear_seed_maxiter, restart=60,
-            )
-            X, reports, _ = solver.solve_adaptive_continuation(
-                full_problem, X_seed, initial_step=a.adaptive_initial_step,
-                min_step=a.adaptive_min_step, growth=1.5, shrink=0.5,
-                fallback_fixed_steps=20,
-            )
-        else:  # cold (and schur seed -> cold continuation on retained)
-            X, reports = solver.solve_continuation(solve_problem, continuation_steps=a.continuation_steps)
+        else:
+            cont = getattr(a, "inproc_continuation", "adaptive_secant")
+            continuation_info["method"] = cont
+            continuation_start = time.perf_counter()
+            X_seed = solve_problem.zeros()
+            if cont == "fixed":
+                X, reports = solver.solve_continuation(
+                    solve_problem,
+                    continuation_steps=a.continuation_steps,
+                )
+                continuation_info["steps"] = len(reports)
+                continuation_info["reached_target"] = bool(
+                    reports
+                    and reports[-1].converged
+                    and abs(reports[-1].source_scale - 1.0) < 1e-12
+                )
+            elif cont == "ptc":
+                X, reports = solver.solve_pseudo_transient(solve_problem, X_seed)
+                continuation_info["steps"] = (
+                    reports[-1].newton_iterations if reports else 0
+                )
+                continuation_info["reached_target"] = bool(
+                    reports and reports[-1].converged
+                )
+            elif cont == "arclength":
+                X_arc, _lam, arc_info = solver.solve_arclength(
+                    solve_problem,
+                    X_seed,
+                    0.0,
+                    ds=a.inproc_arclength_ds,
+                    max_steps=a.inproc_arclength_max_steps,
+                    target_lam=1.0,
+                    max_wall_s=a.inproc_solve_deadline_s,
+                )
+                X, reports = solver.solve_direct(solve_problem, X_arc)
+                continuation_info["steps"] = arc_info.get("steps")
+                continuation_info["reached_target"] = arc_info.get("reached_target")
+                continuation_info["fold_lambda"] = arc_info.get("fold_lambda")
+            else:
+                predictor = "none" if cont == "adaptive_copy" else cont
+                if cont == "affine":
+                    X, reports, trace = solver.solve_affine_continuation(
+                        solve_problem,
+                        X_seed,
+                        initial_step=a.adaptive_initial_step,
+                        min_step=a.adaptive_min_step,
+                        fallback_fixed_steps=a.inproc_fallback_fixed_steps,
+                        max_wall_s=a.inproc_continuation_deadline_s,
+                    )
+                else:
+                    X, reports, trace = solver.solve_adaptive_continuation(
+                        solve_problem,
+                        X_seed,
+                        initial_step=a.adaptive_initial_step,
+                        min_step=a.adaptive_min_step,
+                        growth=1.5,
+                        shrink=0.5,
+                        fallback_fixed_steps=a.inproc_fallback_fixed_steps,
+                        max_wall_s=a.inproc_continuation_deadline_s,
+                    )
+                continuation_info["method"] = cont
+                continuation_info["steps"] = len(trace.attempted_lambdas)
+                continuation_info["reached_target"] = bool(
+                    reports
+                    and reports[-1].converged
+                    and abs(reports[-1].source_scale - 1.0) < 1e-12
+                )
+                if predictor == "none" and cont != "affine":
+                    continuation_info["method"] = "adaptive_copy"
+            continuation_info["runtime_s"] = time.perf_counter() - continuation_start
 
         pump_solve_wall_runtime_s = time.perf_counter() - t_solve
 
@@ -615,6 +755,11 @@ class InProcessEngine:
             "pump_gmres_total": int(sum(r.gmres_iterations_total for r in reports)),
             "pump_branch_current_max": finite_or_none(summary.get("branch_i_max_abs")),
             "pump_failure_reason": (reports[-1].failure_reason if reports else None),
+            "pump_continuation_method": continuation_info["method"],
+            "pump_continuation_steps": continuation_info["steps"],
+            "pump_continuation_reached_target": continuation_info["reached_target"],
+            "pump_continuation_fold_lambda": continuation_info["fold_lambda"],
+            "pump_continuation_runtime_s": continuation_info["runtime_s"],
         }
         row.update({k: None for k in (
             "gain_db", "gain_vs_off_db", "gain_vs_pumpdiag_db", "signal_ghz",
@@ -650,6 +795,104 @@ class InProcessEngine:
         row["elapsed_s"] = time.perf_counter() - t0
         row["pump_dir"] = str(pump_dir)
         return row, (X if converged else None)
+
+    def solve_bridge(
+        self, parent_X: np.ndarray, parent_current: float, parent_freq: float,
+        target_current: float, target_freq: float, *, steps: int, mode: str,
+    ) -> np.ndarray | None:
+        """March a warm guess from a solved parent to the target along (P, f).
+
+        Continuation in the physical parameters (not lambda): at each sub-step
+        build the pump problem at the interpolated (current, frequency) and take
+        one full-scale Newton solve warm-started from the previous sub-state.
+        Returns the marched state near the target (a strong warm guess for the
+        real target solve) or ``None`` if any sub-step fails.
+
+        ``mode``: ``diagonal`` straight line; ``freq_first`` ramps frequency at
+        parent power then power; ``power_first`` the reverse; ``adaptive`` walks
+        the diagonal with a halving step on failure.
+        """
+        solver = exp08.HarmonicNewtonKrylovSolver(self._settings())
+
+        def step_to(cur: float, frq: float, guess: np.ndarray) -> np.ndarray | None:
+            prob, _basis, _omega = self._build_problem(frq, cur)
+            solve_prob = self._make_solve_problem(prob, frq)
+            X, report = solver.solve_one(solve_prob, guess, 1.0)
+            return X if report.converged else None
+
+        n = max(1, int(steps))
+        if mode == "adaptive":
+            guess = parent_X
+            t, h = 0.0, 1.0 / n
+            while t < 1.0 - 1e-9:
+                nt = min(1.0, t + h)
+                cur = parent_current + nt * (target_current - parent_current)
+                frq = parent_freq + nt * (target_freq - parent_freq)
+                nxt = step_to(cur, frq, guess)
+                if nxt is None:
+                    h *= 0.5
+                    if h < 1.0 / 64.0:
+                        return None
+                    continue
+                guess, t = nxt, nt
+                h = min(1.0 / n, h * 1.5)
+            return guess
+
+        # Fixed paths. Build the (fraction-of-current, fraction-of-freq) schedule.
+        fracs = [(k + 1) / n for k in range(n)]
+        if mode == "freq_first":
+            path = [(parent_current, parent_freq + fr * (target_freq - parent_freq)) for fr in fracs]
+            path += [(parent_current + fr * (target_current - parent_current), target_freq) for fr in fracs]
+        elif mode == "power_first":
+            path = [(parent_current + fr * (target_current - parent_current), parent_freq) for fr in fracs]
+            path += [(target_current, parent_freq + fr * (target_freq - parent_freq)) for fr in fracs]
+        else:  # diagonal
+            path = [(parent_current + fr * (target_current - parent_current),
+                     parent_freq + fr * (target_freq - parent_freq)) for fr in fracs]
+
+        guess = parent_X
+        for cur, frq in path:
+            nxt = step_to(cur, frq, guess)
+            if nxt is None:
+                return None
+            guess = nxt
+        return guess
+
+    def trace_column_arclength(
+        self,
+        freq_ghz: float,
+        reference_current: float,
+        X0: np.ndarray,
+        current0: float,
+        X1: np.ndarray,
+        current1: float,
+        targets: list[tuple[int, float]],
+    ) -> tuple[dict[int, list[np.ndarray]], dict]:
+        """Trace once from two map states and interpolate target-current crossings."""
+        full_problem, _basis, _omega = self._build_problem(freq_ghz, reference_current)
+        problem = self._make_solve_problem(full_problem, freq_ghz)
+        solver = exp08.HarmonicNewtonKrylovSolver(self._settings())
+        points, info = solver.trace_arclength_from_two_points(
+            problem,
+            X0,
+            current0 / reference_current,
+            X1,
+            current1 / reference_current,
+            ds=self.args.column_arclength_ds,
+            max_steps=self.args.column_arclength_max_steps,
+        )
+        guesses: dict[int, list[np.ndarray]] = {}
+        for point_index, target_current in targets:
+            target = target_current / reference_current
+            for (Xa, la), (Xb, lb) in zip(points, points[1:]):
+                if lb == la or (la - target) * (lb - target) > 0.0:
+                    continue
+                theta = (target - la) / (lb - la)
+                if -1e-12 <= theta <= 1.0 + 1e-12:
+                    guesses.setdefault(point_index, []).append(Xa + theta * (Xb - Xa))
+        info["trace_points"] = len(points)
+        info["target_crossings"] = sum(len(v) for v in guesses.values())
+        return guesses, info
 
     def _gain(self, pump_dir: Path, gain_dir: Path, freq_ghz: float):
         a = self.args
@@ -876,6 +1119,8 @@ def run_warm_pass_inprocess(
         last_good_cur: float | None = None
         prevprev_X: np.ndarray | None = None
         prevprev_cur: float | None = None
+        arclength_traced = False
+        arclength_guesses: dict[int, list[np.ndarray]] = {}
         consec_fail = 0  # consecutive non-converged points at increasing power
         for idx, point in enumerate(column):
             cur = point.current_a * scale
@@ -894,6 +1139,49 @@ def run_warm_pass_inprocess(
             pred_tag = "secant" if use_secant else "none"
 
             row, X = engine.solve_point(point, pass_dir, mode=mode, warm_X=guess)
+
+            if (
+                row["status"] != "PASS"
+                and getattr(engine.args, "column_arclength_recovery", False)
+                and not arclength_traced
+                and prevprev_X is not None
+                and prevprev_cur is not None
+                and last_good_X is not None
+                and last_good_cur is not None
+            ):
+                arclength_traced = True
+                reference_current = column[-1].current_a * scale
+                targets = [
+                    (p.index, p.current_a * scale)
+                    for p in column[idx:]
+                ]
+                arclength_guesses, arc_info = engine.trace_column_arclength(
+                    point.pump_freq_ghz,
+                    reference_current,
+                    prevprev_X,
+                    prevprev_cur,
+                    last_good_X,
+                    last_good_cur,
+                    targets,
+                )
+                print(
+                    f"[arclength] fp={point.pump_freq_ghz:.6g} GHz "
+                    f"steps={arc_info.get('steps')} points={arc_info.get('trace_points')} "
+                    f"folds={arc_info.get('fold_lambdas')} "
+                    f"crossings={arc_info.get('target_crossings')} "
+                    f"reason={arc_info.get('terminal_reason')}",
+                    flush=True,
+                )
+
+            if row["status"] != "PASS" and point.index in arclength_guesses:
+                for arc_guess in arclength_guesses[point.index]:
+                    arc_row, arc_X = engine.solve_point(
+                        point, pass_dir, mode="warm", warm_X=arc_guess,
+                    )
+                    if arc_row["status"] == "PASS":
+                        row, X = arc_row, arc_X
+                        pred_tag = f"{pred_tag}->arclength"
+                        break
 
             # Overshoot guard: a bad extrapolation past the fold -> retry once
             # from the plain warm start before paying the reseed. Fail-fast
@@ -941,6 +1229,379 @@ def run_warm_pass_inprocess(
                 break
     rows.sort(key=lambda r: r["point_index"])
     return rows
+
+
+# =============================================================================
+# Traversal orchestrator (inter-cell method suite: Phases 1-3)
+# =============================================================================
+
+from twpa_solver.pump import predictors as _predictors  # noqa: E402
+
+
+def _grid_dims(points: list[GridPoint]) -> tuple[int, int]:
+    return max(p.i_power for p in points) + 1, max(p.j_freq for p in points) + 1
+
+
+def _traversal_order(points: list[GridPoint], strategy: str, direction: str
+                     ) -> list[GridPoint]:
+    """Solve order for a traversal strategy (list of GridPoints).
+
+    ``column``/``nearest`` sort column-major (low->high power within a column);
+    ``backbone`` solves the lowest-power frequency row first then each column
+    upward; ``serpentine`` alternates power direction per column; ``floodfill``
+    is a Prim (cheapest-neighbour) order from a central low-power seed.
+    """
+    n_power, n_freq = _grid_dims(points)
+    by_ij = {(p.i_power, p.j_freq): p for p in points}
+
+    def col_order(js: list[int]) -> list[int]:
+        if direction == "rtl":
+            return sorted(js, reverse=True)
+        if direction == "center_out":
+            mid = (n_freq - 1) / 2.0
+            return sorted(js, key=lambda j: abs(j - mid))
+        if direction == "two_ended":
+            lo, hi = sorted(js), sorted(js, reverse=True)
+            out: list[int] = []
+            for a, b in zip(lo, hi):
+                out.append(a)
+                if b != a and b not in out:
+                    out.append(b)
+            return [j for j in out if j in set(js)]
+        return sorted(js)  # ltr
+
+    all_js = sorted({p.j_freq for p in points})
+
+    if strategy == "backbone":
+        order: list[GridPoint] = []
+        js = col_order(all_js)
+        for j in js:  # backbone row (lowest power present in the column)
+            col = sorted((p for p in points if p.j_freq == j), key=lambda p: p.i_power)
+            if col:
+                order.append(col[0])
+        for j in js:  # each column upward from its backbone cell
+            col = sorted((p for p in points if p.j_freq == j), key=lambda p: p.i_power)
+            order.extend(col[1:])
+        return order
+
+    if strategy == "serpentine":
+        order = []
+        for k, j in enumerate(sorted(all_js)):
+            col = sorted((p for p in points if p.j_freq == j), key=lambda p: p.i_power)
+            order.extend(col if k % 2 == 0 else list(reversed(col)))
+        return order
+
+    if strategy == "floodfill":
+        import heapq
+        powers = sorted({p.i_power for p in points})
+        rangeP = max(1, n_power - 1)
+        rangeF = max(1, n_freq - 1)
+        start = by_ij.get((powers[0], n_freq // 2)) or points[0]
+        visited: set[tuple[int, int]] = set()
+        order = []
+        heap: list[tuple[float, int, int]] = [(0.0, start.i_power, start.j_freq)]
+        while heap:
+            _cost, i, j = heapq.heappop(heap)
+            if (i, j) in visited or (i, j) not in by_ij:
+                continue
+            visited.add((i, j))
+            order.append(by_ij[(i, j)])
+            for di, dj in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                ni, nj = i + di, j + dj
+                if (ni, nj) in by_ij and (ni, nj) not in visited:
+                    cost = abs(di) / rangeP + abs(dj) / rangeF
+                    heapq.heappush(heap, (cost, ni, nj))
+        return order
+
+    # column / nearest: column-major, ascending power.
+    return sorted(points, key=lambda p: (p.j_freq, p.i_power))
+
+
+def _nearest_solved(i: int, j: int, solved: dict, n_power: int, n_freq: int):
+    """Nearest already-solved cell to (i,j) by normalised grid distance."""
+    best = None
+    best_d = float("inf")
+    for (si, sj) in solved:
+        d = abs(si - i) / max(1, n_power - 1) + abs(sj - j) / max(1, n_freq - 1)
+        if d < best_d:
+            best_d, best = d, (si, sj)
+    return best
+
+
+def _build_candidates(
+    point: GridPoint, cur_t: float, solved: dict, n_power: int, n_freq: int,
+) -> dict[str, np.ndarray | None]:
+    """Predictor candidate guesses for a target cell from solved neighbours."""
+    i, j = point.i_power, point.j_freq
+    P, f = point.power_dbm, point.pump_freq_ghz
+
+    def X(ii, jj):
+        c = solved.get((ii, jj))
+        return c["X"] if c else None
+
+    def cur(ii, jj):
+        c = solved.get((ii, jj))
+        return c["current"] if c else None
+
+    def frq(ii, jj):
+        c = solved.get((ii, jj))
+        return c["freq"] if c else None
+
+    cands: dict[str, np.ndarray | None] = {}
+    # copy: power parent, else nearest solved.
+    parent = X(i - 1, j)
+    if parent is None:
+        nb = _nearest_solved(i, j, solved, n_power, n_freq)
+        parent = solved[nb]["X"] if nb else None
+    cands["copy"] = None if parent is None else _predictors.copy_predictor(parent)
+    cands["power_secant"] = _predictors.axis_secant(
+        X(i - 2, j), X(i - 1, j), cur(i - 2, j), cur(i - 1, j), cur_t)
+    cands["freq_secant"] = _predictors.axis_secant(
+        X(i, j - 2), X(i, j - 1), frq(i, j - 2), frq(i, j - 1), f)
+    cands["corner"] = _predictors.corner_predictor(X(i, j - 1), X(i - 1, j), X(i - 1, j - 1))
+    cands["diagonal"] = X(i - 1, j - 1)
+    window = [(c["power"], c["freq"], c["X"]) for (si, sj), c in solved.items()
+              if abs(si - i) <= 2 and abs(sj - j) <= 2]
+    cands["plane"] = _predictors.plane_predictor(window, P, f)
+    return cands
+
+
+def _select_guess(
+    point: GridPoint, cur_t: float, solved: dict, solve_problem, engine,
+    n_power: int, n_freq: int, args: argparse.Namespace,
+) -> tuple[np.ndarray | None, str, list[tuple[str, np.ndarray, float]]]:
+    """Pick the initial guess for a cell per --predictor / --portfolio-policy.
+
+    Returns (guess, tag, ranked) where ``ranked`` is the residual-sorted
+    candidate list (non-empty only for the portfolio predictor; reused by the
+    ranked recovery ladder). ``solve_problem`` is the Schur-reduced (or full)
+    problem the cell is actually solved on, so candidate residuals match the
+    chained warm-start state shape.
+    """
+    cands = _build_candidates(point, cur_t, solved, n_power, n_freq)
+    predictor = args.predictor
+    if predictor == "portfolio":
+        ranked = _predictors.rank_candidates(
+            cands, lambda X: engine.residual_norm(solve_problem, X))
+        if not ranked:
+            return None, "seed", []
+        return ranked[0][1], f"portfolio:{ranked[0][0]}", ranked
+    guess = cands.get(predictor)
+    if guess is None:  # fall back to copy of best available parent
+        guess = cands.get("copy")
+        return guess, ("copy" if guess is not None else "seed"), []
+    return guess, predictor, []
+
+
+def _attempt(engine, point, pass_dir, prebuilt, *, mode, warm_X):
+    row, X = engine.solve_point(point, pass_dir, mode=mode, warm_X=warm_X, prebuilt=prebuilt)
+    return row, X, row["status"] == "PASS"
+
+
+def _recover(
+    engine, point, pass_dir, prebuilt, solve_problem, cur_t, solved,
+    n_power, n_freq, ranked, args, failed_row, failed_X,
+) -> tuple[dict, np.ndarray | None, bool, str]:
+    """Recovery + fold-policy rescue ladder for a failed cell.
+
+    Runs the --recovery ladder, then any extra --fold-policy attempt, and
+    returns (row, X, converged, tag). ``converged`` False here means the cell is
+    a genuine fold/skip candidate.
+    """
+    i, j = point.i_power, point.j_freq
+    parent_i = solved.get((i - 1, j)) or solved.get((i, j - 1)) or solved.get((i - 1, j - 1))
+    last_row, last_X = failed_row, failed_X
+
+    def bridge_from(cell) -> tuple[dict, np.ndarray | None, bool] | None:
+        if cell is None:
+            return None
+        guess = engine.solve_bridge(
+            cell["X"], cell["current"], cell["freq"], cur_t, point.pump_freq_ghz,
+            steps=args.bridge_steps, mode=args.bridge_mode)
+        if guess is None:
+            return None
+        row, X, ok = _attempt(engine, point, pass_dir, prebuilt, mode="warm", warm_X=guess)
+        return (row, X, ok) if ok else None
+
+    recovery = args.recovery
+    if recovery == "alt_parent":
+        for cell in (solved.get((i - 1, j)), solved.get((i, j - 1)), solved.get((i - 1, j - 1))):
+            if cell is None:
+                continue
+            row, X, ok = _attempt(engine, point, pass_dir, prebuilt, mode="warm", warm_X=cell["X"])
+            if ok:
+                return row, X, True, "alt_parent"
+            last_row, last_X = row, X
+    elif recovery == "bridge":
+        res = bridge_from(parent_i)
+        if res:
+            return res[0], res[1], True, "bridge"
+    elif recovery == "ladder":
+        # ranked[0] was already attempted as the initial portfolio guess.
+        for _name, guess, _rho in (ranked[1:] if ranked else []):
+            row, X, ok = _attempt(engine, point, pass_dir, prebuilt, mode="warm", warm_X=guess)
+            if ok:
+                return row, X, True, "ladder_predictor"
+            last_row, last_X = row, X
+        res = bridge_from(parent_i)
+        if res:
+            return res[0], res[1], True, "ladder_bridge"
+
+    # Fold-policy extra rescue before counting toward the skip.
+    fp = args.fold_policy
+    if fp in ("cross_axis", "combined"):
+        cell = solved.get((i, j - 1))
+        if cell is not None:
+            row, X, ok = _attempt(engine, point, pass_dir, prebuilt, mode="warm", warm_X=cell["X"])
+            if ok:
+                return row, X, True, "cross_axis"
+            last_row, last_X = row, X
+    if fp in ("bridge_gate", "combined"):
+        res = bridge_from(parent_i)
+        if res:
+            return res[0], res[1], True, "fold_bridge"
+    if fp == "arclength":
+        # Round the fold: pseudo-arclength from lambda=0 to full drive, then a
+        # warm target solve from the arclength state.
+        solver = exp08.HarmonicNewtonKrylovSolver(engine._settings())
+        X_arc, _lam, info = solver.solve_arclength(
+            solve_problem, solve_problem.zeros(), 0.0, ds=0.1, target_lam=1.0)
+        if info.get("reached_target"):
+            row, X, ok = _attempt(engine, point, pass_dir, prebuilt, mode="warm", warm_X=X_arc)
+            if ok:
+                return row, X, True, "arclength"
+            last_row, last_X = row, X
+
+    # Fail-fast still permits the explicitly selected cheap recovery policy,
+    # but does not pay for a fresh continuation after those attempts fail.
+    if args.inproc_fail_fast:
+        return last_row, last_X, False, "fail_fast"
+
+    # Final fallback: fresh linear_phasor + adaptive reseed.
+    row, X, ok = _attempt(engine, point, pass_dir, prebuilt, mode="seed", warm_X=None)
+    return row, X, ok, "reseed"
+
+
+def run_fold_follow(engine: InProcessEngine, freqs: np.ndarray, outdir: Path,
+                    args: argparse.Namespace) -> None:
+    """Trace the fold power vs frequency with pseudo-arclength -> fold_curve.csv.
+
+    At each frequency, build the pump problem at the maximum-power reference
+    current and run the arclength fold locator; the fold ``lambda`` scales the
+    reference current, giving a fold current and thus a fold power (dBm).
+    """
+    from twpa_solver.pump.solver import fold_power
+    scale = args.pump_current_jc_scale
+    solver = exp08.HarmonicNewtonKrylovSolver(engine._settings())
+    rows: list[dict[str, Any]] = []
+    for f in freqs:
+        f = float(f)
+        ref_phys = dbm_to_peak_current_a(
+            args.pump_power_max_dbm, attenuation_db=attenuation_db_for(f, args),
+            z0_ohm=args.z0_ohm)
+        ref_injected = ref_phys * scale
+        full_problem, _basis, _omega = engine._build_problem(f, ref_injected)
+        # Solve on the Schur-reduced problem for speed (constant retained shape).
+        problem = engine._make_solve_problem(full_problem, f)
+        lam_fold = fold_power(solver, problem, max_steps=120)
+        fold_dbm = (peak_current_to_power_dbm(lam_fold * ref_injected / scale, f, args)
+                    if lam_fold is not None else None)
+        rows.append({"pump_freq_ghz": f, "fold_lambda": lam_fold,
+                     "fold_power_dbm": fold_dbm})
+        print(f"[fold-follow] fp={f:.4f} GHz fold_lambda={lam_fold} "
+              f"fold_power_dbm={fold_dbm}", flush=True)
+    outdir.mkdir(parents=True, exist_ok=True)
+    path = outdir / "fold_curve.csv"
+    with path.open("w", newline="", encoding="utf-8") as fh:
+        w = csv.DictWriter(fh, fieldnames=["pump_freq_ghz", "fold_lambda", "fold_power_dbm"])
+        w.writeheader()
+        w.writerows(rows)
+    print(f"wrote {path}", flush=True)
+
+
+def run_map_traversal(
+    points: list[GridPoint], pass_dir: Path, engine: InProcessEngine,
+) -> list[dict[str, Any]]:
+    """Warm pass with a pluggable traversal / predictor / recovery / fold policy.
+
+    Keeps one in-process ``solved[(i,j)]`` state store shared across BOTH axes,
+    so frequency-crossing methods (backbone, nearest, corner, plane, ...) can
+    warm-start from converged neighbours in either direction. Requires a single
+    process (enforced by the caller via --frequency-chunk-size 0).
+    """
+    a = engine.args
+    n_power, n_freq = _grid_dims(points)
+    scale = a.pump_current_jc_scale
+    order = _traversal_order(points, a.traversal, a.backbone_direction)
+    solved: dict[tuple[int, int], dict] = {}
+    skip: set[tuple[int, int]] = set()
+    col_fail: dict[int, int] = {}
+    patience = int(getattr(a, "fold_skip_patience", 0))
+    rows: list[dict[str, Any]] = []
+    total = len(points)
+    done = 0
+
+    for point in order:
+        i, j = point.i_power, point.j_freq
+        if (i, j) in skip:
+            rows.append(past_fold_skip_row(point))
+            done += 1
+            continue
+        cur_t = point.current_a * scale
+        prebuilt = engine.build_problem_for(point)
+        solve_problem = engine._make_solve_problem(prebuilt[0], point.pump_freq_ghz)
+        guess, tag, ranked = _select_guess(
+            point, cur_t, solved, solve_problem, engine, n_power, n_freq, a)
+        mode = "warm" if guess is not None else "seed"
+        row, X, ok = _attempt(engine, point, pass_dir, prebuilt, mode=mode, warm_X=guess)
+
+        if not ok and a.predictor == "portfolio" and a.portfolio_policy == "ranked":
+            for name, candidate, _rho in ranked[1:]:
+                row, X, ok = _attempt(
+                    engine, point, pass_dir, prebuilt, mode="warm", warm_X=candidate,
+                )
+                tag = f"{tag}->ranked:{name}"
+                if ok:
+                    break
+
+        if not ok:
+            row, X, ok, rtag = _recover(
+                engine, point, pass_dir, prebuilt, solve_problem, cur_t, solved,
+                n_power, n_freq, ranked, a, row, X)
+            tag = f"{tag}->{rtag}"
+
+        row["warm_retry_reseed"] = "reseed" in tag
+        row["pump_predictor"] = tag
+        rows.append(row)
+        done += 1
+        print(f"[trav {done}/{total}] P={point.power_dbm:.4g} dBm "
+              f"fp={point.pump_freq_ghz:.4g} GHz {a.traversal}:{tag} "
+              f"status={row['status']} gain={row.get('gain_db')} "
+              f"newton={row.get('pump_newton_total')}", flush=True)
+
+        if ok and X is not None:
+            solved[(i, j)] = {"X": X, "current": cur_t, "freq": point.pump_freq_ghz,
+                              "power": point.power_dbm}
+            col_fail[j] = 0
+        else:
+            col_fail[j] = col_fail.get(j, 0) + 1
+            # Per-column fold short-circuit: skip higher-power cells in this
+            # column once patience consecutive fails accrue at increasing power.
+            if patience > 0 and col_fail[j] >= patience:
+                for ii in range(i + 1, n_power):
+                    skip.add((ii, j))
+
+    rows.sort(key=lambda r: r["point_index"])
+    return rows
+
+
+def uses_traversal_orchestrator(args: argparse.Namespace) -> bool:
+    """Return whether generic traversal/recovery semantics are requested."""
+    return (
+        args.traversal != "column"
+        or args.recovery != "reseed"
+        or args.fold_policy != "patience"
+    )
 
 
 # =============================================================================
@@ -1061,6 +1722,9 @@ def write_points_csv(path: Path, rows: list[dict[str, Any]]) -> None:
         "pump_preconditioner_assembly_runtime_s",
         "pump_preconditioner_numeric_factor_runtime_s", "pump_newton_total",
         "pump_gmres_total", "pump_coeff_rel", "pump_time_rel", "pump_branch_current_max",
+        "pump_continuation_method", "pump_continuation_steps",
+        "pump_continuation_reached_target", "pump_continuation_fold_lambda",
+        "pump_continuation_runtime_s",
         "gain_total_runtime_s", "gain_wall_runtime_s", "gain_gamma_hat_runtime_s",
         "gain_khat_build_runtime_s", "gain_khat_off_runtime_s",
         "gain_matrix_assemble_runtime_s", "gain_factor_solve_runtime_s",
@@ -1171,6 +1835,8 @@ def write_summary(
         "pump_power_dbm": [args.pump_power_min_dbm, args.pump_power_max_dbm],
         "pump_freq_ghz": [args.pump_freq_min_ghz, args.pump_freq_max_ghz],
         "attenuation_db": args.attenuation_db,
+        "attenuation_model": ("flat" if args.attenuation_db is not None
+                              else "loss_A10 c + a*sqrt(f) + b*f"),
         "z0_ohm": args.z0_ohm,
         "signal_ghz": args.signal_ghz,
         "signal_detuning_mhz": args.signal_detuning_mhz,
@@ -1255,12 +1921,28 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                    help="GMRES outer restart cycles per Newton step (x gmres_restart=60 inner). "
                    "A low value (e.g. 4) bounds the per-Newton cost so over-fold solves don't "
                    "grind thousands of inner iterations; warm-start steps converge in <1 cycle.")
-    p.add_argument("--inproc-solve-deadline-s", type=float, default=0.0,
+    p.add_argument("--inproc-solve-deadline-s", "--inproc-solve-deadline",
+                   dest="inproc_solve_deadline_s", type=float, default=0.0,
                    help="Per-solve wall-time budget (s) for the in-process path; 0 disables. "
                    "Bounds stiff over-fold solves near the fold.")
     p.add_argument("--inproc-max-newton", type=int, default=16,
                    help="Max Newton iterations per in-process solve. A small cap (e.g. 10) "
                    "makes over-fold points fail fast; warm-start neighbours converge in few.")
+    p.add_argument(
+        "--inproc-fallback-fixed-steps",
+        type=int,
+        default=20,
+        help="Fixed ladder length after adaptive continuation gives up. Lower this "
+        "for bounded recovery campaigns; the fixed method itself still uses "
+        "--continuation-steps.",
+    )
+    p.add_argument(
+        "--inproc-continuation-deadline-s",
+        type=float,
+        default=0.0,
+        help="Total wall-time budget for adaptive/affine continuation, excluding "
+        "the final target solve. 0 disables.",
+    )
     p.add_argument("--inproc-fail-fast", action="store_true",
                    help="In-process warm pass: skip reseed/fallback recovery on a failed "
                    "point and keep warm-starting from the last converged neighbour, so "
@@ -1273,6 +1955,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                    "point with no re-convergence above it, so those cells are guaranteed "
                    "past-fold. 2 preserves near-monotone columns; 0 disables (default). "
                    "This is the dominant runtime win on hot/over-fold maps.")
+    p.add_argument(
+        "--column-arclength-recovery",
+        action="store_true",
+        help="On the first failed cell in each legacy power column, trace one "
+        "scaled pseudo-arclength branch from the last two converged states and "
+        "use its target-power crossings as Newton recovery guesses.",
+    )
+    p.add_argument("--column-arclength-ds", type=float, default=0.02)
+    p.add_argument("--column-arclength-max-steps", type=int, default=80)
     p.add_argument("--inproc-preconditioner",
                    choices=["mean_tangent", "real_coupled", "real_coupled_fast",
                             "spectral_coupled", "linear"],
@@ -1310,6 +2001,74 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                    "solution. Cuts Newton steps near the fold where the state moves "
                    "fast with power. Physics unchanged (initial guess only); a failed "
                    "predicted solve falls back to the plain warm start.")
+    # --- Inter-cell method suite (opt-in; default reproduces the column pass) ---
+    # See docs/reports/pump_map_continuation_methods.tex + the campaign matrix.
+    # Frequency-crossing traversals require a single process, so they force
+    # --frequency-chunk-size 0 (they share one in-process solved-state store).
+    p.add_argument("--traversal",
+                   choices=["column", "backbone", "nearest", "serpentine", "floodfill"],
+                   default="column",
+                   help="Map traversal / warm-start order. 'column' (default) is "
+                   "the legacy per-frequency-column low->high power pass with no "
+                   "cross-column warm state. The others reuse converged cells "
+                   "across BOTH axes (single process only).")
+    p.add_argument("--backbone-direction",
+                   choices=["ltr", "rtl", "center_out", "two_ended"],
+                   default="center_out",
+                   help="For --traversal backbone: order in which the lowest-power "
+                   "frequency backbone row is solved before launching each upward "
+                   "power column from it.")
+    p.add_argument("--predictor",
+                   choices=["copy", "power_secant", "freq_secant", "corner",
+                            "plane", "portfolio"],
+                   default="power_secant",
+                   help="Inter-cell initial-guess predictor for the traversal "
+                   "orchestrator (ignored by --traversal column, which uses "
+                   "--inproc-fold-predictor). 'portfolio' ranks several by target "
+                   "residual.")
+    p.add_argument("--portfolio-policy", choices=["best", "ranked"], default="best",
+                   help="--predictor portfolio: 'best' tries only the lowest-residual "
+                   "candidate; 'ranked' tries candidates in ascending-residual order "
+                   "until one converges.")
+    p.add_argument("--recovery",
+                   choices=["none", "reseed", "alt_parent", "bridge", "ladder"],
+                   default="reseed",
+                   help="Failed-cell recovery for the traversal orchestrator. "
+                   "'none' keeps the initial failure; 'reseed' (legacy) does a "
+                   "fresh linear_phasor+adaptive solve; "
+                   "'alt_parent' first retries from power/freq/diagonal parents; "
+                   "'bridge' continues from the best parent along (P,f); 'ladder' "
+                   "residual-ranks parents then bridges from the best.")
+    p.add_argument("--bridge-steps", type=int, default=4,
+                   help="Sub-steps for bridge continuation (recovery=bridge/ladder "
+                   "and --fold-policy bridge_gate/combined).")
+    p.add_argument("--bridge-mode",
+                   choices=["diagonal", "freq_first", "power_first", "adaptive"],
+                   default="adaptive",
+                   help="Path from parent (P0,f0) to target (P1,f1) for bridge "
+                   "continuation.")
+    p.add_argument("--fold-policy",
+                   choices=["patience", "cross_axis", "bridge_gate", "combined", "arclength"],
+                   default="patience",
+                   help="When a failed cell counts toward the per-column fold "
+                   "short-circuit. 'patience' (legacy) counts every fail; the "
+                   "others require cross-axis / bridge / full recovery to also fail "
+                   "first; 'arclength' rounds the fold with pseudo-arclength.")
+    p.add_argument("--inproc-continuation",
+                   choices=["fixed", "adaptive_copy", "adaptive_secant",
+                            "adaptive_tangent", "affine", "ptc", "arclength"],
+                   default="adaptive_secant",
+                   help="Intra-cell continuation for seed/cold cells (solver.py). "
+                   "fixed is the 20-step reference; adaptive_copy is natural-parameter "
+                   "continuation without prediction; adaptive_secant (default) uses "
+                   "the previous two lambda states; adaptive_tangent uses the exact "
+                   "lambda tangent; affine sizes steps from corrector contraction; "
+                   "ptc is pseudo-transient; arclength augments state and lambda.")
+    p.add_argument("--inproc-arclength-ds", type=float, default=0.1)
+    p.add_argument("--inproc-arclength-max-steps", type=int, default=80)
+    p.add_argument("--fold-follow", action="store_true",
+                   help="Diagnostic: trace the fold power vs frequency with "
+                   "pseudo-arclength and write fold_curve.csv; no gain map is run.")
     p.add_argument("--outdir", type=Path, default=ROOT / "outputs" / "exp10_pump_map_warmstart")
     p.add_argument("--circuit-dir", "--ipm-dir", dest="circuit_dir", type=Path, default=ROOT / "outputs" / "ipm_python_design")
 
@@ -1319,20 +2078,29 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                    help="Run frequency columns in separate worker processes of this "
                    "many columns each, then merge. 10 is the standard memory-safe "
                    "map behavior; 0 disables chunking.")
+    p.add_argument(
+        "--local-traversal-chunks",
+        action="store_true",
+        help="Allow non-column traversals to run as independent frequency-local "
+        "chunks. This bounds native solver memory by restarting the process per "
+        "chunk, at the cost of not sharing warm states across chunk boundaries.",
+    )
     p.add_argument("--resume-chunks", action=argparse.BooleanOptionalAction, default=True,
                    help="With --frequency-chunk-size, skip chunk workers whose "
                    "map_points.csv/map_summary.json already look complete.")
     p.add_argument("--chunk-worker", action="store_true", help=argparse.SUPPRESS)
     p.add_argument("--frequency-index-start", type=int, default=None, help=argparse.SUPPRESS)
     p.add_argument("--frequency-index-stop", type=int, default=None, help=argparse.SUPPRESS)
-    # External power window. With 35 dB attenuation + 50 ohm this spans physical
-    # pump ~0.5..1.6 x median Ic; after the JC 2x scale the JTWPA gain ridge runs
-    # from onset (~0 dB) up to ~12 dB near JC's 1.5 Ic operating point.
+    # External power window. With the ~35 dB pump-band line loss + 50 ohm this
+    # spans physical pump ~0.5..1.6 x median Ic; after the JC 2x scale the JTWPA
+    # gain ridge runs from onset (~0 dB) up to ~12 dB near JC's 1.5 Ic point.
     p.add_argument("--pump-power-min-dbm", type=float, default=-30.0)
     p.add_argument("--pump-power-max-dbm", type=float, default=-20.0)
     p.add_argument("--pump-freq-min-ghz", type=float, default=7.0)
     p.add_argument("--pump-freq-max-ghz", type=float, default=8.0)
-    p.add_argument("--attenuation-db", type=float, default=35.0)
+    p.add_argument("--attenuation-db", type=float, default=None,
+                   help="Flat line attenuation (dB). If omitted, use the measured "
+                   "loss_A10 frequency-dependent model c + a*sqrt(f) + b*f.")
     p.add_argument("--z0-ohm", type=float, default=50.0)
     # Signal readout frequency. Default: track the pump at a fixed detuning
     # ws = wp - 100 MHz per cell (the physically correct choice for a map that
@@ -1440,7 +2208,9 @@ def build_points(args: argparse.Namespace) -> tuple[list[GridPoint], np.ndarray,
     for i, power_dbm in enumerate(powers):
         for j, freq in enumerate(freqs):
             current = dbm_to_peak_current_a(
-                float(power_dbm), attenuation_db=args.attenuation_db, z0_ohm=args.z0_ohm
+                float(power_dbm),
+                attenuation_db=attenuation_db_for(float(freq), args),
+                z0_ohm=args.z0_ohm,
             )
             points.append(GridPoint(index, i, j, float(power_dbm), float(freq), current))
             index += 1
@@ -1531,9 +2301,10 @@ def chunk_worker_command(
     n_frequency: int,
     pump_freq_min_ghz: float,
     pump_freq_max_ghz: float,
+    overwrite: bool = False,
 ) -> list[str]:
     """Build the self-invocation used for one frequency-column chunk."""
-    return [
+    command = [
         sys.executable,
         str(Path(__file__).resolve()),
         *_strip_chunk_driver_args(base_argv),
@@ -1548,8 +2319,10 @@ def chunk_worker_command(
         f"{float(pump_freq_max_ghz):.12g}",
         "--outdir",
         str(outdir),
-        "--overwrite",
     ]
+    if overwrite:
+        command.append("--overwrite")
+    return command
 
 
 def _expected_chunk_row_count(args: argparse.Namespace, start_col: int, stop_col: int) -> int:
@@ -1691,6 +2464,7 @@ def run_frequency_chunks(
             n_frequency=stop_col - start_col,
             pump_freq_min_ghz=fp0,
             pump_freq_max_ghz=fp1,
+            overwrite="--overwrite" in raw_argv,
         )
         log_path = outdir / f"chunk_{chunk_index:03d}.log"
         with log_path.open("w", encoding="utf-8") as log:
@@ -1729,6 +2503,23 @@ def main() -> int:
     if args.log_factor_backend:
         os.environ["TWPA_PARDISO_LOG"] = "1"
     outdir = args.outdir
+
+    # Frequency-crossing traversals share one in-process solved-state store, so
+    # they cannot be split across chunk worker processes. Force a single process
+    # and widen the per-frequency Schur cache so a backbone row does not thrash.
+    if (
+        args.traversal != "column"
+        and not args.chunk_worker
+        and not args.local_traversal_chunks
+    ):
+        if int(args.frequency_chunk_size) > 0:
+            print(f"traversal={args.traversal}: forcing --frequency-chunk-size 0 "
+                  "(single process required for cross-column warm state)", flush=True)
+            args.frequency_chunk_size = 0
+        # NB: keep the Schur cache small (bounded RAM). A freq-crossing backbone
+        # row rebuilds the per-frequency partition as it sweeps, but caching all
+        # n_frequency partitions would OOM (~16 GB at 50 columns).
+
     use_chunk_driver = (
         not args.chunk_worker
         and args.executor == "inprocess"
@@ -1740,6 +2531,14 @@ def main() -> int:
     outdir.mkdir(parents=True, exist_ok=True)
 
     points, powers, freqs = build_points(args)
+
+    if args.fold_follow:
+        if args.executor != "inprocess":
+            raise SystemExit("--fold-follow requires --executor inprocess")
+        engine = InProcessEngine(args)
+        run_fold_follow(engine, freqs, outdir, args)
+        return 0
+
     if args.frequency_index_start is not None or args.frequency_index_stop is not None:
         start_col = 0 if args.frequency_index_start is None else int(args.frequency_index_start)
         stop_col = args.n_frequency if args.frequency_index_stop is None else int(args.frequency_index_stop)
@@ -1765,9 +2564,14 @@ def main() -> int:
         engine = InProcessEngine(args) if args.executor == "inprocess" else None
         cold_pass = (lambda pts, d: run_cold_pass_inprocess(pts, d, engine)) if engine else \
             (lambda pts, d: run_cold_pass(pts, d, args))
-        warm_pass = (lambda pts, d: run_warm_pass_inprocess(pts, d, engine, fail_fast=args.inproc_fail_fast)) if engine else \
-            (lambda pts, d: run_warm_pass(pts, d, args))
-        print(f"executor={args.executor}", flush=True)
+        use_traversal_orchestrator = uses_traversal_orchestrator(args)
+        if engine and use_traversal_orchestrator:
+            warm_pass = lambda pts, d: run_map_traversal(pts, d, engine)
+        elif engine:
+            warm_pass = lambda pts, d: run_warm_pass_inprocess(pts, d, engine, fail_fast=args.inproc_fail_fast)
+        else:
+            warm_pass = lambda pts, d: run_warm_pass(pts, d, args)
+        print(f"executor={args.executor} traversal={args.traversal}", flush=True)
 
         if args.mode in ("cold", "both"):
             cold_rows = cold_pass(points, outdir / "cold")

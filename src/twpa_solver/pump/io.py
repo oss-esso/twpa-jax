@@ -44,10 +44,13 @@ def write_results(
         metadata.get("pump_modes", list(range(1, X.shape[0] + 1))),
         dtype=np.int64,
     )
-    np.savez(
+    # float32 halves the file; the pump phasors are ~1e-16 in magnitude so
+    # float32's ~1e-7 relative precision is far below any downstream tolerance
+    # (gain-map RMS targets ~1e-3 dB). savez_compressed then trims a little more.
+    np.savez_compressed(
         d / "pump_solution.npz",
-        X_real=X.real,
-        X_imag=X.imag,
+        X_real=X.real.astype(np.float32),
+        X_imag=X.imag.astype(np.float32),
         harmonics=pump_modes,
         pump_modes=pump_modes,
     )

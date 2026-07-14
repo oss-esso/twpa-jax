@@ -1,0 +1,435 @@
+\documentclass[11pt]{article}
+
+% ---------------------------------------------------------------------------
+% Pump / gain-map continuation methods: current scheme and alternatives.
+% Standalone; compiles with a stock TeX Live (pdflatex).
+% ---------------------------------------------------------------------------
+
+\usepackage[a4paper,margin=1in]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{enumitem}
+\usepackage[hidelinks]{hyperref}
+
+\newcommand{\code}[1]{\texttt{\small #1}}
+\newcommand{\Res}{\mathbf{R}}
+\newcommand{\Xv}{\mathbf{X}}
+\newcommand{\Jac}{\mathbf{J}}
+
+\lstset{
+  basicstyle=\ttfamily\footnotesize,
+  columns=fullflexible,
+  breaklines=true,
+  frame=single,
+  framesep=4pt,
+  backgroundcolor=\color{black!3},
+  keywordstyle=\color{blue!60!black},
+  commentstyle=\color{green!40!black},
+}
+
+\title{Traversing the Pump/Gain Map:\\
+Continuation and Warm-Start Strategies in \code{twpa\_solver}\\
+\large Current Scheme and a Survey of Alternatives}
+\author{TWPA solver --- \code{twpa\_jax}}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+The gain map produced by \code{scripts/run\_gain\_map.py} requires a converged
+harmonic-balance (HB) pump solution at every cell of a two-dimensional
+(pump-power $\times$ pump-frequency) grid. Because each cell is a stiff
+nonlinear root-find, the map is not solved cell-by-cell from scratch; instead
+the solver \emph{continues} solutions from one operating point to the next.
+This report documents exactly which continuation and warm-start strategies the
+code uses today, locates each in the source, and then surveys more sophisticated
+alternatives from the numerical-continuation literature (pseudo-arclength,
+tangent predictors, deflated continuation, pseudo-transient continuation, and
+2-D map-traversal schemes), with references. It is descriptive: it maps the
+current design and catalogues options, and does not prescribe a change.
+\end{abstract}
+
+\tableofcontents
+
+% ===========================================================================
+\section{Problem setup}
+% ===========================================================================
+
+\subsection{The harmonic-balance residual}
+Each map cell fixes a pump frequency $f_p$ (angular $\omega_p = 2\pi f_p$) and a
+pump drive amplitude $I_p$. The pump state is the vector of complex harmonic
+coefficients $\Xv$ of the node fluxes on the mode set
+$\{k\,\omega_p\}$. The steady state solves a nonlinear algebraic residual
+\begin{equation}
+  \Res(\Xv;\ \lambda) \;=\; 0,
+  \qquad
+  \Res(\Xv;\lambda) \;=\; \mathcal{L}(\omega_p)\,\Xv \;+\; \mathcal{N}(\Xv) \;-\; \lambda\, \mathbf{S},
+  \label{eq:residual}
+\end{equation}
+where $\mathcal{L}(\omega_p)$ is the frequency-domain linear block, $\mathcal{N}$
+the Josephson (cosine) nonlinearity evaluated through the alias-free time
+transform, $\mathbf{S}$ the pump source phasor, and
+$\lambda \in [0,1]$ a \emph{scalar homotopy / continuation parameter} that
+scales the drive. At $\lambda = 1$ the physical problem is recovered; at
+$\lambda \to 0$ the problem is linear and trivially solvable. The source enters
+\emph{linearly} in $\lambda$ (Eq.~\ref{eq:residual}), which is the property the
+whole continuation machinery exploits (\code{src/twpa\_solver/pump/solver.py}).
+
+\subsection{Two nested traversal problems}
+There are two distinct ``traversal'' questions, and the code answers them with
+different mechanisms:
+\begin{enumerate}[leftmargin=*]
+  \item \textbf{Intra-cell (parameter homotopy).} How do we get \emph{one} cell
+    from the easy linear regime up to full drive $\lambda=1$? --- answered by
+    \emph{continuation in $\lambda$} (\S\ref{sec:intracell}).
+  \item \textbf{Inter-cell (map traversal).} How do we use a \emph{neighbouring}
+    converged cell to cheapen the next cell? --- answered by \emph{warm-starting}
+    plus an extrapolation predictor along the power axis (\S\ref{sec:intercell}).
+\end{enumerate}
+
+% ===========================================================================
+\section{What we do now}
+% ===========================================================================
+
+\subsection{Intra-cell: natural-parameter continuation in the pump amplitude}
+\label{sec:intracell}
+
+The continuation parameter is the pump drive amplitude itself (via $\lambda$),
+i.e. \emph{natural-parameter continuation}. Two modes exist.
+
+\paragraph{Fixed-step continuation (the ``cold'' reference).}
+\code{solve\_continuation} (\code{solver.py:402}) walks a fixed ladder
+$\lambda \in \{1/N, 2/N, \dots, 1\}$ with $N=20$ steps
+(\code{--continuation-steps}, default 20). At each step it runs one
+Newton--Krylov solve seeded from the previous converged step. If any step fails
+it returns immediately (no re-convergence is attempted). This is the trusted,
+deterministic path used to validate everything else and is selected by
+\code{pump\_flags\_cold} (\code{run\_gain\_map.py:252}).
+
+\paragraph{Adaptive-step continuation (the ``seed'' path).}
+\code{solve\_adaptive\_continuation} (\code{solver.py:463}) replaces the fixed
+ladder with a step controller: start at \code{--adaptive-initial-step}, on a
+converged step grow the step by $\times 1.5$, on a failed step shrink by
+$\times 0.5$; if the step falls below \code{--adaptive-min-step} it falls back to
+a fixed 20-step run. This is the first-point path for each frequency column in
+the warm pass, seeded from the linear phasor guess (below).
+
+\paragraph{The Newton--Krylov corrector.}
+Every continuation step calls \code{solve\_one} (\code{solver.py:101}): a damped
+Newton iteration whose linear systems are solved matrix-free by GMRES against
+the true Jacobian $\Jac = \partial\Res/\partial\Xv$, preconditioned by one of
+several factorizations (\code{--inproc-preconditioner}). Cost-control knobs live
+here: a stall detector (\code{stall\_ratio}, \code{stall\_patience}) and a
+wall-clock \code{solve\_deadline\_s} abort stiff \emph{over-fold} solves, and
+modified-Newton preconditioner reuse (\code{precond\_reuse}) amortizes the LU.
+
+\paragraph{Predictors inside continuation.}
+At each $\lambda$ step the initial guess is, by default, simply the previous
+converged state (a \emph{trivial / zeroth-order predictor}). Optionally a
+\emph{secant predictor} extrapolates linearly in $\lambda$ from the last two
+converged states (\code{solver.py:422} and \code{:501}):
+\begin{equation}
+  \Xv_{\text{guess}} \;=\; \Xv_{\text{prev}}
+    \;+\; \beta\,\bigl(\Xv_{\text{prev}} - \Xv_{\text{prevprev}}\bigr),
+  \qquad
+  \beta = \frac{\lambda - \lambda_{\text{prev}}}
+               {\lambda_{\text{prev}} - \lambda_{\text{prevprev}}} .
+  \label{eq:secant}
+\end{equation}
+
+\paragraph{The linear phasor seed (homotopy start).}
+\code{build\_linear\_phasor\_seed} (\code{seeds.py:46}) solves the
+\emph{first-harmonic linear block only}, $\mathcal{L}_1(\omega_p)\,\Xv_1 =
+\mathbf{S}_1$, by GMRES, giving a physically-motivated non-zero start for the
+adaptive path. This is the $\lambda \to 0$ analytic solution used as the
+continuation origin (as opposed to the all-zeros cold start).
+
+\subsection{Inter-cell: warm-starting across the map}
+\label{sec:intercell}
+
+The map is \emph{not} solved cell-independently. The production path is the
+in-process warm pass \code{run\_warm\_pass\_inprocess}
+(\code{run\_gain\_map.py:849}), which traverses the grid as follows:
+
+\begin{enumerate}[leftmargin=*]
+  \item \textbf{Column-major, increasing power.} Cells are grouped by frequency
+    column (\code{by\_col}); each column is sorted by ascending pump power and
+    traversed low$\to$high (\code{run\_gain\_map.py:871--880}).
+  \item \textbf{First cell of a column: seed.} Solved from the
+    \code{linear\_phasor} seed with adaptive continuation (mode \code{"seed"}).
+  \item \textbf{Subsequent cells: warm start.} Each higher-power cell is solved
+    by a \emph{single full-scale Newton solve at $\lambda=1$},
+    \code{solve\_direct} (\code{solver.py:383}), initialised from the previous
+    converged cell's HB state --- \emph{no} intra-cell continuation ladder. This
+    is the main speed-up: one Newton solve instead of $\sim 20$.
+  \item \textbf{Secant predictor along the power axis.} Between cells the guess
+    is extrapolated from the last two converged solutions along the
+    pump-\emph{current} axis, \code{secant\_guess} (\code{run\_gain\_map.py:785},
+    default \code{--inproc-fold-predictor secant}). Structurally identical to
+    Eq.~\ref{eq:secant} but with the pump current as the abscissa. A bad
+    extrapolation is caught and retried from the plain warm start
+    (\code{:901}).
+  \item \textbf{Recovery ladder.} A failed warm solve (non fail-fast) retries as
+    a full \code{"seed"} adaptive solve (\code{:906}); the subprocess path adds a
+    one-shot reseed (\code{run\_gain\_map.py:424}).
+\end{enumerate}
+
+\paragraph{Where the traversal stops: the harmonic-balance fold.}
+As pump power rises a column reaches a \emph{turning point} (fold) of
+Eq.~\ref{eq:residual}: above it the branch has no nearby solution and Newton
+cannot re-converge. The code does not attempt to pass this fold. Instead it
+detects repeated failures and culls the rest of the column:
+\code{--fold-skip-patience} (default 2) marks all higher-power cells
+\code{SKIP\_PAST\_FOLD} (gain \code{NaN}) without solving
+(\code{past\_fold\_skip\_row}, \code{run\_gain\_map.py:826}). This is a known
+sharp edge: at broadband operating points the true solution can need
+$\sim$15 Newton iterations, and a too-tight Newton cap plus
+\code{fold-skip-patience 2} can \emph{false-trip} and skip the genuine broadband
+region before the real fold.\footnote{Documented internally: the false-trip
+culls the 2c broadband operating point; mitigations are looser Newton caps and
+higher fold-skip patience.}
+
+\paragraph{One important structural fact.}
+Warm-starting is \emph{purely one-dimensional}: it chains \emph{within} a
+frequency column along the power axis. Each new frequency column is restarted
+from the linear phasor seed --- there is \emph{no} warm start from the adjacent
+converged \emph{column}. The 2-D grid is thus traversed as a set of independent
+1-D sweeps. This is the single biggest lever the alternatives in
+\S\ref{sec:alternatives} act on.
+
+\subsection{Code map}
+\begin{center}
+\small
+\begin{tabular}{@{}p{4.6cm}p{4.2cm}p{5.2cm}@{}}
+\toprule
+\textbf{Concept} & \textbf{Location} & \textbf{Role} \\
+\midrule
+Fixed-step continuation & \code{solver.py:402} & cold reference, $N{=}20$ $\lambda$ ladder \\
+Adaptive-step continuation & \code{solver.py:463} & step grow/shrink + fixed fallback \\
+Single warm Newton solve & \code{solver.py:383} & inter-cell warm start at $\lambda{=}1$ \\
+Newton--Krylov corrector & \code{solver.py:101} & GMRES on true Jacobian, precond. \\
+Secant predictor (in $\lambda$) & \code{solver.py:422,\,501} & 1st-order extrapolation in continuation \\
+Linear phasor seed & \code{seeds.py:46} & homotopy start $\mathcal{L}_1 \Xv_1 = \mathbf{S}_1$ \\
+Warm pass (2-D traversal) & \code{run\_gain\_map.py:849} & column-major, low$\to$high power \\
+Secant predictor (in $I_p$) & \code{run\_gain\_map.py:785} & inter-cell power-axis extrapolation \\
+Fold short-circuit & \code{run\_gain\_map.py:826} & \code{SKIP\_PAST\_FOLD} culling \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+% ===========================================================================
+\section{Why the fold is the crux}
+% ===========================================================================
+Natural-parameter continuation parameterizes the solution branch by the physical
+parameter (here pump amplitude). At a fold the branch is \emph{vertical} in that
+parameter: $\partial \Xv / \partial \lambda \to \infty$ and the Jacobian
+$\Jac$ becomes singular. Any method that insists on advancing the parameter
+monotonically \emph{must} stall there --- which is exactly why the current code
+treats the fold as a hard wall and culls beyond it. The literature's central
+message is that this wall is an artefact of the \emph{parameterization}, not of
+the physics: reparameterizing the branch (by arclength) lets a solver round the
+fold and continue onto the upper branch \cite{Keller1977,AllgowerGeorg2003}.
+Whether the upper (post-fold) branch is physically wanted for a TWPA gain map is
+a separate design question; but even if only the lower branch matters, a
+fold-aware method locates the fold precisely instead of bracketing it with a
+heuristic patience counter.
+
+% ===========================================================================
+\section{Alternatives from the literature}
+\label{sec:alternatives}
+% ===========================================================================
+
+\subsection{Pseudo-arclength continuation (round the fold)}
+Instead of fixing $\lambda$ and solving for $\Xv$, treat \emph{both} $\Xv$ and
+$\lambda$ as unknowns and add one scalar constraint that advances a
+\emph{pseudo-arclength} $s$ along the branch \cite{Keller1977}:
+\begin{equation}
+  \begin{cases}
+    \Res(\Xv,\lambda) = 0,\\[2pt]
+    \dot{\Xv}_0^{\!\top}(\Xv - \Xv_0) + \dot{\lambda}_0(\lambda - \lambda_0) - \Delta s = 0,
+  \end{cases}
+  \label{eq:pal}
+\end{equation}
+where $(\dot{\Xv}_0,\dot{\lambda}_0)$ is the unit tangent at the current point.
+The augmented $(N{+}1)\times(N{+}1)$ system stays non-singular \emph{through} the
+fold because the branch is never vertical in $s$. This is the standard way HB
+frequency-response and force-response curves are traced past turning points in
+mechanics and RF/microwave engineering
+\cite{ArclengthHB_Rotor,AllgowerGeorg2003}. Cost: the augmented system and the
+tangent solve; benefit: no fold heuristic, and the fold power is found exactly.
+
+\subsection{Tangent (Euler) predictor vs.\ the current secant}
+The code's predictors are trivial (copy) and secant
+(Eq.~\ref{eq:secant}). The next step up is the \emph{tangent / Euler predictor}:
+solve $\Jac\,\dot{\Xv} = \partial\Res/\partial\lambda$ once to get the true
+branch tangent and predict $\Xv_{\text{guess}} = \Xv_0 + \Delta\lambda\,
+\dot{\Xv}_0$ \cite{AllgowerGeorg2003}. It is first-order-accurate like the
+secant but uses derivative information rather than a finite difference of past
+points, so it is robust when the previous two points are far apart or the branch
+curves sharply --- precisely the near-fold regime. \code{BifurcationKit.jl}'s
+predictor page is a compact catalogue of secant/tangent/Bordered/polynomial
+predictors and their trade-offs \cite{BifurcationKitPred}.
+
+\subsection{Affine-invariant adaptive step control}
+The current adaptive controller uses fixed $\times1.5/\times0.5$ heuristics.
+Deuflhard's affine-invariant Newton theory gives a principled step-length and
+damping controller driven by the observed Newton contraction, with convergence
+monitors that resize the continuation step from the corrector's behaviour rather
+than a fixed ratio \cite{Deuflhard2004}. This tends to take large steps on the
+flat part of a column and automatically shorten them approaching the fold.
+
+\subsection{Pseudo-transient continuation ($\Psi$tc)}
+For a single stiff cell, pseudo-transient continuation embeds the root-find in a
+fake time march, $\frac{\Xv^{n+1}-\Xv^{n}}{\delta_n} + \Res(\Xv^{n+1}) = 0$,
+growing the pseudo-timestep $\delta_n$ (SER rule) as the residual falls, so early
+iterations are globally stable and late iterations recover Newton's quadratic
+rate \cite{KelleyKeyes1998,Kelley2003}. This is an alternative to the
+$\lambda$-ladder for getting a hard cell to converge from a poor guess, and it
+degrades gracefully near the fold (it slows rather than diverges), which could
+replace the stall/deadline aborts.
+
+\subsection{2-D map-traversal strategies (the biggest lever)}
+Today the map is a bundle of independent 1-D power sweeps
+(\S\ref{sec:intercell}); the frequency axis carries \emph{no} warm information.
+Alternatives that use the second dimension:
+\begin{itemize}[leftmargin=*]
+  \item \textbf{Nearest-neighbour seeding on the grid.} Seed each new cell from
+    the \emph{best already-converged neighbour} in \emph{either} axis (power or
+    frequency), not only the cell below it. A converged cell in the adjacent
+    frequency column is often a far better guess than a cold linear-phasor seed
+    at the bottom of a new column.
+  \item \textbf{Spanning-tree / flood-fill traversal.} Treat converged cells as a
+    growing front and always solve the frontier cell whose neighbour guess is
+    cheapest (a Dijkstra/Prim-like order over the grid), rather than a fixed
+    column-major order. This maximizes the number of cells reached by a single
+    warm Newton solve.
+  \item \textbf{Boustrophedon (serpentine) ordering.} Traverse columns in
+    alternating power direction so the end of one column is adjacent (in power)
+    to the start of the next, enabling a warm hand-off \emph{between} columns
+    instead of a cold restart.
+  \item \textbf{Two-parameter / manifold continuation.} Fold detection can be
+    promoted to \emph{fold-following}: continue the fold curve itself in the
+    $(f_p, P)$ plane as a codimension-1 manifold, mapping the exact boundary of
+    the solvable region in one sweep instead of re-detecting it per column
+    \cite{DhoogeMatcont2003,AllgowerGeorg2003}.
+\end{itemize}
+These change only the \emph{order} of solves and the \emph{source} of each
+initial guess; the per-cell physics and corrector are untouched, so they compose
+with everything in \S\ref{sec:intracell}.
+
+\subsection{Deflated continuation (find multiple branches)}
+If both the lower and upper (post-fold) HB branches --- or genuinely distinct
+coexisting steady states --- are of interest, \emph{deflated continuation}
+systematically discovers them. After finding one solution, the residual is
+multiplied by a deflation operator that makes Newton \emph{repelled} from the
+known root, so re-solving from the same guess converges to a \emph{different}
+solution; sweeping the parameter then traces disconnected branches without a
+priori tangent information \cite{FarrellBirkissonFunke2015}. This is the tool of
+choice when a map cell may have more than one physical steady state.
+
+\subsection{Anderson / vector-extrapolation acceleration}
+Orthogonal to the above: Anderson acceleration mixes several previous residuals
+to accelerate the fixed-point/corrector iteration, often cutting iteration counts
+on mildly nonlinear cells for negligible cost and memory
+\cite{WalkerNi2011}. It can wrap the existing Newton--Krylov corrector rather
+than replace it.
+
+\subsection{Domain context: HB continuation is standard practice}
+Arclength/pseudo-arclength continuation wrapped around a harmonic-balance
+residual is the established way to compute nonlinear frequency- and
+amplitude-response curves with turning points, both in structural dynamics
+\cite{ArclengthHB_Rotor} and in nonlinear microwave/RF circuit simulators;
+JTWPA-specific modelling increasingly leans on commercial and custom HB solvers
+for exactly the pump-depletion / multi-harmonic regime this map probes
+\cite{JTWPA_CircuitSim2022,JTWPA_EMcosim2024}. The methods above are therefore
+well-trodden rather than exotic.
+
+% ===========================================================================
+\section{Summary comparison}
+% ===========================================================================
+\begin{center}
+\small
+\begin{tabular}{@{}p{3.5cm}p{2.4cm}p{4.0cm}p{4.3cm}@{}}
+\toprule
+\textbf{Method} & \textbf{Scope} & \textbf{Passes the fold?} & \textbf{Relation to current code} \\
+\midrule
+Fixed / adaptive $\lambda$ continuation & intra-cell & No (stalls at fold) & \emph{in use} \\
+Secant predictor & intra/inter-cell & No & \emph{in use} \\
+Warm-start single Newton & inter-cell & No & \emph{in use} \\
+Tangent (Euler) predictor & intra/inter & No, but robust near it & drop-in predictor upgrade \\
+Pseudo-arclength & intra-cell & \textbf{Yes} & augments residual with Eq.~\ref{eq:pal} \\
+Affine-invariant step control & intra-cell & sharper approach & replaces $\times1.5/\times0.5$ \\
+Pseudo-transient ($\Psi$tc) & per-cell solve & graceful slow-down & alt.\ to $\lambda$-ladder \\
+Neighbour / tree traversal & inter-cell (2-D) & n/a (ordering) & uses frequency axis for warm starts \\
+Fold-following & map-level & maps fold curve & replaces patience heuristic \\
+Deflated continuation & per-cell & finds upper branch & discovers extra solutions \\
+Anderson acceleration & corrector & n/a & wraps Newton--Krylov \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+% ===========================================================================
+\begin{thebibliography}{99}
+% ===========================================================================
+\bibitem{Keller1977} H.~B.~Keller,
+  \emph{Numerical solution of bifurcation and nonlinear eigenvalue problems},
+  in \textit{Applications of Bifurcation Theory}, Academic Press, 1977,
+  pp.~359--384. (Origin of pseudo-arclength continuation.)
+
+\bibitem{AllgowerGeorg2003} E.~L.~Allgower and K.~Georg,
+  \emph{Introduction to Numerical Continuation Methods}, Classics in Applied
+  Mathematics 45, SIAM, 2003.
+  \url{https://epubs.siam.org/doi/book/10.1137/1.9780898719154}
+
+\bibitem{Deuflhard2004} P.~Deuflhard,
+  \emph{Newton Methods for Nonlinear Problems: Affine Invariance and Adaptive
+  Algorithms}, Springer Series in Computational Mathematics 35, 2004.
+
+\bibitem{KelleyKeyes1998} C.~T.~Kelley and D.~E.~Keyes,
+  \emph{Convergence analysis of pseudo-transient continuation},
+  SIAM J. Numer. Anal. \textbf{35}(2):508--523, 1998.
+
+\bibitem{Kelley2003} C.~T.~Kelley,
+  \emph{Solving Nonlinear Equations with Newton's Method}, SIAM, 2003.
+
+\bibitem{FarrellBirkissonFunke2015} P.~E.~Farrell, {\'A}.~Birkisson, and
+  S.~W.~Funke, \emph{Deflation techniques for finding distinct solutions of
+  nonlinear partial differential equations}, SIAM J. Sci. Comput.
+  \textbf{37}(4):A2026--A2045, 2015.
+  \url{https://epubs.siam.org/doi/10.1137/140984798}
+
+\bibitem{WalkerNi2011} H.~F.~Walker and P.~Ni,
+  \emph{Anderson acceleration for fixed-point iterations},
+  SIAM J. Numer. Anal. \textbf{49}(4):1715--1735, 2011.
+
+\bibitem{DhoogeMatcont2003} A.~Dhooge, W.~Govaerts, and Yu.~A.~Kuznetsov,
+  \emph{MATCONT: A MATLAB package for numerical bifurcation analysis of ODEs},
+  ACM Trans. Math. Software \textbf{29}(2):141--164, 2003.
+
+\bibitem{BifurcationKitPred} R.~Veltz et al.,
+  \emph{BifurcationKit.jl --- Predictors / correctors}, documentation.
+  \url{https://bifurcationkit.github.io/BifurcationKitDocs.jl/dev/Predictors/}
+
+\bibitem{ArclengthHB_Rotor} P.~Sundararajan and S.~T.~Noah,
+  \emph{Harmonic balance method with arc-length continuation in rotor/stator
+  contact problems}, J. Sound and Vibration / ASME (see review in
+  \textit{Experimental continuation in nonlinear dynamics}, arXiv:2408.00138).
+  \url{https://arxiv.org/abs/2408.00138}
+
+\bibitem{JTWPA_CircuitSim2022} K.~Peng et al.,
+  \emph{Simulating the behaviour of travelling-wave superconducting parametric
+  amplifiers using a commercial circuit simulator}, Supercond. Sci. Technol.
+  \textbf{35}, 2022.
+  \url{https://iopscience.iop.org/article/10.1088/1361-6668/ac850b}
+
+\bibitem{JTWPA_EMcosim2024}
+  \emph{Modeling Josephson traveling-wave parametric amplifiers with
+  electromagnetic and circuit co-simulation}, arXiv:2509.07807.
+  \url{https://arxiv.org/abs/2509.07807}
+\end{thebibliography}
+
+\end{document}

@@ -15,6 +15,7 @@ import pandas as pd
 
 from twpa_solver.plotting.candidates import (
     compute_all_fit_metrics,
+    gain_ranked_candidates,
     select_candidates,
     write_candidate_tables,
 )
@@ -66,23 +67,23 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--ipm-dir", type=Path, default=None,
                         help="Circuit dir; enables candidate S21 sweeps for a "
                              "--no-signal-spectrum map. Inferred if omitted.")
-    # Sweep is centered on the cell's own signal ws = fp - detuning (where the
-    # map's gain lives) and defaults to a fine grid so near-fold needle peaks
-    # are resolved for the -3 dB bandwidth measurement.
-    parser.add_argument("--sweep-half-span-ghz", type=float, default=0.5,
-                        help="Half-width of the S21 sweep around ws (GHz); "
+    # Sweep is centered on the pump frequency fp with a fixed +-half-span so every
+    # candidate shares the same window width regardless of fp (default fp +-3 GHz).
+    parser.add_argument("--sweep-half-span-ghz", type=float, default=3.0,
+                        help="Half-width of the S21 sweep around fp (GHz); "
                              "ignored if --sweep-start-ghz/--sweep-stop-ghz are set.")
     parser.add_argument("--sweep-start-ghz", type=float, default=None,
                         help="Absolute S21 sweep start (GHz); overrides the "
-                             "ws-centred window when given with --sweep-stop-ghz.")
+                             "fp-centred window when given with --sweep-stop-ghz.")
     parser.add_argument("--sweep-stop-ghz", type=float, default=None,
                         help="Absolute S21 sweep stop (GHz); overrides the "
-                             "ws-centred window when given with --sweep-start-ghz.")
-    parser.add_argument("--sweep-points", type=int, default=501,
-                        help="Sweep points (default 501 over +-0.5 GHz = 2 MHz).")
-    parser.add_argument("--sweep-smooth-frac", type=float, default=0.03,
+                             "fp-centred window when given with --sweep-start-ghz.")
+    parser.add_argument("--sweep-points", type=int, default=1251,
+                        help="Sweep points (default 1251 over +-3 GHz ~ 5 MHz).")
+    parser.add_argument("--sweep-smooth-frac", type=float, default=0.35,
                         help="Savitzky-Golay window as a fraction of the sweep "
-                             "length for the -3 dB band/GBP fit (0 = raw sweep).")
+                             "length for the -3 dB band/GBP fit; large by default "
+                             "so the band tracks the broadband envelope (0 = raw).")
     parser.add_argument("--sweep-bridge-ghz", type=float, default=0.3,
                         help="Bridge a sub-threshold gap up to this width (GHz) -- "
                              "the degenerate notch at fs~fp -- to also report a "
@@ -124,30 +125,18 @@ def _candidate_filename(label: str) -> str:
 
 
 def _gain_candidates(points: pd.DataFrame, *, top_k: int, min_gain_db: float) -> pd.DataFrame:
-    """Top-K PASS cells by trailing gain (no spectrum fit needed)."""
-    df = points.copy()
-    df["gain_db_num"] = pd.to_numeric(df.get("gain_db"), errors="coerce")
-    passed = df["status"].map(lambda s: str(s).upper().startswith("PASS"))
-    ranked = df[passed & np.isfinite(df["gain_db_num"])].sort_values(
-        "gain_db_num", ascending=False
-    )
-    strong = ranked[ranked["gain_db_num"] >= float(min_gain_db)]
-    chosen = strong if not strong.empty else ranked
-    return chosen.head(int(top_k))
+    """Top-K PASS cells by trailing gain (no spectrum fit needed).
 
-
-def _signal_center_ghz(row: pd.Series) -> float:
-    """Sweep center = the cell's own trailing signal ws (where the gain lives)."""
-    s = pd.to_numeric(pd.Series([row.get("signal_ghz")]), errors="coerce").iloc[0]
-    if np.isfinite(s):
-        return float(s)
-    return float(row["pump_freq_ghz"]) - 0.1
+    Thin wrapper over the shared ``gain_ranked_candidates`` so the S21 re-sweep
+    and ``scripts/prune_map_solutions.py`` keep exactly the same cells.
+    """
+    return gain_ranked_candidates(points, top_k=top_k, min_gain_db=min_gain_db)
 
 
 def _run_candidate_sweep(
     row: pd.Series, args: argparse.Namespace, sweep_dir: Path, *, center_ghz: float,
 ) -> Path | None:
-    """Run an S21 sweep centered on ws for one cell via exp09; return its CSV."""
+    """Run an S21 sweep centered on ``center_ghz`` (fp) via exp09; return its CSV."""
     fp = float(row["pump_freq_ghz"])
     pump_dir = Path(str(row["pump_dir"]))
     if not (pump_dir / "pump_solution.npz").exists():
@@ -204,9 +193,9 @@ def fit_gain_candidates(
 ) -> None:
     """No-spectrum path: auto-pick top-gain cells, sweep S21, plot -3 dB band.
 
-    For each candidate it centers a fine S21 sweep on the cell's own signal ws,
-    measures the -3 dB bandwidth straight from the raw sweep (so near-fold needle
-    peaks survive), plots the annotated S21, prints the pump condition + GBP, and
+    For each candidate it sweeps S21 over fp +- half-span (same window for every
+    candidate), measures the -3 dB bandwidth around the peak of the heavily
+    smoothed curve, plots the annotated S21, prints the pump condition + GBP, and
     writes a summary table.
     """
     top = _gain_candidates(data.points, top_k=args.top_k, min_gain_db=args.min_gain_db)
@@ -216,7 +205,7 @@ def fit_gain_candidates(
     if args.sweep_start_ghz is not None and args.sweep_stop_ghz is not None:
         window = f"{args.sweep_start_ghz:g}-{args.sweep_stop_ghz:g} GHz"
     else:
-        window = f"ws +-{args.sweep_half_span_ghz:g} GHz"
+        window = f"fp +-{args.sweep_half_span_ghz:g} GHz"
     print(f"auto-picked {len(top)} candidate(s); S21 sweep {args.sweep_points} pts "
           f"over {window} via exp09")
     save_kwargs = {"save_pdf": args.save_pdf, "save_svg": args.save_svg}
@@ -228,9 +217,8 @@ def fit_gain_candidates(
         fp = float(row["pump_freq_ghz"])
         pp = float(row["pump_power_dbm"])
         map_gain = float(row["gain_db_num"])
-        ws = _signal_center_ghz(row)
         sweep_dir = sweeps_root / f"{label}_point_{point_index:04d}"
-        csv_out = _run_candidate_sweep(row, args, sweep_dir, center_ghz=ws)
+        csv_out = _run_candidate_sweep(row, args, sweep_dir, center_ghz=fp)
         if csv_out is None:
             continue
         freq, gain = _load_sweep(csv_out)
@@ -238,7 +226,7 @@ def fit_gain_candidates(
             print(f"  skip {label}: <2 solved sweep points")
             continue
         band = minus3db_band(
-            freq, gain, drop_db=config.operation_drop_db, anchor_ghz=ws,
+            freq, gain, drop_db=config.operation_drop_db,
             smooth_window_frac=(args.sweep_smooth_frac or None),
             polyorder=config.polyorder, bridge_ghz=args.sweep_bridge_ghz,
         )
@@ -266,7 +254,7 @@ def fit_gain_candidates(
             bridged = (f"  || bridged(notch): BW={band['bridged_bandwidth_ghz'] * 1e3:.1f} MHz "
                        f"GBP={band['bridged_gbp_ghz']:.3g} GHz{bclip}")
         print(f"  {label}: Pp={pp:.3f} dBm  fp={fp:.4f} GHz "
-              f"| G@ws={band['peak_gain_db']:.2f} dB @ {band['peak_freq_ghz']:.4f} GHz "
+              f"| Gpk={band['peak_gain_db']:.2f} dB @ {band['peak_freq_ghz']:.4f} GHz "
               f"| BW(-{config.operation_drop_db:g}dB)={band['bandwidth_ghz'] * 1e3:.1f} MHz "
               f"| GBP={band['gbp_ghz']:.3g} GHz{clip}{needle}{bridged}")
         band_scalar = {k: v for k, v in band.items() if not k.startswith("_")}
@@ -382,6 +370,18 @@ def main() -> int:
             title=label,
             **save_kwargs,
         )
+
+    # Also emit the same fp+-3 GHz candidate S21 plots as the no-spectrum path,
+    # so a spectrum map and a no-spectrum map yield identical candidate figures.
+    # The stored per-cell spectrum is coarse, so re-sweep S21 at full resolution.
+    if args.ipm_dir is None:
+        args.ipm_dir = infer_ipm_dir(args.run_dir)
+    if args.ipm_dir is not None and Path(args.ipm_dir).exists():
+        print(f"circuit dir: {args.ipm_dir}")
+        fit_gain_candidates(data, args, config, outdir, candidates_dir)
+    else:
+        print("no --ipm-dir given and none could be inferred; "
+              "skipping candidate S21 sweeps")
     print(f"Wrote plots to {outdir}")
     return 0
 

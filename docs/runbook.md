@@ -434,3 +434,14 @@ for d in Path("outputs").glob(
     fig.savefig(out.with_suffix(".svg"))
     plt.close(fig)
 '@ | python -
+
+
+
+
+## fast runs
+
+cd D:\Projects\Thesis\twpa_jax
+>> 
+>> $C = "--executor inprocess --mode warmstart --inproc-pump-backend schur_cpu_mt --inproc-preconditioner real_coupled_fast --inproc-fold-predictor secant --inproc-fail-fast --fold-skip-patience 2 --inproc-schur-cache-size 2 --signal-detuning-mhz 100 --signal-backend direct --signal-solver superlu --skip-baselines --sidebands 10 --signal-workers 6 --pump-mode-count 10 --nt 40 --inproc-max-newton 16 --inproc-solve-deadline 14 --n-power 50 --n-frequency 20 --frequency-chunk-size 10 --no-signal-spectrum --overwrite"  
+>> 
+>> python scripts/run_gain_map.py $C.Split(' ') --ipm-dir outputs/ipm_python_design --pump-power-min-dbm -32 --pump-power-max-dbm -20 --pump-freq-min-ghz 8.1 --pump-freq-max-ghz 8.3

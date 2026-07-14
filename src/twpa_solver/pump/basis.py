@@ -259,7 +259,11 @@ def load_pump_basis_from_solution(
         raise FileNotFoundError(f"missing pump solution: {sol_path}")
 
     sol = np.load(sol_path)
-    X = np.asarray(sol["X_real"]) + 1j * np.asarray(sol["X_imag"])
+    # Force float64/complex128: solutions may be stored float32 to save space,
+    # and float32 would otherwise promote to complex64 and infect scipy solves.
+    X = np.asarray(sol["X_real"], dtype=np.float64) + 1j * np.asarray(
+        sol["X_imag"], dtype=np.float64
+    )
 
     metadata: dict[str, Any] = {}
     report_path = d / "pump_report.json"

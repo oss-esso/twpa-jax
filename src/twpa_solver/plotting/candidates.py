@@ -106,6 +106,31 @@ def compute_all_fit_metrics(data: MapData, config: PlotConfig) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def gain_ranked_candidates(
+    points: pd.DataFrame,
+    *,
+    top_k: int = 5,
+    min_gain_db: float = 10.0,
+) -> pd.DataFrame:
+    """Top-K PASS cells by trailing ``gain_db`` (no spectrum fit needed).
+
+    Single source of truth for the candidate cells whose ``pump_solution.npz``
+    the plotter re-sweeps for S21 (``plot_gain_map.fit_gain_candidates``). Cells
+    at or above ``min_gain_db`` are preferred; if none clear the bar, the plain
+    gain ranking is used. Consumed by the S21 re-sweep and by the pump-solution
+    prune (``scripts/prune_map_solutions.py``) so both agree on what to keep.
+    """
+    df = points.copy()
+    df["gain_db_num"] = pd.to_numeric(df.get("gain_db"), errors="coerce")
+    passed = df["status"].map(lambda s: str(s).upper().startswith("PASS"))
+    ranked = df[passed & np.isfinite(df["gain_db_num"])].sort_values(
+        "gain_db_num", ascending=False
+    )
+    strong = ranked[ranked["gain_db_num"] >= float(min_gain_db)]
+    chosen = strong if not strong.empty else ranked
+    return chosen.head(int(top_k))
+
+
 def _best_row(df: pd.DataFrame, column: str, *, largest: bool) -> pd.Series | None:
     usable = df[df["valid_fit"] & np.isfinite(df[column])]
     if usable.empty:

@@ -61,8 +61,7 @@ def plot_candidate_s21_bandwidth(
 
     if band is not None:
         peak = band["peak_gain_db"]
-        anchored = band.get("anchored", False)
-        op_label = "G @ ws (operating)" if anchored else "peak"
+        op_label = "fit peak"
         ax.axvspan(band["band_left_ghz"], band["band_right_ghz"],
                    color="#2ca25f", alpha=0.18, label=f"-{drop_db:g} dB band")
         ax.axhline(peak - drop_db, color="#2ca25f", ls=":", lw=1.2)
@@ -85,17 +84,15 @@ def plot_candidate_s21_bandwidth(
     ax.minorticks_on()
     ax.grid(which="major", alpha=0.5, linewidth=1.2)
     ax.grid(which="minor", alpha=0.25, linewidth=0.6)
-    ax.legend(loc="best")
+    # Annotation box is pinned upper-left; keep legend upper-right so they never overlap.
+    ax.legend(loc="upper right")
 
     lines = [
         f"Pump: Pp = {meta['pump_power_dbm']:.3f} dBm",
         f"      fp = {meta['pump_freq_ghz']:.4f} GHz",
     ]
-    if meta.get("map_gain_db") is not None:
-        lines.append(f"map gain @ ws = {meta['map_gain_db']:.2f} dB")
     if band is not None:
-        anchored = band.get("anchored", False)
-        glabel = "G @ ws" if anchored else "Gmax(swept)"
+        glabel = "Gpk(fit)"
         lines += [
             "",
             f"{glabel} = {band['peak_gain_db']:.2f} dB @ {band['peak_freq_ghz']:.4f} GHz",

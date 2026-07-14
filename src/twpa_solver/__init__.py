@@ -6,6 +6,10 @@ from twpa_solver.core import (
     save_circuit,
     solve_linear_scattering,
 )
+from twpa_solver.loss import (
+    InsertionLossModel,
+    default_loss_model,
+)
 from twpa_solver.pump import (
     FullPumpProblem,
     HarmonicGrid,
@@ -28,6 +32,8 @@ __all__ = [
     "load_circuit",
     "save_circuit",
     "solve_linear_scattering",
+    "InsertionLossModel",
+    "default_loss_model",
     "PumpBasis",
     "resolve_pump_basis",
     "FullPumpProblem",

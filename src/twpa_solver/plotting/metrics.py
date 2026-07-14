@@ -193,29 +193,23 @@ def minus3db_band(
     gain_db: np.ndarray,
     *,
     drop_db: float = 3.0,
-    anchor_ghz: float | None = None,
     smooth_window_frac: float | None = None,
     polyorder: int = 3,
     bridge_ghz: float = 0.0,
 ) -> dict[str, Any] | None:
-    """Measure the operation band from a sweep, anchored on an operating point.
+    """Measure the -3 dB operation band around the peak of the smoothed sweep.
 
-    Walks out from an anchor sample until the gain drops ``drop_db`` below the
-    anchor gain, linearly interpolating each crossing.
+    The band peak is always the maximum of the (heavily) Savitzky-Golay smoothed
+    curve; the walk drops ``drop_db`` below that peak, linearly interpolating each
+    crossing. The raw global-max sample is still reported separately as
+    ``window_max_db`` so a razor near-fold needle stays visible without hijacking
+    the band.
 
-    ``anchor_ghz`` selects the operating point the band is centred on. Pass the
-    map's own trailing-signal frequency ``ws`` so the band characterises the
-    amplifier where the map actually measured it; a razor near-fold needle
-    elsewhere in a wide sweep window then no longer hijacks the reported gain and
-    bandwidth (it is reported separately as ``window_max_db``). When ``anchor_ghz``
-    is ``None`` the global-max sample is used (legacy behaviour).
-
-    ``smooth_window_frac`` (fraction of the sweep length) enables a Savitzky-Golay
-    fit before the band walk, so heavy in-band ripple no longer truncates the band
-    at a single ripple valley next to the anchor. The band, peak gain and GBP are
-    then read off the smoothed curve; ``window_max_db`` still reports the raw
-    needle. When smoothing is on, the fitted curve is returned under the
-    plot-only keys ``_fit_freq_ghz`` / ``_fit_gain_db``.
+    ``smooth_window_frac`` (fraction of the sweep length) sets the Savitzky-Golay
+    window used for the band/peak/GBP; larger fractions flatten ripple and needles
+    so the band tracks the broadband envelope. The fitted curve is returned under
+    the plot-only keys ``_fit_freq_ghz`` / ``_fit_gain_db``. With
+    ``smooth_window_frac=None`` the raw sweep is used.
 
     Returns ``None`` for <2 finite samples. ``band_clipped`` flags an edge that
     ran into the sweep boundary (widen the sweep to resolve it).
@@ -243,10 +237,7 @@ def minus3db_band(
     else:
         g_band = g
 
-    if anchor_ghz is None:
-        peak_i = int(np.argmax(g_band))
-    else:
-        peak_i = int(np.argmin(np.abs(f - float(anchor_ghz))))
+    peak_i = int(np.argmax(g_band))  # peak of the smoothed curve
     peak = float(g_band[peak_i])
     threshold = peak - float(drop_db)
     peak_lin = 10.0 ** (peak / 10.0)
@@ -262,7 +253,6 @@ def minus3db_band(
         "bandwidth_ghz": bandwidth,
         "gbp_ghz": float(peak_lin * bandwidth),
         "band_clipped": clip_l or clip_r,
-        "anchored": anchor_ghz is not None,
         "smoothed": smoothed,
         "window_max_db": float(g[gmax_i]),
         "window_max_freq_ghz": float(f[gmax_i]),

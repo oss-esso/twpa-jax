@@ -1,0 +1,25 @@
+\contentsline {section}{\numberline {1}Problem setup}{1}{section.1}%
+\contentsline {subsection}{\numberline {1.1}The harmonic-balance residual}{1}{subsection.1.1}%
+\contentsline {subsection}{\numberline {1.2}Two nested traversal problems}{1}{subsection.1.2}%
+\contentsline {section}{\numberline {2}What we do now}{2}{section.2}%
+\contentsline {subsection}{\numberline {2.1}Intra-cell: natural-parameter continuation in the pump amplitude}{2}{subsection.2.1}%
+\contentsline {paragraph}{Fixed-step continuation (the ``cold'' reference).}{2}{section*.2}%
+\contentsline {paragraph}{Adaptive-step continuation (the ``seed'' path).}{2}{section*.3}%
+\contentsline {paragraph}{The Newton--Krylov corrector.}{2}{section*.4}%
+\contentsline {paragraph}{Predictors inside continuation.}{2}{section*.5}%
+\contentsline {paragraph}{The linear phasor seed (homotopy start).}{2}{section*.6}%
+\contentsline {subsection}{\numberline {2.2}Inter-cell: warm-starting across the map}{2}{subsection.2.2}%
+\contentsline {paragraph}{Where the traversal stops: the harmonic-balance fold.}{3}{section*.7}%
+\contentsline {paragraph}{One important structural fact.}{3}{section*.8}%
+\contentsline {subsection}{\numberline {2.3}Code map}{3}{subsection.2.3}%
+\contentsline {section}{\numberline {3}Why the fold is the crux}{3}{section.3}%
+\contentsline {section}{\numberline {4}Alternatives from the literature}{4}{section.4}%
+\contentsline {subsection}{\numberline {4.1}Pseudo-arclength continuation (round the fold)}{4}{subsection.4.1}%
+\contentsline {subsection}{\numberline {4.2}Tangent (Euler) predictor vs.\ the current secant}{4}{subsection.4.2}%
+\contentsline {subsection}{\numberline {4.3}Affine-invariant adaptive step control}{4}{subsection.4.3}%
+\contentsline {subsection}{\numberline {4.4}Pseudo-transient continuation ($\Psi $tc)}{4}{subsection.4.4}%
+\contentsline {subsection}{\numberline {4.5}2-D map-traversal strategies (the biggest lever)}{4}{subsection.4.5}%
+\contentsline {subsection}{\numberline {4.6}Deflated continuation (find multiple branches)}{5}{subsection.4.6}%
+\contentsline {subsection}{\numberline {4.7}Anderson / vector-extrapolation acceleration}{5}{subsection.4.7}%
+\contentsline {subsection}{\numberline {4.8}Domain context: HB continuation is standard practice}{5}{subsection.4.8}%
+\contentsline {section}{\numberline {5}Summary comparison}{6}{section.5}%
