@@ -880,6 +880,7 @@ class InProcessEngine:
             current1 / reference_current,
             ds=self.args.column_arclength_ds,
             max_steps=self.args.column_arclength_max_steps,
+            max_wall_s=self.args.column_arclength_deadline_s,
         )
         guesses: dict[int, list[np.ndarray]] = {}
         for point_index, target_current in targets:
@@ -1111,6 +1112,11 @@ def run_warm_pass_inprocess(
     predictor = getattr(engine.args, "inproc_fold_predictor", "none")
     scale = engine.args.pump_current_jc_scale
     patience = int(getattr(engine.args, "fold_skip_patience", 0))
+    initial_seed = getattr(engine.args, "initial_pump_dir", None)
+    if initial_seed and len(by_col) != 1:
+        raise ValueError(
+            "--initial-pump-dir currently supports exactly one frequency column"
+        )
     for j in sorted(by_col):
         column = sorted(by_col[j], key=lambda p: p.power_dbm)
         prev_X: np.ndarray | None = None
@@ -1119,12 +1125,44 @@ def run_warm_pass_inprocess(
         last_good_cur: float | None = None
         prevprev_X: np.ndarray | None = None
         prevprev_cur: float | None = None
-        arclength_traced = False
         arclength_guesses: dict[int, list[np.ndarray]] = {}
+        verified_fold = False
         consec_fail = 0  # consecutive non-converged points at increasing power
+        if initial_seed and column:
+            seed_path = Path(initial_seed)
+            try:
+                loaded_X, _ = pump_basis.load_pump_basis_from_solution(seed_path)
+                prev_X = loaded_X
+                last_good_X = loaded_X
+                seed_power = getattr(engine.args, "initial_pump_power_dbm", None)
+                if seed_power is None:
+                    raise ValueError(
+                        "--initial-pump-power-dbm is required with "
+                        "--initial-pump-dir"
+                    )
+                last_good_cur = dbm_to_peak_current_a(
+                    float(seed_power),
+                    attenuation_db=attenuation_db_for(
+                        column[0].pump_freq_ghz, engine.args
+                    ),
+                    z0_ohm=engine.args.z0_ohm,
+                ) * scale
+                print(
+                    f"[warm] fp={column[0].pump_freq_ghz:.6g} GHz "
+                    f"initial seed={seed_path}",
+                    flush=True,
+                )
+            except (FileNotFoundError, KeyError, ValueError) as exc:
+                raise ValueError(
+                    f"invalid --initial-pump-dir {seed_path}: {exc}"
+                ) from exc
         for idx, point in enumerate(column):
             cur = point.current_a * scale
             base_X = prev_X if not fail_fast else last_good_X
+            if idx == 0 and last_good_cur is None:
+                # The supplied seed is at the first target power. It is a
+                # direct Newton initial guess, not a secant history point.
+                base_X = last_good_X
             mode = "warm" if base_X is not None else "seed"
 
             # Predict the guess from the last two converged states. base_X is the
@@ -1140,16 +1178,18 @@ def run_warm_pass_inprocess(
 
             row, X = engine.solve_point(point, pass_dir, mode=mode, warm_X=guess)
 
+            # Traced fresh on every failing cell that has a valid seed pair --
+            # no per-column "once ever" lock, so one cell's crossing-less
+            # trace never permanently strands later cells. Each attempt is
+            # bounded by --inproc-solve-deadline-s, so retrying stays cheap.
             if (
                 row["status"] != "PASS"
                 and getattr(engine.args, "column_arclength_recovery", False)
-                and not arclength_traced
                 and prevprev_X is not None
                 and prevprev_cur is not None
                 and last_good_X is not None
                 and last_good_cur is not None
             ):
-                arclength_traced = True
                 reference_current = column[-1].current_a * scale
                 targets = [
                     (p.index, p.current_a * scale)
@@ -1164,6 +1204,14 @@ def run_warm_pass_inprocess(
                     last_good_cur,
                     targets,
                 )
+                verified_fold = verified_fold or bool(arc_info.get("fold_lambdas"))
+                if arc_info.get("fold_lambdas"):
+                    row["pump_column_arclength_fold_lambda"] = float(
+                        arc_info["fold_lambdas"][0]
+                    )
+                    row["pump_column_arclength_terminal_reason"] = arc_info.get(
+                        "terminal_reason"
+                    )
                 print(
                     f"[arclength] fp={point.pump_freq_ghz:.6g} GHz "
                     f"steps={arc_info.get('steps')} points={arc_info.get('trace_points')} "
@@ -1174,7 +1222,9 @@ def run_warm_pass_inprocess(
                 )
 
             if row["status"] != "PASS" and point.index in arclength_guesses:
-                for arc_guess in arclength_guesses[point.index]:
+                # Cap to the first 2 target-crossing guesses: each is a full
+                # Newton solve, and a stiff branch can have several crossings.
+                for arc_guess in arclength_guesses[point.index][:2]:
                     arc_row, arc_X = engine.solve_point(
                         point, pass_dir, mode="warm", warm_X=arc_guess,
                     )
@@ -1218,7 +1268,12 @@ def run_warm_pass_inprocess(
             # non-converged points at increasing power, the column is past the
             # HB fold (a turning point -- no re-convergence above it), so mark
             # every remaining higher-power cell past-fold without solving.
-            if patience > 0 and consec_fail >= patience and idx + 1 < len(column):
+            if (
+                patience > 0
+                and verified_fold
+                and consec_fail >= patience
+                and idx + 1 < len(column)
+            ):
                 skipped = column[idx + 1:]
                 for rest in skipped:
                     rows.append(past_fold_skip_row(rest))
@@ -1465,7 +1520,8 @@ def _recover(
         # warm target solve from the arclength state.
         solver = exp08.HarmonicNewtonKrylovSolver(engine._settings())
         X_arc, _lam, info = solver.solve_arclength(
-            solve_problem, solve_problem.zeros(), 0.0, ds=0.1, target_lam=1.0)
+            solve_problem, solve_problem.zeros(), 0.0, ds=0.1, target_lam=1.0,
+            max_wall_s=engine.args.inproc_solve_deadline_s)
         if info.get("reached_target"):
             row, X, ok = _attempt(engine, point, pass_dir, prebuilt, mode="warm", warm_X=X_arc)
             if ok:
@@ -1725,6 +1781,8 @@ def write_points_csv(path: Path, rows: list[dict[str, Any]]) -> None:
         "pump_continuation_method", "pump_continuation_steps",
         "pump_continuation_reached_target", "pump_continuation_fold_lambda",
         "pump_continuation_runtime_s",
+        "pump_column_arclength_fold_lambda",
+        "pump_column_arclength_terminal_reason",
         "gain_total_runtime_s", "gain_wall_runtime_s", "gain_gamma_hat_runtime_s",
         "gain_khat_build_runtime_s", "gain_khat_off_runtime_s",
         "gain_matrix_assemble_runtime_s", "gain_factor_solve_runtime_s",
@@ -1947,23 +2005,46 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                    help="In-process warm pass: skip reseed/fallback recovery on a failed "
                    "point and keep warm-starting from the last converged neighbour, so "
                    "over-fold points fail in ~one stalled solve. For high-power fold maps.")
-    p.add_argument("--fold-skip-patience", type=int, default=2,
+    p.add_argument(
+        "--initial-pump-dir",
+        type=Path,
+        default=None,
+        help="Optional verified pump directory containing pump_solution.npz. "
+        "Use it as the first warm-start state of each frequency column.",
+    )
+    p.add_argument(
+        "--initial-pump-power-dbm",
+        type=float,
+        default=None,
+        help="Power coordinate of --initial-pump-dir, required for "
+        "secant/pseudo-arclength continuation.",
+    )
+    p.add_argument("--fold-skip-patience", type=int, default=0,
                    help="Per-column fold short-circuit (in-process warm pass): after "
-                   "this many consecutive non-converged points at increasing power, "
-                   "skip the remaining higher-power cells in the column (marked "
-                   "SKIP_PAST_FOLD, gain NaN) without solving. The HB fold is a turning "
-                   "point with no re-convergence above it, so those cells are guaranteed "
-                   "past-fold. 2 preserves near-monotone columns; 0 disables (default). "
-                   "This is the dominant runtime win on hot/over-fold maps.")
+                   "skip the remaining higher-power cells only after the optional "
+                   "pseudo-arclength recovery has reported a turning point (marked "
+                   "SKIP_PAST_FOLD, gain NaN). A failed target solve alone is never "
+                   "treated as a fold. 0 disables skipping (default).")
     p.add_argument(
         "--column-arclength-recovery",
         action="store_true",
-        help="On the first failed cell in each legacy power column, trace one "
-        "scaled pseudo-arclength branch from the last two converged states and "
-        "use its target-power crossings as Newton recovery guesses.",
+        help="On every failed cell in each legacy power column (not just the "
+        "first), trace one scaled pseudo-arclength branch from the last two "
+        "converged states and use its target-power crossings (capped to 2 "
+        "guesses) as Newton recovery guesses. No per-column lock: a cell "
+        "whose own trace found no crossing does not block later cells from "
+        "trying again once bounded by --inproc-solve-deadline-s.",
     )
     p.add_argument("--column-arclength-ds", type=float, default=0.02)
     p.add_argument("--column-arclength-max-steps", type=int, default=80)
+    p.add_argument(
+        "--column-arclength-deadline-s",
+        type=float,
+        default=180.0,
+        help="Total wall-time budget for each column pseudo-arclength trace. "
+        "Separate from the per-target Newton deadline; 0 disables the trace "
+        "deadline.",
+    )
     p.add_argument("--inproc-preconditioner",
                    choices=["mean_tangent", "real_coupled", "real_coupled_fast",
                             "spectral_coupled", "linear"],

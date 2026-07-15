@@ -1,0 +1,63 @@
+{
+  "metadata": {
+    "pump_modes": [
+      1,
+      3,
+      5,
+      7,
+      9,
+      11,
+      13,
+      15,
+      17,
+      19
+    ],
+    "pump_basis": "positive_phasor",
+    "real_reconstruction_factor": 2,
+    "omega_p": 51227194494.314,
+    "phase_convention": "exp_plus_i_k_omega_t",
+    "pump_mode_policy": "positive_odd_jc",
+    "pump_source_mode": 1,
+    "pump_freq_ghz": 8.1530612245,
+    "nt": 40,
+    "pump_current_a": 1.4010713392355705e-05,
+    "pump_current_ratio_ic_median": 5.2746759501062455,
+    "pump_backend": "full"
+  },
+  "solution_summary": {
+    "x_rms": 3.1553679560914476e-15,
+    "x_max_abs": 7.206643598850524e-15,
+    "branch_psi_rms": 1.723758237958989e-16,
+    "branch_psi_max_abs": 6.000329345909944e-16,
+    "branch_i_rms": 1.2532058558003823e-06,
+    "branch_i_max_abs": 2.6562160733822425e-06,
+    "X_h1_norm": 1.7905861193171483e-13,
+    "X_h2_norm": 5.222681884085392e-15,
+    "X_h3_norm": 2.0336320769448042e-16,
+    "X_h4_norm": 4.1101160926295025e-17,
+    "X_h5_norm": 1.4684194992470706e-17,
+    "X_h6_norm": 2.689336726939343e-18,
+    "X_h7_norm": 6.841158483613158e-19,
+    "X_h8_norm": 1.6261264331346208e-19,
+    "X_h9_norm": 7.774450790942387e-20,
+    "X_h10_norm": 1.8988593889546086e-20
+  },
+  "reports": [
+    {
+      "converged": false,
+      "source_scale": 1.0,
+      "coeff_abs": 5.22747643730216e-09,
+      "coeff_rel": 0.26793039164505666,
+      "time_abs": 3.3061463913474416e-08,
+      "time_rel": 0.26793039164505666,
+      "newton_iterations": 5,
+      "gmres_iterations_total": 5,
+      "factor_runtime_s": 3.3189101000025403,
+      "runtime_s": 5.742883800005075,
+      "failure_reason": "stalled at Newton 5 (reduction ratio 0.998)",
+      "preconditioner_assembly_runtime_s": 0.0,
+      "preconditioner_numeric_factor_runtime_s": 0.0
+    }
+  ],
+  "final_status": "FAIL"
+}

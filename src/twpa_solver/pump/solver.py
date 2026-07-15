@@ -27,6 +27,15 @@ def _finite_residual(norms: dict[str, float | None]) -> bool:
     value = norms.get("coeff_rel")
     return value is not None and math.isfinite(float(value))
 
+
+class GmresDeadlineExceeded(RuntimeError):
+    """Raised from the GMRES callback when a wall-time budget is exceeded.
+
+    Subclasses RuntimeError so call sites that already catch
+    ``(FloatingPointError, RuntimeError, ValueError, OverflowError)`` around a
+    linear solve (e.g. ``tangent_predictor``) absorb it without change.
+    """
+
 from twpa_solver.pump.problem import (
     FullPumpProblem,
     pack_complex,
@@ -309,16 +318,31 @@ class HarmonicNewtonKrylovSolver:
             def cb(_pr_norm: float) -> None:
                 gmres_counter["n"] += 1
 
-            delta_real, info = gmres_call(
-                A=Aop,
-                b=rhs,
-                M=Mop,
-                rtol=s.gmres_rtol,
-                atol=s.gmres_atol,
-                restart=s.gmres_restart,
-                maxiter=s.gmres_maxiter,
-                callback=cb,
-            )
+            try:
+                delta_real, info = gmres_call(
+                    A=Aop,
+                    b=rhs,
+                    M=Mop,
+                    rtol=s.gmres_rtol,
+                    atol=s.gmres_atol,
+                    restart=s.gmres_restart,
+                    maxiter=s.gmres_maxiter,
+                    callback=cb,
+                    deadline_s=s.solve_deadline_s,
+                    t0=t0,
+                )
+            except GmresDeadlineExceeded:
+                gmres_total += gmres_counter["n"]
+                failure_reason = (
+                    f"solve exceeded {s.solve_deadline_s:.1f}s budget mid-GMRES "
+                    f"at Newton {it}"
+                )
+                return X, self._make_report(
+                    False, source_scale, nrm, it - 1, gmres_total,
+                    factor_total, t0, failure_reason,
+                    preconditioner_assembly_runtime_s=precond_assembly_total,
+                    preconditioner_numeric_factor_runtime_s=precond_numeric_factor_total,
+                )
             gmres_total += gmres_counter["n"]
             last_gmres = gmres_counter["n"]
 
@@ -707,6 +731,8 @@ class HarmonicNewtonKrylovSolver:
         X: np.ndarray,
         *,
         shift: float = 0.0,
+        deadline_s: float = 0.0,
+        t0: float | None = None,
     ):
         """Build a reusable ``J(X)+shift*I`` GMRES solver at the point ``X``.
 
@@ -715,6 +741,11 @@ class HarmonicNewtonKrylovSolver:
         right-hand sides. Reusing this is the key cost saver in the arclength
         corrector, which solves two systems (``J a = -R`` and ``J b = S``) per
         Newton iteration with the same operator.
+
+        ``deadline_s``/``t0`` (if ``deadline_s > 0``) bound each individual
+        GMRES call so a single stiff solve cannot silently outrun the caller's
+        wall-time budget; on expiry the returned closure raises
+        ``GmresDeadlineExceeded``.
         """
         s = self.settings
         shape = X.shape
@@ -749,6 +780,7 @@ class HarmonicNewtonKrylovSolver:
                 A=Aop, b=pack_complex(rhs_coeffs), M=Mop,
                 rtol=s.gmres_rtol, atol=s.gmres_atol, restart=s.gmres_restart,
                 maxiter=s.gmres_maxiter, callback=lambda _n: None,
+                deadline_s=deadline_s, t0=t0,
             )
             return unpack_complex(delta_real, shape)
 
@@ -761,9 +793,13 @@ class HarmonicNewtonKrylovSolver:
         rhs_coeffs: np.ndarray,
         *,
         shift: float = 0.0,
+        deadline_s: float = 0.0,
+        t0: float | None = None,
     ) -> np.ndarray:
         """Solve ``(J(X)+shift*I) delta = rhs_coeffs`` matrix-free by GMRES."""
-        return self._linear_solver(problem, X, shift=shift)(rhs_coeffs)
+        return self._linear_solver(
+            problem, X, shift=shift, deadline_s=deadline_s, t0=t0,
+        )(rhs_coeffs)
 
     def tangent_predictor(
         self, problem: FullPumpProblem, X: np.ndarray, d_lambda: float,
@@ -832,7 +868,16 @@ class HarmonicNewtonKrylovSolver:
                 return X, [self._make_report(True, 1.0, nrm, it - 1, gmres_total, 0.0, t0, "")]
             R = problem.residual_coeffs(X, 1.0)
             # Modified Newton step with the 1/delta pseudo-time shift.
-            delta_X = self._solve_linear(problem, X, -R, shift=1.0 / delta)
+            try:
+                delta_X = self._solve_linear(
+                    problem, X, -R, shift=1.0 / delta,
+                    deadline_s=s.solve_deadline_s, t0=t0,
+                )
+            except GmresDeadlineExceeded:
+                return X, [self._make_report(
+                    False, 1.0, nrm, it - 1, gmres_total, 0.0, t0,
+                    f"ptc exceeded {s.solve_deadline_s:.1f}s budget mid-GMRES",
+                )]
             # Damped acceptance on the true residual.
             alpha = 1.0
             accepted = False
@@ -890,7 +935,11 @@ class HarmonicNewtonKrylovSolver:
         }
 
         # Initial tangent: J Xdot = S, then normalise (Xdot, lam_dot).
-        Xdot = self._solve_linear(problem, X, S)
+        try:
+            Xdot = self._solve_linear(problem, X, S, deadline_s=max_wall_s, t0=t0)
+        except GmresDeadlineExceeded:
+            info["terminal_reason"] = "deadline"
+            return X, lam, info
         lam_dot = 1.0
         norm = math.sqrt(_real_dot(Xdot, Xdot) + lam_dot * lam_dot)
         Xdot, lam_dot = Xdot / norm, lam_dot / norm
@@ -906,24 +955,32 @@ class HarmonicNewtonKrylovSolver:
             Xc, lamc = np.array(X_pred, copy=True), float(lam_pred)
             # Modified Newton: one factorization at the predictor point, reused
             # across the inner corrector iterations (the coupled factor barely
-            # changes over a corrector and is the dominant cost).
-            lin = self._linear_solver(problem, X_pred)
-            b = lin(S)  # J b = S (dX/dlam) -- constant RHS, factor once
-            converged = False
-            for _ in range(newton_max):
-                R = problem.residual_coeffs(Xc, lamc)
-                n = _real_dot(Xdot, Xc - X) + lam_dot * (lamc - lam) - ds
-                if problem.norms(Xc, lamc, False)["coeff_rel"] < tol and abs(n) < tol * max(ds, 1.0):
-                    converged = True
-                    break
-                a = lin(-R)  # J a = -R (modified Newton: reuse predictor factor)
-                denom = _real_dot(Xdot, b) + lam_dot
-                if abs(denom) < 1e-300:
-                    break
-                d_lam = (-n - _real_dot(Xdot, a)) / denom
-                d_X = a + d_lam * b
-                Xc = Xc + d_X
-                lamc = lamc + d_lam
+            # changes over a corrector and is the dominant cost). Each GMRES
+            # call is itself bounded by max_wall_s so one stiff corrector step
+            # cannot silently outrun the budget between the outer checks above.
+            try:
+                lin = self._linear_solver(
+                    problem, X_pred, deadline_s=max_wall_s, t0=t0,
+                )
+                b = lin(S)  # J b = S (dX/dlam) -- constant RHS, factor once
+                converged = False
+                for _ in range(newton_max):
+                    R = problem.residual_coeffs(Xc, lamc)
+                    n = _real_dot(Xdot, Xc - X) + lam_dot * (lamc - lam) - ds
+                    if problem.norms(Xc, lamc, False)["coeff_rel"] < tol and abs(n) < tol * max(ds, 1.0):
+                        converged = True
+                        break
+                    a = lin(-R)  # J a = -R (modified Newton: reuse predictor factor)
+                    denom = _real_dot(Xdot, b) + lam_dot
+                    if abs(denom) < 1e-300:
+                        break
+                    d_lam = (-n - _real_dot(Xdot, a)) / denom
+                    d_X = a + d_lam * b
+                    Xc = Xc + d_X
+                    lamc = lamc + d_lam
+            except GmresDeadlineExceeded:
+                info["terminal_reason"] = "deadline"
+                return X, lam, info
             if not converged:
                 ds *= 0.5
                 if ds < 1e-4:
@@ -931,7 +988,11 @@ class HarmonicNewtonKrylovSolver:
                     return X, lam, info
                 continue
             # New tangent (keep continuation direction via sign).
-            Xdot_new = lin(S)
+            try:
+                Xdot_new = lin(S)
+            except GmresDeadlineExceeded:
+                info["terminal_reason"] = "deadline"
+                return X, lam, info
             lam_dot_new = 1.0
             nrm = math.sqrt(_real_dot(Xdot_new, Xdot_new) + lam_dot_new ** 2)
             Xdot_new, lam_dot_new = Xdot_new / nrm, lam_dot_new / nrm
@@ -961,6 +1022,7 @@ class HarmonicNewtonKrylovSolver:
         ds: float = 0.02,
         max_steps: int = 160,
         newton_max: int = 10,
+        max_wall_s: float = 0.0,
     ) -> tuple[list[tuple[np.ndarray, float]], dict]:
         """Trace a branch from two converged points with a scaled secant metric.
 
@@ -968,7 +1030,13 @@ class HarmonicNewtonKrylovSolver:
         The state scale inferred from the initial secant makes both components
         contribute comparably to the arclength constraint. This is intended for
         map recovery, where two adjacent power solutions are already available.
+
+        ``max_wall_s`` (0 disables) bounds total trace time: checked once per
+        outer step and, per GMRES call, inside each corrector solve -- this
+        trace previously had no wall-clock cap at all, so a stiff corrector
+        near a fold could run unbounded.
         """
+        t0 = time.perf_counter()
         X_prev = np.array(X0, dtype=np.complex128, copy=True)
         X = np.array(X1, dtype=np.complex128, copy=True)
         lam_prev, lam = float(lam0), float(lam1)
@@ -1005,31 +1073,40 @@ class HarmonicNewtonKrylovSolver:
 
         for step in range(1, int(max_steps) + 1):
             info["steps"] = step
+            if max_wall_s > 0.0 and time.perf_counter() - t0 > max_wall_s:
+                info["terminal_reason"] = "deadline"
+                break
             X_pred = X + step_size * tx
             lam_pred = lam + step_size * tl
             Xc, lamc = np.array(X_pred, copy=True), float(lam_pred)
             converged = False
             used_newton = newton_max
-            for it in range(1, int(newton_max) + 1):
-                R = problem.residual_coeffs(Xc, lamc)
-                constraint = (
-                    metric_x(tx, Xc - X)
-                    + tl * (lamc - lam)
-                    - step_size
-                )
-                rel = problem.norms(Xc, lamc, False)["coeff_rel"]
-                if rel < tol and abs(constraint) < tol:
-                    converged, used_newton = True, it - 1
-                    break
-                lin = self._linear_solver(problem, Xc)
-                a = lin(-R)
-                b = lin(S)
-                denom = metric_x(tx, b) + tl
-                if not math.isfinite(denom) or abs(denom) < 1e-14:
-                    break
-                dlam = (-constraint - metric_x(tx, a)) / denom
-                Xc = Xc + a + dlam * b
-                lamc = lamc + dlam
+            try:
+                for it in range(1, int(newton_max) + 1):
+                    R = problem.residual_coeffs(Xc, lamc)
+                    constraint = (
+                        metric_x(tx, Xc - X)
+                        + tl * (lamc - lam)
+                        - step_size
+                    )
+                    rel = problem.norms(Xc, lamc, False)["coeff_rel"]
+                    if rel < tol and abs(constraint) < tol:
+                        converged, used_newton = True, it - 1
+                        break
+                    lin = self._linear_solver(
+                        problem, Xc, deadline_s=max_wall_s, t0=t0,
+                    )
+                    a = lin(-R)
+                    b = lin(S)
+                    denom = metric_x(tx, b) + tl
+                    if not math.isfinite(denom) or abs(denom) < 1e-14:
+                        break
+                    dlam = (-constraint - metric_x(tx, a)) / denom
+                    Xc = Xc + a + dlam * b
+                    lamc = lamc + dlam
+            except GmresDeadlineExceeded:
+                info["terminal_reason"] = "deadline"
+                break
             if not converged:
                 info["failed_steps"] += 1
                 step_size *= 0.5
@@ -1092,7 +1169,27 @@ def gmres_call(
     restart: int,
     maxiter: int,
     callback,
+    *,
+    deadline_s: float = 0.0,
+    t0: float | None = None,
 ) -> tuple[np.ndarray, int]:
+    """Run GMRES, aborting mid-solve if a wall-time budget is exceeded.
+
+    ``deadline_s > 0`` checks the elapsed time (from ``t0``) on every GMRES
+    iteration (``callback_type="pr_norm"`` fires per-iteration, not just per
+    restart cycle) and raises ``GmresDeadlineExceeded`` from inside the
+    callback. scipy does not catch callback exceptions, so this aborts the
+    single GMRES call immediately instead of letting it grind to
+    ``maxiter`` -- the previous "check only between Newton iterations" scheme
+    let one pathological GMRES call run ~200s past a 14s budget.
+    """
+    def wrapped(pr_norm: float) -> None:
+        if deadline_s > 0.0 and t0 is not None and time.perf_counter() - t0 > deadline_s:
+            raise GmresDeadlineExceeded(
+                f"GMRES exceeded {deadline_s:.1f}s budget mid-solve"
+            )
+        callback(pr_norm)
+
     try:
         return spla.gmres(
             A,
@@ -1102,7 +1199,7 @@ def gmres_call(
             atol=atol,
             restart=restart,
             maxiter=maxiter,
-            callback=callback,
+            callback=wrapped,
             callback_type="pr_norm",
         )
     except TypeError:
@@ -1113,7 +1210,7 @@ def gmres_call(
             tol=rtol,
             restart=restart,
             maxiter=maxiter,
-            callback=callback,
+            callback=wrapped,
         )
 
 

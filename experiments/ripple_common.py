@@ -4,7 +4,7 @@
 This is the Python/JAX-pipeline analogue of the Harmonia.jl ripple workflow. It
 reuses the existing experiment stack:
 
-* design build   -> ``exp07_python_ipm_design_builder`` (2- or 3-coupler IPM)
+* design build   -> ``exp07_python_ipm_design_builder`` (2-, 3-, or 7-coupler IPM)
 * passive S      -> ``exp09_full_ipm_gain_from_pump`` linear blocks (pump off)
 * pump solve     -> ``exp08_full_ipm_pump_solve`` (subprocess)
 * gain sweep     -> ``exp09_full_ipm_gain_from_pump`` (subprocess)
@@ -60,13 +60,41 @@ EXP09 = "experiments/exp09_full_ipm_gain_from_pump.py"
 # blows up far above this.
 FLUX_MAX = 1.0e3
 
-# The two IPM variants. ``2c`` reuses the cached coupler geometry baked into
-# exp07; ``3c`` re-optimises the coupler for -20 dB at 10 GHz and doubles the
-# JTL array so a coupler lands every two arrays.
+# The IPM variants. ``2c`` reuses the cached coupler geometry baked into exp07;
+# ``3c`` re-optimises the coupler for -20 dB at 10 GHz and places one every two
+# arrays; ``7c`` is the longer 3c-family design with one coupler after each
+# array, for seven couplers total including the input coupler.
 DESIGNS: dict[str, dict[str, Any]] = {
     "2c": {
         "overrides": {},
         "coupler_mode": "cached",
+    },
+    "2c_lj79_cg33": {
+        "overrides": {
+            "Lj": 79.0e-12,
+            "Cg": 33.0e-15,
+            "coupling_dB": -14.0,
+            "coupler_freq_hz": 8.0e9,
+        },
+        "coupler_mode": "optimize",
+    },
+    "2c_lj124_cg66_m20": {
+        "overrides": {
+            "Lj": 124.0e-12,
+            "Cg": 66.0e-15,
+            "coupling_dB": -20.0,
+            "coupler_freq_hz": 8.0e9,
+        },
+        "coupler_mode": "optimize",
+    },
+    "2c_lj124_cg49p6_m20_exact": {
+        "overrides": {
+            "Lj": 124.0e-12,
+            "Cg": 124.0e-12 / 50.0**2,
+            "coupling_dB": -20.0,
+            "coupler_freq_hz": 8.0e9,
+        },
+        "coupler_mode": "optimize_matched",
     },
     "3c": {
         "overrides": {
@@ -76,6 +104,67 @@ DESIGNS: dict[str, dict[str, Any]] = {
             "coupler_freq_hz": 10.0e9,
         },
         "coupler_mode": "optimize",
+    },
+    "3c_lj124_cg66_m20": {
+        "overrides": {
+            "array_length": 648,
+            "arrays_per_dc": 2,
+            "coupling_dB": -20.0,
+            "coupler_freq_hz": 10.0e9,
+            "Lj": 124.0e-12,
+            "Cg": 66.0e-15,
+        },
+        "coupler_mode": "optimize",
+    },
+    "3c_lj124_cg49p6_m20_exact": {
+        "overrides": {
+            "array_length": 648,
+            "arrays_per_dc": 2,
+            "coupling_dB": -20.0,
+            "coupler_freq_hz": 10.0e9,
+            "Lj": 124.0e-12,
+            "Cg": 124.0e-12 / 50.0**2,
+        },
+        "coupler_mode": "optimize_matched",
+    },
+    "7c": {
+        "overrides": {
+            "array_length": 418,
+            "num_rows": 7,
+            "arrays_per_dc": 1,
+            "coupling_dB": -14.0,
+            "coupler_freq_hz": 8.0e9,
+            "Lj": 79.0e-12,
+            "Cj": 145.0e-15,
+            "Cg": 33.0e-15,
+        },
+        "coupler_mode": "optimize",
+    },
+    "7c_lj79_cg33_m20": {
+        "overrides": {
+            "array_length": 418,
+            "num_rows": 7,
+            "arrays_per_dc": 1,
+            "coupling_dB": -20.0,
+            "coupler_freq_hz": 8.0e9,
+            "Lj": 79.0e-12,
+            "Cj": 145.0e-15,
+            "Cg": 33.0e-15,
+        },
+        "coupler_mode": "optimize",
+    },
+    "7c_lj79_cg31p6_m20_exact": {
+        "overrides": {
+            "array_length": 418,
+            "num_rows": 7,
+            "arrays_per_dc": 1,
+            "coupling_dB": -20.0,
+            "coupler_freq_hz": 8.0e9,
+            "Lj": 79.0e-12,
+            "Cj": 145.0e-15,
+            "Cg": 79.0e-12 / 50.0**2,
+        },
+        "coupler_mode": "optimize_matched",
     },
 }
 
@@ -91,10 +180,10 @@ def build_design(
     lj_scatter_sigma: float = 0.0,
     lj_scatter_seed: int = 1,
 ) -> Path:
-    """Build a 2- or 3-coupler IPM design and write its matrices.
+    """Build a configured IPM design and write its matrices.
 
     Args:
-        design: ``"2c"`` or ``"3c"``.
+        design: ``"2c"``, ``"3c"``, or ``"7c"``.
         ipm_dir: Output directory for the exp07 design artifacts (C/G/K/Bphi
             .npz, ipm_arrays.npz, ipm_summary.json).
         lj_scatter_sigma: Multiplicative Gaussian sigma for Josephson Lj values.

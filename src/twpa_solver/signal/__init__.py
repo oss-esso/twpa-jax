@@ -29,6 +29,18 @@ from twpa_solver.signal.floquet import (
     solve_linear_system,
     voltage_from_flux,
 )
+from twpa_solver.signal.stability import (
+    NON_ANALYTIC_LOSS_MODELS,
+    ComplexResonance,
+    SigmaMinEstimate,
+    estimate_sigma_min,
+    local_minima,
+    refine_complex_resonance,
+    refine_resonances,
+    refine_singular_omega,
+    sigma_min_at_signal_ghz,
+    sweep_sigma_min,
+)
 
 __all__ = [
     "GainResult",
@@ -54,4 +66,14 @@ __all__ = [
     "solve_gain_one_schur",
     "solve_linear_system",
     "voltage_from_flux",
+    "NON_ANALYTIC_LOSS_MODELS",
+    "ComplexResonance",
+    "SigmaMinEstimate",
+    "estimate_sigma_min",
+    "local_minima",
+    "refine_complex_resonance",
+    "refine_resonances",
+    "refine_singular_omega",
+    "sigma_min_at_signal_ghz",
+    "sweep_sigma_min",
 ]

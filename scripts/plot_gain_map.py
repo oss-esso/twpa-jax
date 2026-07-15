@@ -78,7 +78,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--sweep-stop-ghz", type=float, default=None,
                         help="Absolute S21 sweep stop (GHz); overrides the "
                              "fp-centred window when given with --sweep-start-ghz.")
-    parser.add_argument("--sweep-points", type=int, default=1251,
+    parser.add_argument("--sweep-points", type=int, default=501,
                         help="Sweep points (default 1251 over +-3 GHz ~ 5 MHz).")
     parser.add_argument("--sweep-smooth-frac", type=float, default=0.35,
                         help="Savitzky-Golay window as a fraction of the sweep "
@@ -101,7 +101,8 @@ def infer_ipm_dir(run_dir: Path) -> Path | None:
     """Find the circuit dir for a no-spectrum run's candidate sweeps.
 
     Prefers a path recorded in map_summary.json; otherwise guesses from the
-    run-dir name ('3c' -> the 3c design, else the default 2c design).
+    run-dir name ('7c' or '3c' -> the matching design, else the default 2c
+    design).
     """
     summary = run_dir / "map_summary.json"
     if summary.exists():
@@ -114,7 +115,13 @@ def infer_ipm_dir(run_dir: Path) -> Path | None:
             if value and Path(value).exists():
                 return Path(value)
     name = run_dir.name.lower()
-    guess = ROOT / "outputs" / ("ipm_python_design_3c" if "3c" in name else "ipm_python_design")
+    if "7c" in name:
+        design_dir = "ipm_python_design_7c"
+    elif "3c" in name:
+        design_dir = "ipm_python_design_3c"
+    else:
+        design_dir = "ipm_python_design"
+    guess = ROOT / "outputs" / design_dir
     return guess if guess.exists() else None
 
 

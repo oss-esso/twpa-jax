@@ -315,7 +315,100 @@ def optimize_coupler_geometry(
     freq: float = 8e9,
     Z0: float = 50.0,
     gap_to_ground: float | None = None,
+    exact_coupling: bool = False,
+    minimize_coupling_at_match: bool = False,
 ) -> CouplerGeometry:
+    if exact_coupling and minimize_coupling_at_match:
+        raise ValueError("choose one exact coupler optimization objective")
+    if exact_coupling and gap_to_ground is not None:
+        raise ValueError("exact_coupling does not support a fixed gap_to_ground")
+
+    if minimize_coupling_at_match:
+        if gap_to_ground is not None:
+            raise ValueError("minimize_coupling_at_match does not support a fixed gap_to_ground")
+
+        def objective(x: np.ndarray) -> float:
+            return estimate_edge_coupled_directional_coupler(
+                x[0], x[2], x[1], freq=freq
+            )["K_dB"]
+
+        def impedance_constraint(x: np.ndarray) -> float:
+            return estimate_edge_coupled_directional_coupler(
+                x[0], x[2], x[1], freq=freq
+            )["Z_input"] - Z0
+
+        # Multiple starts reduce dependence on the nonconvex geometry surface.
+        starts = ([20.0, 50.0, 10.0], [5.0, 80.0, 2.0],
+                  [40.0, 200.0, 20.0], [2.0, 40.0, 1.0])
+        solutions = []
+        for start in starts:
+            opt = minimize(
+                objective,
+                np.asarray(start, dtype=float),
+                method="SLSQP",
+                bounds=[(0.5, 50.0), (0.5, 500.0), (0.5, 100.0)],
+                constraints={"type": "eq", "fun": impedance_constraint},
+                options={"maxiter": 1000, "ftol": 1e-12},
+            )
+            if opt.success:
+                solutions.append(opt)
+        if not solutions:
+            raise RuntimeError("matched minimum-coupling optimization failed")
+        opt = min(solutions, key=lambda result: float(result.fun))
+        width, gap_lines, gap_gnd = opt.x
+        r = estimate_edge_coupled_directional_coupler(
+            width, gap_gnd, gap_lines, freq=freq
+        )
+        return CouplerGeometry(
+            width_um=float(width),
+            gap_between_lines_um=float(gap_lines),
+            gap_to_ground_um=float(gap_gnd),
+            length_um=float(r["Length_um"]),
+            k_db=float(r["K_dB"]),
+            z_input_ohm=float(r["Z_input"]),
+        )
+
+    if exact_coupling:
+        # The old weighted least-squares objective preferred Zin over coupling
+        # and stopped at -18.45 dB for the -20 dB request.  Enforce coupling as
+        # an equality, then minimize impedance mismatch on the feasible set.
+        def objective(x: np.ndarray) -> float:
+            r = estimate_edge_coupled_directional_coupler(
+                x[0], x[2], x[1], freq=freq
+            )
+            return (r["Z_input"] - Z0) ** 2 + 1e-4 * (
+                (x[0] - 20.0) ** 2 + (x[1] - 50.0) ** 2 + (x[2] - 10.0) ** 2
+            )
+
+        def coupling_constraint(x: np.ndarray) -> float:
+            r = estimate_edge_coupled_directional_coupler(
+                x[0], x[2], x[1], freq=freq
+            )
+            return r["K_dB"] - coupling_dB
+
+        opt = minimize(
+            objective,
+            np.array([20.0, 50.0, 10.0], dtype=float),
+            method="SLSQP",
+            bounds=[(0.5, 50.0), (0.5, 500.0), (0.5, 100.0)],
+            constraints={"type": "eq", "fun": coupling_constraint},
+            options={"maxiter": 1000, "ftol": 1e-12},
+        )
+        if not opt.success:
+            raise RuntimeError(f"exact coupler optimization failed: {opt.message}")
+        width, gap_lines, gap_gnd = opt.x
+        r = estimate_edge_coupled_directional_coupler(
+            width, gap_gnd, gap_lines, freq=freq
+        )
+        return CouplerGeometry(
+            width_um=float(width),
+            gap_between_lines_um=float(gap_lines),
+            gap_to_ground_um=float(gap_gnd),
+            length_um=float(r["Length_um"]),
+            k_db=float(r["K_dB"]),
+            z_input_ohm=float(r["Z_input"]),
+        )
+
     if gap_to_ground is None:
         bounds = [(5.0, 50.0), (5.0, 500.0), (5.0, 100.0)]
         x0 = np.array([20.0, 50.0, 10.0], dtype=float)
@@ -557,11 +650,13 @@ def make_coupler_discrete(params: IPMParams, mode: str) -> CouplerDiscrete:
             params.cell_length_um,
         )
 
-    if mode == "optimize":
+    if mode in ("optimize", "optimize_exact", "optimize_matched"):
         geom = optimize_coupler_geometry(
             coupling_dB=params.coupling_dB,
             freq=params.coupler_freq_hz,
             Z0=params.Z0,
+            exact_coupling=(mode == "optimize_exact"),
+            minimize_coupling_at_match=(mode == "optimize_matched"),
         )
         return calculate_discrete_params(
             geom.width_um,

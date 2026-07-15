@@ -15,6 +15,7 @@ def test_inproc_fail_fast_is_opt_in(monkeypatch) -> None:
     args = run_gain_map.parse_args()
 
     assert args.inproc_fail_fast is False
+    assert args.fold_skip_patience == 0
 
 
 def test_inproc_fail_fast_flag_enables_fast_failure(monkeypatch) -> None:
@@ -63,6 +64,18 @@ def test_column_arclength_recovery_is_opt_in(monkeypatch) -> None:
         ["run_gain_map.py", "--column-arclength-recovery"],
     )
     assert run_gain_map.parse_args().column_arclength_recovery is True
+
+
+def test_column_arclength_has_separate_trace_deadline(monkeypatch) -> None:
+    monkeypatch.setattr(sys, "argv", ["run_gain_map.py"])
+    assert run_gain_map.parse_args().column_arclength_deadline_s == 180.0
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["run_gain_map.py", "--column-arclength-deadline-s", "12"],
+    )
+    assert run_gain_map.parse_args().column_arclength_deadline_s == 12.0
 
 
 def test_frequency_chunk_size_defaults_to_ten_columns(monkeypatch) -> None:
@@ -218,3 +231,79 @@ def test_fail_fast_does_not_retry_secant_fallback(tmp_path) -> None:
     assert [call[0] for call in engine.calls] == [0, 1, 2]
     assert rows[-1]["status"] == "ERROR"
     assert rows[-1]["pump_predictor"] == "secant"
+
+
+def test_consecutive_failures_do_not_skip_without_verified_fold(tmp_path) -> None:
+    class FakeEngine:
+        def __init__(self) -> None:
+            self.args = SimpleNamespace(
+                inproc_fold_predictor="none",
+                pump_current_jc_scale=1.0,
+                fold_skip_patience=1,
+                column_arclength_recovery=False,
+            )
+
+        def solve_point(self, point, pass_dir, *, mode, warm_X):
+            row = {
+                "point_index": point.index,
+                "status": "ERROR" if point.index >= 1 else "PASS",
+                "gain_db": None,
+                "pump_newton_total": 1,
+                "pump_runtime_s": 0.1,
+            }
+            return row, np.array([float(point.index + 1)])
+
+    points = [
+        run_gain_map.GridPoint(0, 0, 0, -35.0, 7.5, 1.0),
+        run_gain_map.GridPoint(1, 1, 0, -34.0, 7.5, 2.0),
+        run_gain_map.GridPoint(2, 2, 0, -33.0, 7.5, 3.0),
+    ]
+
+    rows = run_gain_map.run_warm_pass_inprocess(
+        points,
+        tmp_path,
+        FakeEngine(),
+        fail_fast=True,
+    )
+
+    assert len(rows) == 3
+    assert all(row["status"] == "ERROR" for row in rows[1:])
+
+
+def test_fold_skip_requires_arclength_turning_point(tmp_path) -> None:
+    class FakeEngine:
+        def __init__(self) -> None:
+            self.args = SimpleNamespace(
+                inproc_fold_predictor="none",
+                pump_current_jc_scale=1.0,
+                fold_skip_patience=1,
+                column_arclength_recovery=True,
+                column_arclength_deadline_s=1.0,
+            )
+
+        def solve_point(self, point, pass_dir, *, mode, warm_X):
+            status = "ERROR" if point.index == 2 else "PASS"
+            row = {
+                "point_index": point.index,
+                "status": status,
+                "gain_db": None,
+                "pump_newton_total": 1,
+                "pump_runtime_s": 0.1,
+            }
+            return row, np.array([float(point.index + 1)])
+
+        def trace_column_arclength(self, *args):
+            return {}, {"fold_lambdas": [0.99], "steps": 1, "trace_points": 2}
+
+    points = [
+        run_gain_map.GridPoint(i, i, 0, -35.0 + i, 7.5, float(i + 1))
+        for i in range(4)
+    ]
+    rows = run_gain_map.run_warm_pass_inprocess(
+        points,
+        tmp_path,
+        FakeEngine(),
+        fail_fast=True,
+    )
+
+    assert [row["status"] for row in rows] == ["PASS", "PASS", "ERROR", "SKIP_PAST_FOLD"]

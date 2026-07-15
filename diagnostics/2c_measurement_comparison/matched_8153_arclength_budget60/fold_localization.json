@@ -1,0 +1,12 @@
+{
+  "pump_freq_ghz": 8.1530612245,
+  "seed_powers_dbm": [-23.645, -23.64],
+  "fold_lambda": 0.9950589572020707,
+  "fold_power_dbm": -23.6330237312,
+  "natural_last_pass_dbm": -23.635,
+  "natural_first_persistent_failure_dbm": -23.63,
+  "trace_target_range_dbm": [-23.64, -23.59],
+  "trace_crossings": 0,
+  "trace_terminal_reason": "deadline",
+  "interpretation": "turning point reached; no target-power crossing above fold within bounded trace"
+}
