@@ -1,0 +1,28 @@
+flowchart TD
+  S0["solve_one L131<br/>X=X0, nrm=problem.norms"] --> FIN{"finite state & residual?<br/>L146"}
+  FIN -->|no| RN["report FAIL<br/>'non-finite initial state or residual'"]
+  FIN -->|yes| C0{"coeff_rel < newton_tol?<br/>L161"}
+  C0 -->|yes| OK0["report CONVERGED (0 iters)"]
+  C0 -->|no| LOOP["for it in 1..max_newton L182"]
+  LOOP --> DL{"solve_deadline exceeded?<br/>L183"}
+  DL -->|yes| RDL["report FAIL 'solve exceeded budget'"]
+  DL -->|no| R["R=residual_coeffs L192"]
+  R --> RF{"R finite? L193"}
+  RF -->|no| RNF["report FAIL 'non-finite residual'"]
+  RF -->|yes| TAN["tangent_state L203"]
+  TAN --> TF{"tangent finite? L204"}
+  TF -->|no| RTF["report FAIL 'non-finite tangent'"]
+  TF -->|yes| PRE["build/reuse preconditioner L213-268 (§8)"]
+  PRE --> GM["gmres_call L322 (matrix-free J via matvec L270)"]
+  GM --> GE{"GmresDeadlineExceeded?<br/>L334"}
+  GE -->|yes| RGE["report FAIL 'exceeded budget mid-GMRES'"]
+  GE -->|no| LSrch["line search alpha=1,*0.5 while >=min_alpha L359"]
+  LSrch --> ACC{"accepted (residual decreased)?<br/>L375"}
+  ACC -->|no| RLS["report FAIL 'line search failed'"]
+  ACC -->|yes| UPD["X=best_X; nrm=best_nrm L390"]
+  UPD --> ST{"stall? ratio>stall_ratio<br/>for stall_patience steps L396"}
+  ST -->|yes| RST["report FAIL 'stalled'"]
+  ST -->|no| CV{"coeff_rel < newton_tol? L425"}
+  CV -->|yes| ROK["report CONVERGED"]
+  CV -->|no| LOOP
+  LOOP -->|"exhausted"| RMX["report FAIL 'maximum Newton iterations reached'"]

@@ -26,11 +26,14 @@ No dense inverse is ever formed: ``D_ee,k^{-1}`` is applied as a sparse LU solve
 from __future__ import annotations
 
 import time
+import logging
 from dataclasses import dataclass, field
 
 import numpy as np
 import scipy.sparse as sp
 import scipy.sparse.linalg as spla
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -99,6 +102,7 @@ def build_partition(
             retained set is too small).
     """
     bphi = bphi.tocsr()
+    logger.debug("schur_partition_build_start n_harmonics=%d bphi_shape=%s ports=%r", len(linear_blocks), bphi.shape, port_indices)
     n = bphi.shape[0]
     incident = np.unique(bphi.nonzero()[0])
     retained_mask = np.zeros(n, dtype=bool)
@@ -132,7 +136,7 @@ def build_partition(
                 "small to eliminate the linear-internal nodes"
             ) from exc
     factor_time_s = time.perf_counter() - t0
-
+    logger.debug("schur_partition_factors_complete retained=%d eliminated=%d factor_time_s=%.6f", retained.size, eliminated.size, factor_time_s)
     return SchurPartition(
         retained=retained,
         eliminated=eliminated,
@@ -157,6 +161,7 @@ def assemble_schur_complements(
     banded sparsity (numerical fill from the dense solve is at round-off level).
     """
     if part.schur is not None:
+        logger.debug("schur_complements_reuse n_harmonics=%d nnz=%d", len(part.schur), part.schur_nnz)
         return part
     t0 = time.perf_counter()
     sc: list[sp.csc_matrix] = []
@@ -192,6 +197,7 @@ def assemble_schur_complements(
     part.schur = sc
     part.schur_assemble_time_s = time.perf_counter() - t0
     part.schur_nnz = total_nnz
+    logger.debug("schur_complements_complete n_harmonics=%d nnz=%d runtime_s=%.6f", len(sc), total_nnz, part.schur_assemble_time_s)
     return part
 
 
@@ -209,6 +215,7 @@ def reduced_linear_apply(
 
     The eliminated solve is a sparse LU back-substitution, never a dense inverse.
     """
+    logger.debug("schur_reduced_linear_apply harmonic=%d input_shape=%s", h, vn.shape)
     rhs = part.den[h] @ vn
     ye = part.dee_factors[h].solve(np.asarray(rhs, dtype=np.complex128))
     return part.dnn[h] @ vn - part.dne[h] @ ye
@@ -225,6 +232,7 @@ def back_substitute_full(
     nodes (the default), this is -D_ee,k^{-1} D_en,k X_n,k.
     """
     H = xn.shape[0]
+    logger.debug("schur_back_substitute_start retained_shape=%s full_nodes=%d", xn.shape, part.n)
     x_full = np.zeros((H, part.n), dtype=np.complex128)
     x_full[:, part.retained] = xn
     for h in range(H):
@@ -233,4 +241,5 @@ def back_substitute_full(
             rhs = rhs + source_eliminated[h]
         xe = part.dee_factors[h].solve(np.asarray(rhs, dtype=np.complex128))
         x_full[h, part.eliminated] = xe
+    logger.debug("schur_back_substitute_complete full_shape=%s", x_full.shape)
     return x_full

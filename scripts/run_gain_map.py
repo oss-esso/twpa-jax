@@ -38,6 +38,7 @@ import os
 import csv
 import gc
 import json
+import logging
 import math
 import shutil
 import subprocess
@@ -50,6 +51,8 @@ from typing import Any
 
 import numpy as np
 import scipy.sparse as sp
+
+logger = logging.getLogger(__name__)
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -74,11 +77,20 @@ from twpa_solver.pump.backends.schur_operators import (  # noqa: E402
 # =============================================================================
 
 def dbm_to_peak_current_a(power_dbm: float, *, attenuation_db: float, z0_ohm: float) -> float:
+    logger.debug(
+        "dbm_to_peak_current_a_start power_dbm=%s attenuation_db=%s z0_ohm=%s",
+        power_dbm, attenuation_db, z0_ohm,
+    )
     if z0_ohm <= 0.0:
         raise ValueError("z0_ohm must be positive")
     source_dbm = float(power_dbm) - float(attenuation_db)
     power_w = 1.0e-3 * 10.0 ** (source_dbm / 10.0)
-    return math.sqrt(2.0 * power_w / float(z0_ohm))
+    current_a = math.sqrt(2.0 * power_w / float(z0_ohm))
+    logger.debug(
+        "dbm_to_peak_current_a_result source_dbm=%s power_w=%s current_a=%s",
+        source_dbm, power_w, current_a,
+    )
+    return current_a
 
 
 def peak_current_to_power_dbm(current_a: float, freq_ghz: float, args: argparse.Namespace) -> float:
@@ -91,7 +103,12 @@ def peak_current_to_power_dbm(current_a: float, freq_ghz: float, args: argparse.
         return float("-inf")
     power_w = current_a * current_a * float(args.z0_ohm) / 2.0
     source_dbm = 10.0 * math.log10(power_w / 1.0e-3)
-    return source_dbm + attenuation_db_for(freq_ghz, args)
+    result = source_dbm + attenuation_db_for(freq_ghz, args)
+    logger.debug(
+        "peak_current_to_power_dbm current_a=%s freq_ghz=%s -> dbm=%s",
+        current_a, freq_ghz, result,
+    )
+    return result
 
 
 def attenuation_db_for(freq_ghz: float, args: argparse.Namespace) -> float:
@@ -102,8 +119,15 @@ def attenuation_db_for(freq_ghz: float, args: argparse.Namespace) -> float:
     value.
     """
     if args.attenuation_db is not None:
+        logger.debug(
+            "attenuation_db_for freq_ghz=%s -> flat_db=%s", freq_ghz, args.attenuation_db,
+        )
         return float(args.attenuation_db)
-    return float(default_loss_model().attenuation_db(float(freq_ghz)))
+    att = float(default_loss_model().attenuation_db(float(freq_ghz)))
+    logger.debug(
+        "attenuation_db_for freq_ghz=%s -> model_db=%s", freq_ghz, att,
+    )
+    return att
 
 
 def signal_ghz_for(pump_freq_ghz: float, args: argparse.Namespace) -> float:
@@ -114,8 +138,17 @@ def signal_ghz_for(pump_freq_ghz: float, args: argparse.Namespace) -> float:
     overrides this with a fixed absolute signal.
     """
     if getattr(args, "signal_ghz", None) is not None:
+        logger.debug(
+            "signal_ghz_for pump_freq_ghz=%s -> fixed_signal_ghz=%s",
+            pump_freq_ghz, args.signal_ghz,
+        )
         return float(args.signal_ghz)
-    return float(pump_freq_ghz) - float(args.signal_detuning_mhz) / 1000.0
+    result = float(pump_freq_ghz) - float(args.signal_detuning_mhz) / 1000.0
+    logger.debug(
+        "signal_ghz_for pump_freq_ghz=%s detuning_mhz=%s -> signal_ghz=%s",
+        pump_freq_ghz, args.signal_detuning_mhz, result,
+    )
+    return result
 
 
 def spectrum_offsets_mhz(args: argparse.Namespace) -> list[float]:
@@ -128,7 +161,13 @@ def spectrum_offsets_mhz(args: argparse.Namespace) -> list[float]:
     """
     pos = [args.signal_offset_start_mhz + i * args.signal_offset_step_mhz
            for i in range(args.signal_offset_count_per_side)]
-    return [float(-x) for x in reversed(pos)] + [float(x) for x in pos]
+    offsets = [float(-x) for x in reversed(pos)] + [float(x) for x in pos]
+    logger.debug(
+        "spectrum_offsets_mhz start=%s step=%s count_per_side=%s -> n_offsets=%s",
+        args.signal_offset_start_mhz, args.signal_offset_step_mhz,
+        args.signal_offset_count_per_side, len(offsets),
+    )
+    return offsets
 
 
 def finite_or_none(value: Any) -> float | None:
@@ -160,6 +199,10 @@ def point_name(index: int, power_dbm: float, pump_freq_ghz: float) -> str:
 def run_command(
     cmd: list[str], *, stdout_path: Path, stderr_path: Path, timeout_s: float
 ) -> tuple[int, float]:
+    logger.debug(
+        "run_command_start argv0=%s nargs=%s timeout_s=%s stdout_path=%s",
+        cmd[0] if cmd else None, len(cmd), timeout_s, stdout_path,
+    )
     stdout_path.parent.mkdir(parents=True, exist_ok=True)
     start = time.perf_counter()
     try:
@@ -170,11 +213,17 @@ def run_command(
                 cmd, cwd=str(ROOT), stdout=out, stderr=err, text=True,
                 timeout=timeout_s, check=False,
             )
-        return int(proc.returncode), time.perf_counter() - start
+        elapsed = time.perf_counter() - start
+        logger.debug(
+            "run_command_result returncode=%s elapsed_s=%s", proc.returncode, elapsed,
+        )
+        return int(proc.returncode), elapsed
     except subprocess.TimeoutExpired:
         with stderr_path.open("a", encoding="utf-8") as err:
             err.write(f"\nTIMEOUT after {timeout_s:.3f} s\n")
-        return 124, time.perf_counter() - start
+        elapsed = time.perf_counter() - start
+        logger.debug("run_command_timeout timeout_s=%s elapsed_s=%s", timeout_s, elapsed)
+        return 124, elapsed
 
 
 # =============================================================================
@@ -246,20 +295,28 @@ def gain_metrics(report: dict[str, Any] | None) -> dict[str, float | None]:
 
 def pump_status(report: dict[str, Any] | None, returncode: int) -> str:
     if returncode != 0:
+        logger.debug("pump_status returncode=%s -> ERROR", returncode)
         return "ERROR"
     if report is None:
+        logger.debug("pump_status report=None -> MISSING")
         return "MISSING"
-    return str(report.get("final_status", "UNKNOWN"))
+    status = str(report.get("final_status", "UNKNOWN"))
+    logger.debug("pump_status final_status=%s", status)
+    return status
 
 
 def gain_status(report: dict[str, Any] | None, returncode: int) -> str:
     if returncode != 0:
+        logger.debug("gain_status returncode=%s -> ERROR", returncode)
         return "ERROR"
     if report is None:
+        logger.debug("gain_status report=None -> MISSING")
         return "MISSING"
     results = report.get("results", [])
     if results and all(r.get("status") == "VALID_SOLVED" for r in results):
+        logger.debug("gain_status n_results=%s -> VALID_SOLVED", len(results))
         return "VALID_SOLVED"
+    logger.debug("gain_status n_results=%s -> UNKNOWN", len(results))
     return "UNKNOWN"
 
 
@@ -303,6 +360,10 @@ def run_point(
     pump_flags: list[str],
     promote_from: Path | None,
 ) -> dict[str, Any]:
+    logger.debug(
+        "run_point_start index=%s power_dbm=%s freq_ghz=%s promote_from=%s",
+        point.index, point.power_dbm, point.pump_freq_ghz, promote_from,
+    )
     pdir = pass_dir / "points" / point_name(point.index, point.power_dbm, point.pump_freq_ghz)
     pump_dir = pdir / "pump"
     gain_dir = pdir / "gain"
@@ -336,6 +397,7 @@ def run_point(
     if promote_from is not None:
         pump_cmd.extend(["--promote-from-pump-dir", str(promote_from)])
 
+    logger.debug("run_point_pump_subprocess_dispatch index=%s", point.index)
     pump_rc, pump_wall_runtime_s = run_command(
         pump_cmd,
         stdout_path=pdir / "pump_stdout.txt",
@@ -344,10 +406,15 @@ def run_point(
     )
     pump_report = read_json(pump_dir / "pump_report.json")
     p_status = pump_status(pump_report, pump_rc)
+    logger.debug(
+        "run_point_pump_result index=%s rc=%s pump_status=%s runtime_s=%s",
+        point.index, pump_rc, p_status, pump_wall_runtime_s,
+    )
 
     gain_rc = -1
     gain_report = None
     if p_status == "VALID_CONVERGED":
+        logger.debug("run_point_gain_subprocess_dispatch index=%s", point.index)
         gain_cmd = [
             args.python_executable, EXP09,
             "--ipm-dir", str(args.circuit_dir),
@@ -368,11 +435,23 @@ def run_point(
             timeout_s=args.gain_timeout_s,
         )
         gain_report = read_json(gain_dir / "gain_report.json")
+        logger.debug(
+            "run_point_gain_result index=%s rc=%s runtime_s=%s",
+            point.index, gain_rc, gain_wall_runtime_s,
+        )
     else:
         gain_wall_runtime_s = None
+        logger.debug(
+            "run_point_gain_skipped index=%s reason=pump_not_converged pump_status=%s",
+            point.index, p_status,
+        )
     g_status = gain_status(gain_report, gain_rc)
 
     status = "PASS" if p_status == "VALID_CONVERGED" and g_status == "VALID_SOLVED" else "ERROR"
+    logger.debug(
+        "run_point_result index=%s status=%s pump_status=%s gain_status=%s",
+        point.index, status, p_status, g_status,
+    )
 
     row: dict[str, Any] = {
         "point_index": point.index,
@@ -402,11 +481,19 @@ def run_point(
 def run_cold_pass(
     points: list[GridPoint], pass_dir: Path, args: argparse.Namespace
 ) -> list[dict[str, Any]]:
+    logger.debug("run_cold_pass_start n_points=%s pass_dir=%s", len(points), pass_dir)
     rows: list[dict[str, Any]] = []
     total = len(points)
     for point in points:
+        logger.debug(
+            "run_cold_pass_loop_enter index=%s of=%s power_dbm=%s freq_ghz=%s",
+            point.index, total, point.power_dbm, point.pump_freq_ghz,
+        )
         row = run_point(point, pass_dir, args, pump_flags=pump_flags_cold(args), promote_from=None)
         rows.append(row)
+        logger.debug(
+            "run_cold_pass_loop_exit index=%s status=%s", point.index, row["status"],
+        )
         print(
             f"[cold {point.index + 1}/{total}] P={point.power_dbm:.4g} dBm "
             f"fp={point.pump_freq_ghz:.4g} GHz status={row['status']} "
@@ -422,6 +509,7 @@ def run_warm_pass(
     args: argparse.Namespace,
 ) -> list[dict[str, Any]]:
     """Traverse each frequency column in increasing power, warm-starting."""
+    logger.debug("run_warm_pass_start n_points=%s pass_dir=%s", len(points), pass_dir)
     by_col: dict[int, list[GridPoint]] = {}
     for point in points:
         by_col.setdefault(point.j_freq, []).append(point)
@@ -431,6 +519,7 @@ def run_warm_pass(
     done = 0
     for j in sorted(by_col):
         column = sorted(by_col[j], key=lambda p: p.power_dbm)
+        logger.debug("run_warm_pass_column_start j_freq=%s n_points=%s", j, len(column))
         previous_pump_dir: Path | None = None
         for point in column:
             promote = previous_pump_dir
@@ -439,6 +528,10 @@ def run_warm_pass(
             # via a single full-scale Newton solve. Pass zero-init flags on
             # warm-start points so exp08 skips the unused linear_phasor seed.
             flags = ["--initial-guess", "zero"] if promote is not None else pump_flags_warm_seed(args)
+            logger.debug(
+                "run_warm_pass_point_enter index=%s power_dbm=%s mode=%s",
+                point.index, point.power_dbm, "warm" if promote is not None else "seed",
+            )
             row = run_point(
                 point, pass_dir, args,
                 pump_flags=flags,
@@ -450,6 +543,10 @@ def run_warm_pass(
             # off the neighbour fails but a graded solve still converges.
             retried = False
             if row["status"] != "PASS" and promote is not None:
+                logger.debug(
+                    "run_warm_pass_retry_reseed index=%s prior_status=%s",
+                    point.index, row["status"],
+                )
                 retry = run_point(
                     point, pass_dir, args,
                     pump_flags=pump_flags_warm_seed(args),
@@ -458,9 +555,17 @@ def run_warm_pass(
                 if retry["status"] == "PASS":
                     row = retry
                     retried = True
+                logger.debug(
+                    "run_warm_pass_retry_result index=%s retry_status=%s accepted=%s",
+                    point.index, retry["status"], retried,
+                )
             row["warm_retry_reseed"] = retried
             rows.append(row)
             done += 1
+            logger.debug(
+                "run_warm_pass_point_exit index=%s status=%s retried=%s",
+                point.index, row["status"], retried,
+            )
             print(
                 f"[warm {done}/{total}] P={point.power_dbm:.4g} dBm "
                 f"fp={point.pump_freq_ghz:.4g} GHz "
@@ -476,6 +581,7 @@ def run_warm_pass(
             else:
                 previous_pump_dir = None
     rows.sort(key=lambda r: r["point_index"])
+    logger.debug("run_warm_pass_end n_rows=%s", len(rows))
     return rows
 
 
@@ -499,6 +605,12 @@ class InProcessEngine:
     """
 
     def __init__(self, args: argparse.Namespace) -> None:
+        logger.debug(
+            "InProcessEngine_init_start circuit_dir=%s pump_port=%s source_port=%s "
+            "out_port=%s pump_backend=%s pump_mode_policy=%s",
+            args.circuit_dir, args.pump_port, args.source_port, args.out_port,
+            getattr(args, "inproc_pump_backend", None), args.pump_mode_policy,
+        )
         self.args = args
         self.ipm08 = load_circuit(args.circuit_dir)
         self.ipm09 = load_circuit(args.circuit_dir)
@@ -518,6 +630,12 @@ class InProcessEngine:
         self._schur_cache_max = max(1, int(getattr(args, "inproc_schur_cache_size", 2)))
         self._signal_schur_part_cache: dict[tuple[Any, ...], Any] = {}
         self._signal_schur_cache_max = max(1, int(getattr(args, "inproc_schur_cache_size", 2)))
+        logger.debug(
+            "InProcessEngine_init_done pump_idx=%s source_idx=%s out_idx=%s "
+            "n_ports=%s schur_cache_max=%s",
+            self.pump_idx, self.source_idx, self.out_idx, len(self.ports),
+            self._schur_cache_max,
+        )
 
     def _settings(self) -> exp08.NewtonKrylovSettings:
         # Intra-cell continuation predictor: tangent uses the exact lambda-tangent
@@ -532,6 +650,13 @@ class InProcessEngine:
             "adaptive_secant": "secant",
             "adaptive_tangent": "tangent",
         }.get(continuation, "none")
+        logger.debug(
+            "engine_settings continuation=%s continuation_predictor=%s "
+            "preconditioner=%s max_newton=%s gmres_maxiter=%s deadline_s=%s",
+            continuation, cont_pred, self.args.inproc_preconditioner,
+            self.args.inproc_max_newton, self.args.inproc_gmres_maxiter,
+            self.args.inproc_solve_deadline_s,
+        )
         return exp08.NewtonKrylovSettings(
             newton_tol=self.args.newton_tol, max_newton=self.args.inproc_max_newton, gmres_rtol=1e-7,
             gmres_atol=0.0, gmres_restart=60, gmres_maxiter=self.args.inproc_gmres_maxiter,
@@ -544,6 +669,12 @@ class InProcessEngine:
         )
 
     def _build_problem(self, freq_ghz: float, current_a: float):
+        logger.debug(
+            "engine_build_problem_start freq_ghz=%s current_a=%s policy=%s "
+            "mode_count=%s harmonics=%s nt=%s",
+            freq_ghz, current_a, self.args.pump_mode_policy,
+            self.args.pump_mode_count, self.args.harmonics, self.args.nt,
+        )
         omega = 2.0 * math.pi * freq_ghz * 1e9
         basis = pump_basis.resolve_pump_basis(
             policy=self.args.pump_mode_policy, omega_p=omega,
@@ -556,6 +687,11 @@ class InProcessEngine:
             branch=self.branch, grid=grid, pump_node_index=self.pump_idx,
             pump_current_a=current_a, source_mode=basis.source_mode,
         )
+        logger.debug(
+            "engine_build_problem_complete freq_ghz=%s omega=%s modes=%r "
+            "problem_shape=%s",
+            freq_ghz, omega, basis.modes, problem.zeros().shape,
+        )
         return problem, basis, omega
 
     def _make_solve_problem(self, full_problem, freq_ghz: float):
@@ -567,16 +703,29 @@ class InProcessEngine:
         backend returns the full problem unchanged.
         """
         if self.args.inproc_pump_backend != "schur_cpu_mt":
+            logger.debug("engine_make_solve_problem backend=full freq_ghz=%s", freq_ghz)
             return full_problem
         cache = self._schur_part_cache
         part = cache.pop(freq_ghz, None)  # pop-then-reinsert -> most-recent (LRU)
+        logger.debug(
+            "engine_make_solve_problem backend=schur freq_ghz=%s cache_hit=%s "
+            "cache_size_before=%d",
+            freq_ghz, part is not None, len(cache),
+        )
         sprob = (SchurReducedProblem(full=full_problem, partition=part)
                  if part is not None
                  else build_schur_problem(full_problem, self.ports))
         cache[freq_ghz] = sprob.part
         while len(cache) > self._schur_cache_max:
-            del cache[next(iter(cache))]  # evict oldest -> frees its splu
+            evicted = next(iter(cache))
+            del cache[evicted]  # evict oldest -> frees its splu
+            logger.debug("engine_schur_cache_evict freq_ghz=%s", evicted)
             gc.collect()
+        logger.debug(
+            "engine_make_solve_problem_complete freq_ghz=%s retained=%d eliminated=%d "
+            "cache_size_after=%d",
+            freq_ghz, sprob.n, sprob.part.p, len(cache),
+        )
         return sprob
 
     def build_problem_for(self, point: GridPoint):
@@ -587,6 +736,12 @@ class InProcessEngine:
         so the (cheap) problem build is not paid twice.
         """
         injected = point.current_a * self.args.pump_current_jc_scale
+        logger.debug(
+            "engine_build_problem_for point=%s power_dbm=%s freq_ghz=%s "
+            "physical_current_a=%s injected_current_a=%s",
+            point.index, point.power_dbm, point.pump_freq_ghz,
+            point.current_a, injected,
+        )
         full_problem, basis, omega = self._build_problem(point.pump_freq_ghz, injected)
         return full_problem, basis, omega, injected
 
@@ -597,10 +752,14 @@ class InProcessEngine:
         ``inf`` for a missing or shape-mismatched guess so it sorts last.
         """
         if X is None or X.shape != full_problem.zeros().shape:
+            logger.debug("engine_residual_norm_invalid_guess shape=%s", None if X is None else X.shape)
             return float("inf")
         try:
-            return float(full_problem.norms(X, 1.0, False)["coeff_rel"])
+            value = float(full_problem.norms(X, 1.0, False)["coeff_rel"])
+            logger.debug("engine_residual_norm value=%s", value)
+            return value
         except (ValueError, FloatingPointError):
+            logger.debug("engine_residual_norm_failed", exc_info=True)
             return float("inf")
 
     def solve_point(
@@ -612,6 +771,12 @@ class InProcessEngine:
         pump_dir = pdir / "pump"
         gain_dir = pdir / "gain"
         pdir.mkdir(parents=True, exist_ok=True)
+        logger.debug(
+            "engine_solve_point_start point=%s power_dbm=%s freq_ghz=%s mode=%s "
+            "warm_guess=%s force_gain=%s",
+            point.index, point.power_dbm, point.pump_freq_ghz, mode,
+            warm_X is not None, force_gain,
+        )
         t0 = time.perf_counter()
         pump_wall_start = time.perf_counter()
 
@@ -621,12 +786,20 @@ class InProcessEngine:
         else:
             full_problem, basis, omega, injected = self.build_problem_for(point)
         pump_setup_runtime_s = time.perf_counter() - t_setup
+        logger.debug(
+            "engine_solve_point_problem_ready point=%s setup_s=%.6f injected_current_a=%s",
+            point.index, pump_setup_runtime_s, injected,
+        )
         # Optional Schur-reduced backend: solve on retained nodes, reconstruct
         # the full solution for write_results/exp09 (which need full-node X).
         use_schur = a.inproc_pump_backend == "schur_cpu_mt"
         t_schur = time.perf_counter()
         solve_problem = self._make_solve_problem(full_problem, point.pump_freq_ghz)
         pump_schur_setup_runtime_s = time.perf_counter() - t_schur
+        logger.debug(
+            "engine_solve_point_backend_ready point=%s use_schur=%s schur_setup_s=%.6f",
+            point.index, use_schur, pump_schur_setup_runtime_s,
+        )
         solver = exp08.HarmonicNewtonKrylovSolver(self._settings())
 
         t_solve = time.perf_counter()
@@ -638,9 +811,11 @@ class InProcessEngine:
             "runtime_s": None,
         }
         if mode == "warm" and warm_X is not None:
+            logger.debug("engine_solve_point_continuation_dispatch point=%s method=direct", point.index)
             X, reports = solver.solve_direct(solve_problem, warm_X)
         else:
             cont = getattr(a, "inproc_continuation", "adaptive_secant")
+            logger.debug("engine_solve_point_continuation_dispatch point=%s method=%s", point.index, cont)
             continuation_info["method"] = cont
             continuation_start = time.perf_counter()
             X_seed = solve_problem.zeros()
@@ -718,11 +893,23 @@ class InProcessEngine:
                 if predictor == "none" and cont != "affine":
                     continuation_info["method"] = "adaptive_copy"
             continuation_info["runtime_s"] = time.perf_counter() - continuation_start
+            logger.debug(
+                "engine_solve_point_continuation_complete point=%s method=%s "
+                "reports=%d reached_target=%s runtime_s=%.6f",
+                point.index, continuation_info["method"], len(reports),
+                continuation_info["reached_target"], continuation_info["runtime_s"],
+            )
 
         pump_solve_wall_runtime_s = time.perf_counter() - t_solve
 
         converged = bool(reports and reports[-1].converged
                          and abs(reports[-1].source_scale - 1.0) < 1e-12)
+        logger.debug(
+            "engine_solve_point_pump_complete point=%s converged=%s reports=%d "
+            "last_coeff_rel=%s solve_wall_s=%.6f",
+            point.index, converged, len(reports),
+            reports[-1].coeff_rel if reports else None, pump_solve_wall_runtime_s,
+        )
 
         # X is retained-sized for the Schur backend; reconstruct full nodes.
         chain_X = X
@@ -740,6 +927,10 @@ class InProcessEngine:
         exp08.write_results(pump_dir, X_full, reports, summary, metadata)
         pump_write_runtime_s = time.perf_counter() - t_write
         pump_wall_runtime_s = time.perf_counter() - pump_wall_start
+        logger.debug(
+            "engine_solve_point_pump_written point=%s path=%s write_s=%.6f wall_s=%.6f",
+            point.index, pump_dir, pump_write_runtime_s, pump_wall_runtime_s,
+        )
 
         row: dict[str, Any] = {
             "point_index": point.index, "i_power": point.i_power, "j_freq": point.j_freq,
@@ -784,6 +975,10 @@ class InProcessEngine:
         # even when Newton did not converge (above-threshold / fold region), so
         # the diagnostic column resume can see what the gain does past the wall.
         if converged or force_gain:
+            logger.debug(
+                "engine_solve_point_gain_dispatch point=%s reason=%s",
+                point.index, "converged" if converged else "force_gain",
+            )
             g, gain_timing, spectrum = self._gain(pump_dir, gain_dir, point.pump_freq_ghz)
             row.update(gain_timing)
             if spectrum is not None:
@@ -801,11 +996,21 @@ class InProcessEngine:
                 row["gain_vs_pumpdiag_db"] = float(g.gain_vs_pumpdiag_db)
                 row["signal_ghz"] = float(g.signal_ghz)
                 row["linear_rel_residual"] = float(g.linear_rel_residual)
+            logger.debug(
+                "engine_solve_point_gain_complete point=%s gain_status=%s gain_db=%s",
+                point.index, row["gain_status"], row["gain_db"],
+            )
+        else:
+            logger.debug("engine_solve_point_gain_skipped point=%s pump_not_converged", point.index)
 
         row["status"] = "PASS" if (row["pump_status"] == "VALID_CONVERGED"
                                    and row["gain_status"] == "VALID_SOLVED") else "ERROR"
         row["elapsed_s"] = time.perf_counter() - t0
         row["pump_dir"] = str(pump_dir)
+        logger.debug(
+            "engine_solve_point_end point=%s status=%s pump_status=%s gain_status=%s elapsed_s=%.6f",
+            point.index, row["status"], row["pump_status"], row["gain_status"], row["elapsed_s"],
+        )
         # In force_gain mode return the last-iterate X regardless of convergence
         # so the caller can keep warm-starting up the column past the wall.
         return row, (X if (converged or force_gain) else None)
@@ -979,26 +1184,36 @@ class InProcessEngine:
 
     def _gain(self, pump_dir: Path, gain_dir: Path, freq_ghz: float):
         a = self.args
+        logger.debug(
+            "gain_start pump_dir=%s gain_dir=%s pump_freq_ghz=%s sidebands=%s "
+            "spectrum=%s signal_backend=%s signal_solver=%s",
+            pump_dir, gain_dir, freq_ghz, a.sidebands, a.signal_spectrum,
+            a.signal_backend, a.signal_solver,
+        )
         gain_dir.mkdir(parents=True, exist_ok=True)
         t_all = time.perf_counter()
         pump = exp09.load_pump(pump_dir, fallback_pump_freq_ghz=freq_ghz)
         ms = exp09.sideband_list(a.sidebands)
         max_ell = max(abs(m - q) for m in ms for q in ms)
+        logger.debug("gain_pump_loaded omega_p=%s modes=%r max_ell=%d", pump.omega_p, pump.modes, max_ell)
         t0 = time.perf_counter()
         gamma_hat = exp09.compute_gamma_hat(
             circuit=self.ipm09, pump=pump, max_ell=max_ell, gamma_nt=a.gamma_nt,
             dc_branch_flux=None,
         )
         gamma_runtime_s = time.perf_counter() - t0
+        logger.debug("gain_gamma_hat_complete n_coeffs=%d runtime_s=%.6f", len(gamma_hat), gamma_runtime_s)
         t0 = time.perf_counter()
         khat = exp09.build_khat(Bphi=self.ipm09.Bphi, gamma_hat=gamma_hat, drop_tol=0.0)
         khat_runtime_s = time.perf_counter() - t0
+        logger.debug("gain_khat_complete n_blocks=%d runtime_s=%.6f", len(khat), khat_runtime_s)
         t0 = time.perf_counter()
         gamma_off = self.ipm09.Ic / self.ipm09.phi0
         khat_off_0 = (
             self.ipm09.Bphi @ sp.diags(gamma_off, offsets=0, format="csr") @ self.ipm09.Bphi.T
         ).astype(np.complex128).tocsr()
         khat_off_runtime_s = time.perf_counter() - t0
+        logger.debug("gain_khat_off_complete nnz=%d runtime_s=%.6f", khat_off_0.nnz, khat_off_runtime_s)
 
         # Signal-frequency-independent Floquet conversion base: built once here,
         # reused by the trailing solve and every spectrum point (the dominant
@@ -1009,12 +1224,18 @@ class InProcessEngine:
             t0 = time.perf_counter()
             khat_big_base = exp09.assemble_khat_conversion_base(self.ipm09, khat, ms)
             khat_base_runtime_s = time.perf_counter() - t0
+            logger.debug(
+                "gain_conversion_base_complete shape=%s nnz=%d runtime_s=%.6f",
+                khat_big_base.shape, khat_big_base.nnz, khat_base_runtime_s,
+            )
 
         target_signal_ghz = signal_ghz_for(freq_ghz, a)
+        logger.debug("gain_target_signal_selected signal_ghz=%s", target_signal_ghz)
         g = None
         spectrum = None
         if a.signal_spectrum:
             offs = spectrum_offsets_mhz(a)
+            logger.debug("gain_spectrum_dispatch n_offsets=%d workers=%d", len(offs), a.signal_workers)
 
             def one(off: float) -> tuple[float, float, Any]:
                 fs = float(freq_ghz) + off / 1000.0
@@ -1033,12 +1254,17 @@ class InProcessEngine:
                 "gain_db": [float(it[2].gain_db) for it in items],
                 "status": [it[2].status for it in items],
             }
+            logger.debug(
+                "gain_spectrum_complete n_results=%d valid=%d",
+                len(items), sum(item[2].status == "VALID_SOLVED" for item in items),
+            )
             for _, fs, gg in items:
                 if abs(float(fs) - target_signal_ghz) <= 1e-9:
                     g = gg
                     break
 
         if g is None:
+            logger.debug("gain_trailing_dispatch signal_ghz=%s", target_signal_ghz)
             g = self._solve_signal(
                 khat, khat_off_0, khat_big_base, pump.omega_p, target_signal_ghz
             )
@@ -1054,10 +1280,20 @@ class InProcessEngine:
             "gain_baseline_off_runtime_s": float(g.baseline_off_runtime_s),
             "gain_baseline_pumpdiag_runtime_s": float(g.baseline_pumpdiag_runtime_s),
         }
+        logger.debug(
+            "gain_complete status=%s gain_db=%s assemble_s=%.6f solve_s=%.6f wall_s=%.6f",
+            g.status, g.gain_db, g.assemble_runtime_s, g.factor_solve_runtime_s,
+            timing["gain_wall_runtime_s"],
+        )
         return g, timing, spectrum
 
     def _solve_signal(self, khat, khat_off_0, khat_big_base, omega_p, signal_ghz):
         a = self.args
+        logger.debug(
+            "signal_solve_start backend=%s solver=%s omega_p=%s signal_ghz=%s "
+            "sidebands=%s",
+            a.signal_backend, a.signal_solver, omega_p, signal_ghz, a.sidebands,
+        )
         schur_part = None
         if a.signal_backend == "schur":
             key = (
@@ -1069,6 +1305,7 @@ class InProcessEngine:
                 "current_complex_c",
             )
             schur_part = self._signal_schur_part_cache.get(key)
+            logger.debug("signal_schur_cache_lookup hit=%s key=%r", schur_part is not None, key)
             if schur_part is None:
                 schur_part = exp09.build_signal_schur_partition(
                     self.ipm09, omega_p, signal_ghz, a.sidebands,
@@ -1077,7 +1314,9 @@ class InProcessEngine:
                 )
                 self._signal_schur_part_cache[key] = schur_part
                 if len(self._signal_schur_part_cache) > self._signal_schur_cache_max:
-                    self._signal_schur_part_cache.pop(next(iter(self._signal_schur_part_cache)))
+                    evicted = next(iter(self._signal_schur_part_cache))
+                    self._signal_schur_part_cache.pop(evicted)
+                    logger.debug("signal_schur_cache_evict key=%r", evicted)
         common = dict(
             circuit=self.ipm09, khat=khat, khat_off_0=khat_off_0,
             khat_big_base=khat_big_base, omega_p=omega_p, signal_ghz=signal_ghz,
@@ -1088,10 +1327,19 @@ class InProcessEngine:
             linear_solver=a.signal_solver,
         )
         if a.signal_backend == "schur":
-            return exp09.solve_gain_one_schur(
+            result = exp09.solve_gain_one_schur(
                 **common, include_baselines=not a.skip_baselines,
                 schur_part=schur_part)
-        return exp09.solve_gain_one(**common)
+        else:
+            result = exp09.solve_gain_one(**common)
+        logger.debug(
+            "signal_solve_complete backend=%s status=%s gain_db=%s residual=%s "
+            "assemble_s=%.6f solve_s=%.6f",
+            a.signal_backend, result.status, result.gain_db,
+            result.linear_rel_residual, result.assemble_runtime_s,
+            result.factor_solve_runtime_s,
+        )
+        return result
 
 
 def run_cold_pass_inprocess(
@@ -1099,12 +1347,16 @@ def run_cold_pass_inprocess(
 ) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     total = len(points)
+    logger.debug("run_cold_pass_inprocess_start n_points=%d pass_dir=%s", total, pass_dir)
     for point in points:
+        logger.debug("run_cold_pass_inprocess_point_enter index=%d", point.index)
         row, _ = engine.solve_point(point, pass_dir, mode="cold", warm_X=None)
         rows.append(row)
+        logger.debug("run_cold_pass_inprocess_point_exit index=%d status=%s", point.index, row["status"])
         print(f"[cold {point.index + 1}/{total}] P={point.power_dbm:.4g} dBm "
               f"fp={point.pump_freq_ghz:.4g} GHz status={row['status']} "
               f"gain={row.get('gain_db')} pump_s={row.get('pump_runtime_s'):.3f}", flush=True)
+    logger.debug("run_cold_pass_inprocess_complete n_rows=%d", len(rows))
     return rows
 
 
@@ -1125,9 +1377,15 @@ def secant_guess(
     """
     denom = cur_prev - cur_prevprev
     if abs(denom) < 1e-30:
+        logger.debug("secant_guess_degenerate denominator=%s", denom)
         return x_prev
     beta = (cur - cur_prev) / denom
-    return x_prev + beta * (x_prev - x_prevprev)
+    guess = x_prev + beta * (x_prev - x_prevprev)
+    logger.debug(
+        "secant_guess_complete cur_prevprev=%s cur_prev=%s cur=%s beta=%s shape=%s",
+        cur_prevprev, cur_prev, cur, beta, guess.shape,
+    )
+    return guess
 
 
 SKIP_PAST_FOLD = "SKIP_PAST_FOLD"
@@ -1212,6 +1470,12 @@ def run_warm_pass_inprocess(
     total = len(points)
     done = 0
     predictor = getattr(engine.args, "inproc_fold_predictor", "none")
+    logger.debug(
+        "run_warm_pass_inprocess_start n_points=%d columns=%d predictor=%s "
+        "fail_fast=%s patience=%d",
+        len(points), len(by_col), predictor, fail_fast,
+        int(getattr(engine.args, "fold_skip_patience", 0)),
+    )
     scale = engine.args.pump_current_jc_scale
     patience = int(getattr(engine.args, "fold_skip_patience", 0))
     initial_seed = getattr(engine.args, "initial_pump_dir", None)
@@ -1221,6 +1485,7 @@ def run_warm_pass_inprocess(
         )
     for j in sorted(by_col):
         column = sorted(by_col[j], key=lambda p: p.power_dbm)
+        logger.debug("warm_column_start j_freq=%d n_points=%d", j, len(column))
         prev_X: np.ndarray | None = None
         # Last two converged (injected_current, X) for the secant predictor.
         last_good_X: np.ndarray | None = None
@@ -1277,8 +1542,14 @@ def run_warm_pass_inprocess(
             guess = (secant_guess(prevprev_X, base_X, prevprev_cur, last_good_cur, cur)
                      if use_secant else base_X)
             pred_tag = "secant" if use_secant else "none"
+            logger.debug(
+                "warm_point_guess index=%d column_index=%d mode=%s predictor=%s "
+                "guess_shape=%s current_a=%s",
+                point.index, idx, mode, pred_tag, None if guess is None else guess.shape, cur,
+            )
 
             row, X = engine.solve_point(point, pass_dir, mode=mode, warm_X=guess)
+            logger.debug("warm_point_primary_result index=%d status=%s", point.index, row["status"])
 
             # Traced fresh on every failing cell that has a valid seed pair --
             # no per-column "once ever" lock, so one cell's crossing-less
@@ -1306,6 +1577,7 @@ def run_warm_pass_inprocess(
                     last_good_cur,
                     targets,
                 )
+                logger.debug("warm_point_arclength_trace index=%d info=%r", point.index, arc_info)
                 verified_fold = verified_fold or bool(arc_info.get("fold_lambdas"))
                 if arc_info.get("fold_lambdas"):
                     row["pump_column_arclength_fold_lambda"] = float(
@@ -1327,6 +1599,7 @@ def run_warm_pass_inprocess(
                 # Cap to the first 2 target-crossing guesses: each is a full
                 # Newton solve, and a stiff branch can have several crossings.
                 for arc_guess in arclength_guesses[point.index][:2]:
+                    logger.debug("warm_point_arclength_retry index=%d", point.index)
                     arc_row, arc_X = engine.solve_point(
                         point, pass_dir, mode="warm", warm_X=arc_guess,
                     )
@@ -1339,11 +1612,13 @@ def run_warm_pass_inprocess(
             # from the plain warm start before paying the reseed. Fail-fast
             # mode intentionally pays only one solve per cell.
             if row["status"] != "PASS" and use_secant and not fail_fast:
+                logger.debug("warm_point_secant_fallback index=%d", point.index)
                 row, X = engine.solve_point(point, pass_dir, mode="warm", warm_X=base_X)
                 pred_tag = "secant_fallback"
 
             retried = False
             if row["status"] != "PASS" and mode == "warm" and not fail_fast:
+                logger.debug("warm_point_reseed_retry index=%d", point.index)
                 row, X = engine.solve_point(point, pass_dir, mode="seed", warm_X=None)
                 retried = row["status"] == "PASS"
 
@@ -1368,6 +1643,7 @@ def run_warm_pass_inprocess(
                     min_db=engine.args.column_power_substep_min_db,
                     deadline_s=engine.args.column_power_substep_deadline_s,
                 )
+                logger.debug("warm_point_power_substep index=%d info=%r", point.index, sub_info)
                 row["pump_power_substep_substeps"] = sub_info["substeps"]
                 row["pump_power_substep_terminal_reason"] = sub_info["terminal_reason"]
                 if X_sub is not None:
@@ -1385,6 +1661,11 @@ def run_warm_pass_inprocess(
             row["warm_retry_reseed"] = retried
             row["pump_predictor"] = pred_tag
             verified_fold = verified_fold or continuation_failure_is_fold_evidence(row)
+            logger.debug(
+                "warm_point_final index=%d status=%s predictor=%s verified_fold=%s "
+                "consecutive_failures=%d",
+                point.index, row["status"], pred_tag, verified_fold, consec_fail,
+            )
             rows.append(row)
             done += 1
             print(f"[warm {done}/{total}] P={point.power_dbm:.4g} dBm "
@@ -1416,12 +1697,14 @@ def run_warm_pass_inprocess(
                 skipped = column[idx + 1:]
                 for rest in skipped:
                     rows.append(past_fold_skip_row(rest))
+                logger.debug("warm_fold_short_circuit column=%d skipped=%d", j, len(skipped))
                 done += len(skipped)
                 print(f"[warm {done}/{total}] fp={point.pump_freq_ghz:.4g} GHz "
                       f"fold short-circuit: skipped {len(skipped)} past-fold "
                       f"cells above P={point.power_dbm:.4g} dBm", flush=True)
                 break
     rows.sort(key=lambda r: r["point_index"])
+    logger.debug("run_warm_pass_inprocess_complete n_rows=%d", len(rows))
     return rows
 
 
@@ -1446,6 +1729,7 @@ def _traversal_order(points: list[GridPoint], strategy: str, direction: str
     is a Prim (cheapest-neighbour) order from a central low-power seed.
     """
     n_power, n_freq = _grid_dims(points)
+    logger.debug("traversal_order_start strategy=%s direction=%s grid=(%d,%d)", strategy, direction, n_power, n_freq)
     by_ij = {(p.i_power, p.j_freq): p for p in points}
 
     def col_order(js: list[int]) -> list[int]:
@@ -1476,6 +1760,7 @@ def _traversal_order(points: list[GridPoint], strategy: str, direction: str
         for j in js:  # each column upward from its backbone cell
             col = sorted((p for p in points if p.j_freq == j), key=lambda p: p.i_power)
             order.extend(col[1:])
+        logger.debug("traversal_order_complete strategy=backbone n_points=%d", len(order))
         return order
 
     if strategy == "serpentine":
@@ -1483,6 +1768,7 @@ def _traversal_order(points: list[GridPoint], strategy: str, direction: str
         for k, j in enumerate(sorted(all_js)):
             col = sorted((p for p in points if p.j_freq == j), key=lambda p: p.i_power)
             order.extend(col if k % 2 == 0 else list(reversed(col)))
+        logger.debug("traversal_order_complete strategy=serpentine n_points=%d", len(order))
         return order
 
     if strategy == "floodfill":
@@ -1505,10 +1791,13 @@ def _traversal_order(points: list[GridPoint], strategy: str, direction: str
                 if (ni, nj) in by_ij and (ni, nj) not in visited:
                     cost = abs(di) / rangeP + abs(dj) / rangeF
                     heapq.heappush(heap, (cost, ni, nj))
+        logger.debug("traversal_order_complete strategy=floodfill n_points=%d", len(order))
         return order
 
     # column / nearest: column-major, ascending power.
-    return sorted(points, key=lambda p: (p.j_freq, p.i_power))
+    order = sorted(points, key=lambda p: (p.j_freq, p.i_power))
+    logger.debug("traversal_order_complete strategy=%s n_points=%d", strategy, len(order))
+    return order
 
 
 def _nearest_solved(i: int, j: int, solved: dict, n_power: int, n_freq: int):
@@ -1574,21 +1863,29 @@ def _select_guess(
     """
     cands = _build_candidates(point, cur_t, solved, n_power, n_freq)
     predictor = args.predictor
+    logger.debug("predictor_selection_start point=%d predictor=%s candidates=%r", point.index, predictor, {k: v is not None for k, v in cands.items()})
     if predictor == "portfolio":
         ranked = _predictors.rank_candidates(
             cands, lambda X: engine.residual_norm(solve_problem, X))
         if not ranked:
+            logger.debug("predictor_selection_result point=%d tag=seed", point.index)
             return None, "seed", []
+        logger.debug("predictor_selection_result point=%d tag=portfolio:%s", point.index, ranked[0][0])
         return ranked[0][1], f"portfolio:{ranked[0][0]}", ranked
     guess = cands.get(predictor)
     if guess is None:  # fall back to copy of best available parent
         guess = cands.get("copy")
-        return guess, ("copy" if guess is not None else "seed"), []
+        tag = "copy" if guess is not None else "seed"
+        logger.debug("predictor_selection_result point=%d tag=%s", point.index, tag)
+        return guess, tag, []
+    logger.debug("predictor_selection_result point=%d tag=%s", point.index, predictor)
     return guess, predictor, []
 
 
 def _attempt(engine, point, pass_dir, prebuilt, *, mode, warm_X):
+    logger.debug("recovery_attempt_start point=%d mode=%s guess_shape=%s", point.index, mode, None if warm_X is None else warm_X.shape)
     row, X = engine.solve_point(point, pass_dir, mode=mode, warm_X=warm_X, prebuilt=prebuilt)
+    logger.debug("recovery_attempt_complete point=%d status=%s", point.index, row["status"])
     return row, X, row["status"] == "PASS"
 
 
@@ -1618,6 +1915,7 @@ def _recover(
         return (row, X, ok) if ok else None
 
     recovery = args.recovery
+    logger.debug("recovery_start point=%d policy=%s fold_policy=%s ranked=%d", point.index, recovery, args.fold_policy, len(ranked))
     if recovery == "alt_parent":
         for cell in (solved.get((i - 1, j)), solved.get((i, j - 1)), solved.get((i - 1, j - 1))):
             if cell is None:
@@ -1670,10 +1968,12 @@ def _recover(
     # Fail-fast still permits the explicitly selected cheap recovery policy,
     # but does not pay for a fresh continuation after those attempts fail.
     if args.inproc_fail_fast:
+        logger.debug("recovery_end point=%d tag=fail_fast", point.index)
         return last_row, last_X, False, "fail_fast"
 
     # Final fallback: fresh linear_phasor + adaptive reseed.
     row, X, ok = _attempt(engine, point, pass_dir, prebuilt, mode="seed", warm_X=None)
+    logger.debug("recovery_end point=%d tag=reseed ok=%s", point.index, ok)
     return row, X, ok, "reseed"
 
 
@@ -2443,6 +2743,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Print whether real_coupled_fast actually factors with PARDISO or SuperLU.",
     )
+    p.add_argument(
+        "--log-level",
+        choices=["CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG"],
+        default="DEBUG",
+        help="Log verbosity for the complete solver control flow (default: DEBUG).",
+    )
 
     # Production defaults for the standard gain-map workflow.
     p.set_defaults(
@@ -2452,6 +2758,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 def build_points(args: argparse.Namespace) -> tuple[list[GridPoint], np.ndarray, np.ndarray]:
+    logger.debug(
+        "build_points_start n_power=%d n_frequency=%d power_range=(%s,%s) "
+        "frequency_range=(%s,%s)", args.n_power, args.n_frequency,
+        args.pump_power_min_dbm, args.pump_power_max_dbm,
+        args.pump_freq_min_ghz, args.pump_freq_max_ghz,
+    )
     powers = np.linspace(args.pump_power_min_dbm, args.pump_power_max_dbm, args.n_power)
     freqs = np.linspace(args.pump_freq_min_ghz, args.pump_freq_max_ghz, args.n_frequency)
     points: list[GridPoint] = []
@@ -2465,6 +2777,7 @@ def build_points(args: argparse.Namespace) -> tuple[list[GridPoint], np.ndarray,
             )
             points.append(GridPoint(index, i, j, float(power_dbm), float(freq), current))
             index += 1
+    logger.debug("build_points_complete n_points=%d", len(points))
     return points, powers, freqs
 
 
@@ -2745,6 +3058,12 @@ def run_frequency_chunks(
 def main() -> int:
     raw_argv = sys.argv[1:]
     args = parse_args(raw_argv)
+    logging.basicConfig(
+        level=getattr(logging, str(args.log_level).upper()),
+        format="%(asctime)s %(levelname)s %(name)s %(message)s",
+        force=True,
+    )
+    logger.debug("main_start argv=%r", raw_argv)
 
     if args.allow_superlu_fallback:
         os.environ.pop("TWPA_REQUIRE_PARDISO", None)
@@ -2777,16 +3096,29 @@ def main() -> int:
         and int(args.frequency_chunk_size) > 0
         and int(args.n_frequency) > int(args.frequency_chunk_size)
     )
+    logger.debug(
+        "main_execution_plan executor=%s mode=%s traversal=%s chunk_driver=%s "
+        "n_power=%s n_frequency=%s",
+        args.executor, args.mode, args.traversal, use_chunk_driver,
+        args.n_power, args.n_frequency,
+    )
     if outdir.exists() and args.overwrite and not use_chunk_driver:
         shutil.rmtree(outdir)
     outdir.mkdir(parents=True, exist_ok=True)
 
     points, powers, freqs = build_points(args)
+    logger.debug(
+        "main_grid_built n_points=%d power_range=(%s,%s) frequency_range=(%s,%s)",
+        len(points), powers[0] if powers.size else None,
+        powers[-1] if powers.size else None, freqs[0] if freqs.size else None,
+        freqs[-1] if freqs.size else None,
+    )
 
     if args.fold_follow:
         if args.executor != "inprocess":
             raise SystemExit("--fold-follow requires --executor inprocess")
         engine = InProcessEngine(args)
+        logger.debug("main_fold_follow_dispatch n_frequencies=%d", len(freqs))
         run_fold_follow(engine, freqs, outdir, args)
         return 0
 
@@ -2799,6 +3131,10 @@ def main() -> int:
                 f"n_frequency={args.n_frequency}"
             )
         points = [p for p in points if start_col <= p.j_freq < stop_col]
+        logger.debug(
+            "main_frequency_slice start_col=%d stop_col=%d n_points=%d",
+            start_col, stop_col, len(points),
+        )
     start = time.perf_counter()
 
     cold_rows: list[dict[str, Any]] = []
@@ -2811,6 +3147,10 @@ def main() -> int:
             flush=True,
         )
         cold_rows, warm_rows, chunk_specs = run_frequency_chunks(args, raw_argv, outdir, freqs)
+        logger.debug(
+            "main_chunk_driver_complete cold_rows=%d warm_rows=%d chunks=%d",
+            len(cold_rows), len(warm_rows), len(chunk_specs),
+        )
     else:
         engine = InProcessEngine(args) if args.executor == "inprocess" else None
         cold_pass = (lambda pts, d: run_cold_pass_inprocess(pts, d, engine)) if engine else \
@@ -2823,6 +3163,11 @@ def main() -> int:
         else:
             warm_pass = lambda pts, d: run_warm_pass(pts, d, args)
         print(f"executor={args.executor} traversal={args.traversal}", flush=True)
+        logger.debug(
+            "main_pass_dispatch cold=%s warm=%s traversal_orchestrator=%s",
+            args.mode in ("cold", "both"), args.mode in ("warmstart", "both"),
+            use_traversal_orchestrator,
+        )
 
         if args.mode in ("cold", "both"):
             cold_rows = cold_pass(points, outdir / "cold")
@@ -2838,6 +3183,7 @@ def main() -> int:
         spot = select_spotcheck_points(points, args.gate_spotcheck)
         print(f"spot-checking {len(spot)} point(s) cold for the gate", flush=True)
         cold_rows = cold_pass(spot, outdir / "cold_spotcheck")
+        logger.debug("main_spotcheck_complete n_points=%d", len(cold_rows))
 
     if args.mode == "both" or (args.mode == "warmstart" and cold_rows):
         gate = evaluate_gate(
@@ -2848,6 +3194,10 @@ def main() -> int:
         )
     else:
         gate = GateResult(evaluated=False, passed=False, reasons=["gate not applicable for this mode"])
+    logger.debug(
+        "main_gate_result evaluated=%s passed=%s reasons=%r",
+        gate.evaluated, gate.passed, gate.reasons,
+    )
 
     # Persist tagged rows and grids.
     tagged: list[dict[str, Any]] = []
@@ -2856,6 +3206,7 @@ def main() -> int:
     for r in warm_rows:
         tagged.append({"pass": "warm", **r})
     write_points_csv(outdir / "map_points.csv", tagged)
+    logger.debug("main_points_written path=%s n_rows=%d", outdir / "map_points.csv", len(tagged))
 
     grids: dict[str, np.ndarray] = {}
     if cold_rows and args.mode in ("cold", "both"):
@@ -2865,6 +3216,7 @@ def main() -> int:
     if "gain_db_cold" in grids and "gain_db_warm" in grids:
         grids["gain_drift_db"] = np.abs(grids["gain_db_warm"] - grids["gain_db_cold"])
     write_arrays(outdir / "map_arrays.npz", powers, freqs, grids)
+    logger.debug("main_arrays_written path=%s grid_names=%r", outdir / "map_arrays.npz", list(grids))
 
     if args.signal_spectrum and warm_rows:
         offsets = spectrum_offsets_mhz(args)
@@ -2876,6 +3228,7 @@ def main() -> int:
 
     elapsed = time.perf_counter() - start
     write_summary(outdir, args, cold_rows, warm_rows, gate, elapsed)
+    logger.debug("main_summary_written path=%s elapsed_s=%.6f", outdir / "map_summary.json", elapsed)
 
     print("", flush=True)
     if gate.evaluated:
@@ -2889,7 +3242,9 @@ def main() -> int:
     print(f"elapsed_s={elapsed:.3f}", flush=True)
 
     if gate.evaluated and not gate.passed:
+        logger.debug("main_end return_code=1")
         return 1
+    logger.debug("main_end return_code=0")
     return 0
 
 

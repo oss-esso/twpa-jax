@@ -1,0 +1,15 @@
+flowchart TD
+  COL["for each column, ascending power L1222"] --> G{"predictor secant usable?<br/>L1272"}
+  G -->|yes| SG["secant_guess L1111"]
+  G -->|no| CP["base_X (copy of prev converged)"]
+  SG --> SOLVE["solve_point mode=warm L1281"]
+  CP --> SOLVE
+  SOLVE --> OK{"status PASS?"}
+  OK -->|no| R1["column_arclength_recovery? L1287<br/>(trace_column_arclength L943, ≤2 crossing guesses L1329)"]
+  R1 --> R2["secant overshoot guard L1341<br/>retry from plain base_X"]
+  R2 --> R3["reseed L1346<br/>mode=seed (fresh linear_phasor+adaptive)"]
+  R3 --> R4["column_power_substep? L1357<br/>(solve_power_substep L875)"]
+  OK -->|yes| ADV["advance history; consec_fail=0 L1397"]
+  R4 --> FOLD{"fold short-circuit L1410<br/>patience>0 & verified_fold & consec_fail>=patience"}
+  ADV --> FOLD
+  FOLD -->|trip| SKIP["mark remaining cells SKIP_PAST_FOLD L1416<br/>past_fold_skip_row L1152, break column"]

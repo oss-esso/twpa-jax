@@ -22,6 +22,7 @@ the ``real_coupled`` reduced preconditioner exactly as in the full backend.
 
 from __future__ import annotations
 
+import logging
 import math
 from dataclasses import dataclass
 
@@ -38,6 +39,8 @@ from .schur_partition import (
     build_partition,
     reduced_linear_apply,
 )
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -91,16 +94,27 @@ class SchurReducedProblem:
             raise ValueError("pump node is not in the retained set")
         self.pump_pos = pump_pos
         self.nb = self.Bphi_r.shape[1]
+        logger.debug(
+            "schur_reduced_problem_init n_retained=%d n_full=%d harmonics=%d "
+            "linear_apply_mode=%s",
+            self.n, self.part.n, self.H, self.linear_apply_mode,
+        )
 
     # -------------------------------------------------------- linear operator
     def _lin_apply(self, h: int, vn: np.ndarray) -> np.ndarray:
         """Apply S_k (assembled sparse matvec or matrix-free eliminated solve)."""
         if self.linear_apply_mode == "assembled":
+            logger.debug("schur_lin_apply mode=assembled harmonic=%d", h)
             return self.part.schur[h] @ vn
+        logger.debug("schur_lin_apply mode=matrix_free harmonic=%d", h)
         return reduced_linear_apply(self.part, h, vn)
 
     # ------------------------------------------------------------------ source
     def zeros(self) -> np.ndarray:
+        logger.debug(
+            "schur_zeros_alloc shape=(%d, %d) full_shape=(%d, %d)",
+            self.H, self.n, self.H, self.part.n,
+        )
         return np.zeros((self.H, self.n), dtype=np.complex128)
 
     def source_coeffs(self, source_scale: float) -> np.ndarray:
@@ -127,6 +141,11 @@ class SchurReducedProblem:
         S = self.source_coeffs(source_scale)
         for h in range(self.H):
             R[h] = self._lin_apply(h, Xn[h]) + N[h] - S[h]
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(
+                "schur_residual_coeffs harmonics=%d norm=%.6g",
+                self.H, float(np.linalg.norm(R)),
+            )
         return R
 
     # ---------------------------------------------------------------- tangent
@@ -138,6 +157,7 @@ class SchurReducedProblem:
     def jvp_coeffs_with_tangent(
         self, Vn: np.ndarray, tangent: exp08.TangentState
     ) -> np.ndarray:
+        logger.debug("schur_jvp_tangent_apply shape=%s harmonics=%d", Vn.shape, self.H)
         JV = np.empty_like(Vn)
         for h in range(self.H):
             JV[h] = self._lin_apply(h, Vn[h])
@@ -224,6 +244,9 @@ class SchurReducedProblem:
     def assemble_coupled_preconditioner(
         self, spectral: exp08.SpectralTangentState
     ) -> spla.SuperLU:
+        logger.debug(
+            "preconditioner_uses_dnn_approx variant=%s", "spectral_coupled"
+        )
         modes_int = [int(round(k)) for k in self.grid.k]
         zero = sp.csr_matrix((self.n, self.n), dtype=np.complex128)
         rows = []
@@ -252,8 +275,14 @@ class SchurReducedProblem:
 
         fc = getattr(self.part, "_fast_coupled", None)
         if fc is None:
+            logger.debug(
+                "fast_coupled_preconditioner_dispatch cache=miss m=%d harmonics=%d",
+                self.n, self.H,
+            )
             fc = FastCoupledPreconditioner(self)
             self.part._fast_coupled = fc
+        else:
+            logger.debug("fast_coupled_preconditioner_dispatch cache=hit")
         fc.refactor(tangent)
         return fc
 
@@ -266,6 +295,12 @@ class SchurReducedProblem:
         which only the matrix-free operator carries). The conjugate ``K_{k+q}``
         coupling is preserved exactly, as required.
         """
+        logger.debug(
+            "schur_real_coupled_preconditioner_assemble size=%d harmonics=%d m=%d "
+            "ell_diff_max=%s ell_sum_max=%s",
+            2 * self.H * self.n, self.H, self.n,
+            self.precond_ell_diff_max, self.precond_ell_sum_max,
+        )
         modes_int = [int(round(k)) for k in self.grid.k]
         zero = sp.csr_matrix((self.n, self.n), dtype=np.complex128)
         ldiff = self.precond_ell_diff_max

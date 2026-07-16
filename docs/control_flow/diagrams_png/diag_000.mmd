@@ -1,0 +1,9 @@
+flowchart LR
+  CLI["run_gain_map main()<br/>L2745"] --> P["parse_args<br/>L2111"]
+  P --> BP["build_points<br/>L2454"]
+  P --> ENG["InProcessEngine.__init__<br/>L501<br/>load_circuit x2"]
+  ENG --> PB["resolve_pump_basis<br/>basis.py L195"]
+  PB --> PUMP["Pump HB solve<br/>(§4)"]
+  PUMP --> NPZ["pump_solution.npz<br/>pump/io.py write_results L33"]
+  NPZ --> GAIN["Signal/gain solve<br/>(§5, §7)"]
+  GAIN --> OUT["map_points.csv / map_arrays.npz /<br/>map_spectrum.npz / map_summary.json<br/>(§11)"]

@@ -1,0 +1,31 @@
+%% Diagram 5: Newton-Krylov iteration (one corrector call)
+%% solver.py solve_one L131-451; gmres_call L1171
+flowchart TD
+  S0["solve_one L131: X=X0; nrm=problem.norms"] --> FIN{"finite state & residual? L146"}
+  FIN -->|no| RN["FAIL 'non-finite initial state or residual'"]
+  FIN -->|yes| C0{"coeff_rel < newton_tol? L161"}
+  C0 -->|yes| OK0["CONVERGED (0 iters)"]
+  C0 -->|no| LOOP["for it in 1..max_newton L182"]
+  LOOP --> DL{"solve_deadline exceeded? L183"}
+  DL -->|yes| RDL["FAIL 'solve exceeded budget at Newton it'"]
+  DL -->|no| R["R=residual_coeffs L192"]
+  R --> RF{"R finite? L193"}
+  RF -->|no| RNF["FAIL 'non-finite residual before linear solve'"]
+  RF -->|yes| TAN["tangent_state L203"]
+  TAN --> TF{"tangent finite? L204"}
+  TF -->|no| RTF["FAIL 'non-finite tangent before linear solve'"]
+  TF -->|yes| PRE["build/reuse preconditioner L213-268 (refresh policy L217; Diagram 6)"]
+  PRE --> GM["gmres_call L322 (matrix-free J via matvec L270; M=preconditioner)"]
+  GM --> GE{"GmresDeadlineExceeded? L334"}
+  GE -->|yes| RGE["FAIL 'exceeded budget mid-GMRES'"]
+  GE -->|no| INFO["info!=0 -> record 'GMRES did not fully converge' (does NOT abort) L349"]
+  INFO --> LSrch["line search alpha=1, x0.5 while >= min_alpha=1/1024 L359"]
+  LSrch --> ACC{"trial coeff_rel < nrm coeff_rel? L367"}
+  ACC -->|"never (alpha<min_alpha)"| RLS["FAIL 'line search failed at Newton it'"]
+  ACC -->|yes| UPD["X=best_X; nrm=best_nrm L390"]
+  UPD --> ST{"stall? ratio>stall_ratio=0.8 for stall_patience=4 steps L396"}
+  ST -->|yes| RST["FAIL 'stalled at Newton it'"]
+  ST -->|no| CV{"coeff_rel < newton_tol? L425"}
+  CV -->|yes| ROK["CONVERGED L426"]
+  CV -->|no| LOOP
+  LOOP -->|exhausted| RMX["FAIL 'maximum Newton iterations reached' L439"]

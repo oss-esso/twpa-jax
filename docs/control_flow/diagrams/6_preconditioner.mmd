@@ -1,0 +1,20 @@
+%% Diagram 6: Preconditioner and factorization handling
+%% solve_one L233-268; problem.py; schur_operators.py; fast_coupled.py
+flowchart TD
+  REF{"refresh? L217\n(no cache | precond_reuse<=1 | steps_since_factor>=reuse | last_gmres>=refresh_gmres)"} -->|reuse| CACHE["reuse cached factor (modified-Newton) L259"]
+  REF -->|refresh| P{"--inproc-preconditioner"}
+  P --> MT["mean_tangent: build_preconditioner_factors L313/L204\nblock-diag D_k + Bphi diag(gamma_mean) BphiT; per-harmonic SuperLU splu"]
+  P --> RC["real_coupled: assemble_real_coupled_preconditioner L366/L260\nexact real-packed (2 H n) incl conjugate k+q; SuperLU splu"]
+  P --> RCF["real_coupled_fast (default): assemble_real_coupled_fast L240\n-> FastCoupledPreconditioner L129 (Schur only; full->NotImplementedError L242)"]
+  P --> SC["spectral_coupled: assemble_coupled_preconditioner L340/L224\ncomplex mode-coupled (H n); drops conjugate term; SuperLU splu"]
+  P --> LIN["linear: build_preconditioner_factors('linear')\nper-harmonic D_k splu"]
+  RCF --> BUILD["_build_scatter once/partition (fixed pattern) L175;\nrefactor L295 rebuilds M.data via precomputed W map"]
+  BUILD --> FAC{"use_pardiso & pypardiso? _factor L315"}
+  FAC -->|"pardiso (strict TWPA_REQUIRE_PARDISO)"| PAR["PyPardisoSolver mtype=11: analysis once (phase 11/12),\nnumeric each step (phase 22); solve phase 33 L368;\nfailure RAISES under strict L346"]
+  FAC -->|"debug fallback (--allow-superlu-fallback)"| SLU["SuperLU splu L357; last_factor_backend=superlu_fallback"]
+  PAR --> TEL["telemetry last_assembly_runtime_s/last_factor_runtime_s -> row L756-757;\nTWPA_PARDISO_LOG=1 logs backend once L92"]
+  MT --> APP["applied inside GMRES as M (LinearOperator) L281-314"]
+  RC --> APP
+  SC --> APP
+  LIN --> APP
+  PAR --> APP

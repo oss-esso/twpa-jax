@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import logging
 from pathlib import Path
 from typing import Any
 import json
@@ -9,6 +10,8 @@ import numpy as np
 import scipy.sparse as sp
 
 from twpa_solver.core.constants import PHI0_REDUCED
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -70,6 +73,11 @@ class CircuitMatrices:
         for port, idx in self.port_to_index.items():
             if idx < 0 or idx >= n:
                 raise ValueError(f"port {port} has invalid node index {idx}")
+        logger.debug(
+            "circuit_matrices_validated nodes=%d branches=%d nnz=(C:%d,G:%d,K:%d,Bphi:%d) ports=%r",
+            self.node_count, self.branch_count, self.C.nnz, self.G.nnz,
+            self.K.nnz, self.Bphi.nnz, self.port_to_index,
+        )
 
     @property
     def node_count(self) -> int:
@@ -107,6 +115,7 @@ def load_circuit(circuit_dir: str | Path) -> CircuitMatrices:
     Internally the object is generic.
     """
     d = Path(circuit_dir)
+    logger.debug("circuit_load_start path=%s", d)
 
     for name in ("C.npz", "G.npz", "K.npz", "Bphi.npz", "ipm_arrays.npz"):
         path = d / name
@@ -143,7 +152,7 @@ def load_circuit(circuit_dir: str | Path) -> CircuitMatrices:
                 metadata = {}
             break
 
-    return CircuitMatrices(
+    circuit = CircuitMatrices(
         C=C,
         G=G,
         K=K,
@@ -155,6 +164,8 @@ def load_circuit(circuit_dir: str | Path) -> CircuitMatrices:
         port_to_index=port_to_index,
         metadata=metadata,
     )
+    logger.debug("circuit_load_complete path=%s summary=%r", d, circuit.summary)
+    return circuit
 
 
 def save_circuit(circuit: CircuitMatrices, outdir: str | Path) -> None:

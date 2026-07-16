@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import math
 import os
 import threading
@@ -21,6 +22,8 @@ from twpa_solver.pump.backends.schur_partition import (
     build_partition,
 )
 from twpa_solver.signal.gain import GainResult, db10, gain_db_from_s
+
+logger = logging.getLogger(__name__)
 
 
 def _pardiso_thread_context():
@@ -82,7 +85,9 @@ def _pardiso_spsolve_reuse(A: sp.spmatrix, b: np.ndarray) -> np.ndarray:
         return solver._call_pardiso(A, bb).squeeze()
 
 def sideband_list(sidebands: int) -> list[int]:
-    return list(range(-sidebands, sidebands + 1))
+    ms = list(range(-sidebands, sidebands + 1))
+    logger.debug("sideband_list_built sidebands=%d block_count=%d", sidebands, len(ms))
+    return ms
 
 
 def assemble_khat_conversion_base(
@@ -97,7 +102,12 @@ def assemble_khat_conversion_base(
         for q in ms:
             row.append(khat.get(m - q, zero).tocsr())
         rows.append(row)
-    return sp.bmat(rows, format="csc")
+    base = sp.bmat(rows, format="csc")
+    logger.debug(
+        "khat_conversion_base_built n_modes=%d shape=%s nnz=%d",
+        len(ms), base.shape, base.nnz,
+    )
+    return base
 
 
 def assemble_conversion_matrix_from_base(
@@ -109,7 +119,12 @@ def assemble_conversion_matrix_from_base(
     loss_model: str = "current_complex_c",
 ) -> sp.csc_matrix:
     dblocks = [dynamic_block(circuit, omega_s + m * omega_p, loss_model=loss_model) for m in ms]
-    return (khat_base + sp.block_diag(dblocks, format="csc")).tocsc()
+    A = (khat_base + sp.block_diag(dblocks, format="csc")).tocsc()
+    logger.debug(
+        "conversion_matrix_assembled_from_base omega_s=%.6e shape=%s nnz=%d",
+        omega_s, A.shape, A.nnz,
+    )
+    return A
 
 
 def assemble_conversion_matrix(
@@ -124,6 +139,10 @@ def assemble_conversion_matrix(
     rows: list[list[sp.csr_matrix]] = []
 
     D_cache: dict[int, sp.csr_matrix] = {}
+    logger.debug(
+        "conversion_matrix_assemble_start omega_s=%.6e omega_p=%.6e sidebands=%r",
+        omega_s, omega_p, ms,
+    )
 
     for m in ms:
         row: list[sp.csr_matrix] = []
@@ -143,7 +162,9 @@ def assemble_conversion_matrix(
 
         rows.append(row)
 
-    return sp.bmat(rows, format="csc")
+    A = sp.bmat(rows, format="csc")
+    logger.debug("conversion_matrix_assembled shape=%s nnz=%d", A.shape, A.nnz)
+    return A
 
 
 def build_rhs(
@@ -153,9 +174,14 @@ def build_rhs(
     source_index: int,
     source_current_a: float,
 ) -> np.ndarray:
+    logger.debug(
+        "signal_rhs_build n=%d sidebands=%r signal_m=%d source_index=%d source_current_a=%s",
+        n, ms, signal_m, source_index, source_current_a,
+    )
     b = np.zeros(len(ms) * n, dtype=np.complex128)
     row = ms.index(signal_m) * n + source_index
     b[row] = source_current_a
+    logger.debug("signal_rhs_built nonzero_row=%d norm=%s", row, np.linalg.norm(b))
     return b
 
 
@@ -182,6 +208,10 @@ def solve_single_block_transfer(
     source_current_a: float,
     loss_model: str = "current_complex_c",
 ) -> tuple[complex, complex, float]:
+    logger.debug(
+        "single_block_transfer_start omega_s=%.6e source_index=%d out_index=%d",
+        omega_s, source_index, out_index,
+    )
     A = (dynamic_block(circuit, omega_s, loss_model=loss_model) + D_extra).tocsc()
     b = np.zeros(circuit.C.shape[0], dtype=np.complex128)
     b[source_index] = source_current_a
@@ -192,13 +222,20 @@ def solve_single_block_transfer(
 
     phi_out = complex(y[out_index])
     v_out = voltage_from_flux(omega_s, phi_out)
+    logger.debug(
+        "single_block_transfer_complete runtime_s=%.6f phi_out=%s v_out=%s",
+        runtime, phi_out, v_out,
+    )
 
     return phi_out, v_out, runtime
 
 
 def solve_linear_system(A: sp.spmatrix, b: np.ndarray, linear_solver: str = "superlu") -> np.ndarray:
+    logger.debug("signal_linear_solve_start solver=%s shape=%s nnz=%d rhs_norm=%s", linear_solver, A.shape, A.nnz, np.linalg.norm(b))
     if linear_solver == "superlu":
-        return spla.spsolve(A, b)
+        y = spla.spsolve(A, b)
+        logger.debug("signal_linear_solve_complete solver=superlu solution_norm=%s", np.linalg.norm(y))
+        return y
     if linear_solver == "pardiso":
         if np.iscomplexobj(A.data) or np.iscomplexobj(b):
             A = A.tocsr()
@@ -209,8 +246,12 @@ def solve_linear_system(A: sp.spmatrix, b: np.ndarray, linear_solver: str = "sup
             br = np.concatenate([np.asarray(b).real, np.asarray(b).imag])
             yr = _pardiso_spsolve_reuse(Ar, br)
             n = b.size
-            return np.asarray(yr[:n] + 1j * yr[n:], dtype=np.complex128)
-        return _pardiso_spsolve_reuse(A, b)
+            y = np.asarray(yr[:n] + 1j * yr[n:], dtype=np.complex128)
+            logger.debug("signal_linear_solve_complete solver=pardiso_complex solution_norm=%s", np.linalg.norm(y))
+            return y
+        y = _pardiso_spsolve_reuse(A, b)
+        logger.debug("signal_linear_solve_complete solver=pardiso solution_norm=%s", np.linalg.norm(y))
+        return y
     raise ValueError(f"unknown linear_solver={linear_solver!r}")
 
 
@@ -233,6 +274,11 @@ def solve_gain_one(
     linear_solver: str = "superlu",
     khat_big_base: sp.spmatrix | None = None,
 ) -> GainResult:
+    logger.debug(
+        "gain_one_start signal_ghz=%s sidebands=%d signal_m=%d idler_m=%d "
+        "linear_solver=%s base_reused=%s",
+        signal_ghz, sidebands, signal_m, idler_m, linear_solver, khat_big_base is not None,
+    )
     omega_s = 2.0 * math.pi * signal_ghz * 1e9
     ms = sideband_list(sidebands)
     n = circuit.C.shape[0]
@@ -318,7 +364,7 @@ def solve_gain_one(
     if not np.isfinite(gain_vs_off) or linear_rel_residual > 1e-7:
         status = "CHECK"
 
-    return GainResult(
+    result = GainResult(
         status=status,
         signal_ghz=signal_ghz,
         signal_m=signal_m,
@@ -345,6 +391,11 @@ def solve_gain_one(
         idler_power_rel_to_signal_off=idler_rel,
         idler_power_rel_to_signal_off_db=idler_rel_db,
     )
+    logger.debug(
+        "gain_one_complete status=%s gain_db=%s residual=%s matrix_shape=%s nnz=%d",
+        result.status, result.gain_db, result.linear_rel_residual, A.shape, A.nnz,
+    )
+    return result
 
 
 def _retained_khat(khat: dict[int, sp.csr_matrix], retained: np.ndarray, shape: tuple[int, int]) -> dict[int, sp.csr_matrix]:
@@ -366,11 +417,20 @@ def build_signal_schur_partition(
     loss_model: str = "current_complex_c",
 ):
     """Build the signal Schur partition shared by one frequency column."""
+    logger.debug(
+        "signal_schur_partition_build_start omega_p=%.6e signal_ghz=%s sidebands=%d",
+        omega_p, signal_ghz, sidebands,
+    )
     omega_s = 2.0 * math.pi * signal_ghz * 1e9
     ms = sideband_list(sidebands)
     linear_blocks = [dynamic_block(circuit, omega_s + m * omega_p, loss_model=loss_model) for m in ms]
     part = build_partition(linear_blocks, circuit.Bphi, [source_index, out_index])
     assemble_schur_complements(part)
+    logger.debug(
+        "signal_schur_partition_build_complete retained=%d eliminated=%d "
+        "factor_s=%.6f assemble_s=%.6f",
+        part.m, part.p, part.factor_time_s, part.schur_assemble_time_s,
+    )
     return part
 
 
@@ -396,6 +456,12 @@ def solve_gain_one_schur(
     schur_part=None,
 ) -> GainResult:
     """Schur-reduced signal solve; direct semantics, smaller coupled matrix."""
+    logger.debug(
+        "gain_one_schur_start signal_ghz=%s sidebands=%d include_baselines=%s "
+        "linear_solver=%s base_reused=%s partition_reused=%s",
+        signal_ghz, sidebands, include_baselines, linear_solver,
+        khat_big_base is not None, schur_part is not None,
+    )
     omega_s = 2.0 * math.pi * signal_ghz * 1e9
     ms = sideband_list(sidebands)
     if signal_m not in ms:
@@ -487,7 +553,7 @@ def solve_gain_one_schur(
     if not np.isfinite(abs(s_abs)) or linear_rel_residual > 1e-7:
         status = "CHECK"
 
-    return GainResult(
+    result = GainResult(
         status=status,
         signal_ghz=signal_ghz,
         signal_m=signal_m,
@@ -514,3 +580,8 @@ def solve_gain_one_schur(
         idler_power_rel_to_signal_off=idler_rel,
         idler_power_rel_to_signal_off_db=idler_rel_db,
     )
+    logger.debug(
+        "gain_one_schur_complete status=%s gain_db=%s residual=%s matrix_shape=%s nnz=%d",
+        result.status, result.gain_db, result.linear_rel_residual, A.shape, A.nnz,
+    )
+    return result

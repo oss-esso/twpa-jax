@@ -1,0 +1,8 @@
+flowchart TD
+  SPm{"solve_point mode<br/>L640"} -->|"warm & warm_X given"| DIR["solver.solve_direct L453<br/>single Newton at lambda=1"]
+  SPm -->|"seed/cold"| CONT{"--inproc-continuation<br/>L643 (§6)"}
+  CONT -->|fixed| C1["solve_continuation L472"]
+  CONT -->|ptc| C2["solve_pseudo_transient L836"]
+  CONT -->|arclength| C3["solve_arclength L910 → solve_direct"]
+  CONT -->|affine| C4["solve_affine_continuation L700"]
+  CONT -->|"adaptive_copy/secant/tangent"| C5["solve_adaptive_continuation L537"]

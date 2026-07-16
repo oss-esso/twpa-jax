@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import logging
 import math
 from dataclasses import dataclass
 
 import numpy as np
 import scipy.sparse as sp
 import scipy.sparse.linalg as spla
+
+logger = logging.getLogger(__name__)
 
 @dataclass
 class HarmonicGrid:
@@ -38,7 +41,13 @@ class HarmonicGrid:
         self.E = np.exp(1j * self.omega * self.t[:, None] * self.k[None, :])
         self.E_conj_T_over_nt = self.E.conj().T / self.nt
 
+        logger.debug(
+            "harmonic_grid_built nt=%s harmonics=%s max_mode=%s omega=%s modes=%s",
+            self.nt, self.harmonics, max_mode, self.omega, [int(m) for m in self.modes],
+        )
+
     def synthesize(self, X: np.ndarray) -> np.ndarray:
+        logger.debug("grid_synthesize X_shape=%s", X.shape)
         return 2.0 * np.real(self.E @ X)
 
     def synthesize_derivative(self, X: np.ndarray, order: int) -> np.ndarray:
@@ -115,6 +124,10 @@ class FullPumpProblem:
         # Pump current source drives the fundamental pump mode (k == source_mode).
         modes_int = [int(round(k)) for k in self.grid.k]
         if self.source_mode not in modes_int:
+            logger.debug(
+                "pump_problem_source_mode_invalid source_mode=%s modes=%s",
+                self.source_mode, modes_int,
+            )
             raise ValueError(
                 f"source_mode {self.source_mode} not in pump modes {modes_int}"
             )
@@ -126,6 +139,13 @@ class FullPumpProblem:
             self.dc_branch_flux = np.asarray(self.dc_branch_flux, dtype=np.float64).reshape(-1)
             if self.dc_branch_flux.size != self.nb:
                 raise ValueError(f"dc_branch_flux length {self.dc_branch_flux.size} != branch count {self.nb}")
+
+        logger.debug(
+            "pump_problem_build n=%s H=%s nb=%s source_mode=%s source_row=%s "
+            "pump_node_index=%s use_real_capacitance=%s",
+            self.n, self.H, self.nb, self.source_mode, self.source_row,
+            self.pump_node_index, self.use_real_capacitance,
+        )
 
         self._linear_blocks = self._build_linear_blocks()
 
@@ -140,15 +160,20 @@ class FullPumpProblem:
             Dk = Kc + (-wk * wk) * Cc + (1j * wk) * Gc
             blocks.append(Dk.tocsc())
 
+        logger.debug("linear_block_built count=%s omega=%s", len(blocks), self.grid.omega)
         return blocks
 
     def zeros(self) -> np.ndarray:
+        logger.debug("pump_problem_zeros shape=%s", (self.H, self.n))
         return np.zeros((self.H, self.n), dtype=np.complex128)
 
     def source_coeffs(self, source_scale: float) -> np.ndarray:
         S = np.zeros((self.H, self.n), dtype=np.complex128)
-        S[self.source_row, self.pump_node_index] = (
-            0.5 * source_scale * self.pump_current_a
+        source_value = 0.5 * source_scale * self.pump_current_a
+        S[self.source_row, self.pump_node_index] = source_value
+        logger.debug(
+            "source_coeffs source_scale=%s source_row=%s pump_node_index=%s value=%s",
+            source_scale, self.source_row, self.pump_node_index, source_value,
         )
         return S
 
@@ -172,6 +197,7 @@ class FullPumpProblem:
         return (self.Bphi @ i_t.T).T
 
     def nonlinear_current_coeffs(self, X: np.ndarray) -> np.ndarray:
+        logger.debug("nonlinear_current_coeffs_synth X_shape=%s", X.shape)
         return self.grid.project_positive(self.nonlinear_current_time(X))
 
     def residual_coeffs(self, X: np.ndarray, source_scale: float) -> np.ndarray:
@@ -182,6 +208,11 @@ class FullPumpProblem:
         for h in range(self.H):
             R[h] = self._linear_blocks[h] @ X[h] + Ncoeff[h] - S[h]
 
+        R_norm = float(np.linalg.norm(pack_complex(R)))
+        logger.debug(
+            "residual_coeffs source_scale=%s X_shape=%s residual_norm=%s",
+            source_scale, X.shape, R_norm,
+        )
         return R
 
     def tangent_state(self, X: np.ndarray) -> TangentState:
@@ -193,6 +224,10 @@ class FullPumpProblem:
         return TangentState(gamma_t=gamma_t, gamma_mean=gamma_mean)
 
     def jvp_coeffs_with_tangent(self, V: np.ndarray, tangent: TangentState) -> np.ndarray:
+        logger.debug(
+            "jvp_apply mode=analytic_aft V_shape=%s (matrix-free, not finite-difference/autodiff)",
+            V.shape,
+        )
         JV = np.empty_like(V)
         for h in range(self.H):
             JV[h] = self._linear_blocks[h] @ V[h]
@@ -232,6 +267,12 @@ class FullPumpProblem:
 
             khat[ell] = Kh
 
+        logger.debug(
+            "spectral_tangent_state_built n_modes=%s n_offsets=%s ell_min=%s ell_max=%s",
+            len(modes_int), len(needed_ell),
+            needed_ell[0] if needed_ell else None,
+            needed_ell[-1] if needed_ell else None,
+        )
         return SpectralTangentState(khat=khat)
 
     def jvp_coeffs_with_spectral_tangent(
@@ -311,11 +352,14 @@ class FullPumpProblem:
         }
 
     def build_preconditioner_factors(self, X: np.ndarray, mode: str, tangent: TangentState | None = None) -> list[spla.SuperLU] | None:
+        logger.debug("build_preconditioner_factors mode=%s H=%s", mode, self.H)
         if mode == "none":
             return None
 
         if mode == "linear":
-            return [spla.splu(Dk) for Dk in self._linear_blocks]
+            factors = [spla.splu(Dk) for Dk in self._linear_blocks]
+            logger.debug("preconditioner_factors_built mode=linear n_factors=%s", len(factors))
+            return factors
 
         if mode != "mean_tangent":
             raise ValueError(f"unknown preconditioner mode {mode!r}")
@@ -335,6 +379,7 @@ class FullPumpProblem:
             Pk = (self._linear_blocks[h] + Ktan).tocsc()
             factors.append(spla.splu(Pk))
 
+        logger.debug("preconditioner_factors_built mode=mean_tangent n_factors=%s", len(factors))
         return factors
 
     def assemble_coupled_preconditioner(
@@ -361,12 +406,14 @@ class FullPumpProblem:
                 row.append(block.tocsr())
             rows.append(row)
         full = sp.bmat(rows, format="csc")
+        logger.debug("coupled_preconditioner_assembled size=%s (spectral_coupled)", full.shape)
         return spla.splu(full)
 
     def assemble_real_coupled_preconditioner(
         self, spectral: SpectralTangentState
     ) -> spla.SuperLU:
         """Exact real-packed Jacobian LU preconditioner (wraps the matrix)."""
+        logger.debug("real_coupled_preconditioner_assemble H=%s n=%s", self.H, self.n)
         return spla.splu(self.real_coupled_jacobian(spectral))
 
     def _build_real_coupled_matrix(
@@ -413,6 +460,10 @@ class FullPumpProblem:
         top = sp.bmat([[sp.bmat(jrr), sp.bmat(jri)]])
         bot = sp.bmat([[sp.bmat(jir), sp.bmat(jii)]])
         full = sp.bmat([[top], [bot]], format="csc")
+        logger.debug(
+            "real_coupled_matrix_built size=%s (2*H*n, conjugate k+q term included)",
+            full.shape,
+        )
         return full
 
     def real_coupled_jacobian(self, spectral: SpectralTangentState) -> sp.csc_matrix:

@@ -1,0 +1,9 @@
+flowchart TD
+  P{"--inproc-preconditioner<br/>solve_one L233"} --> MT["mean_tangent<br/>build_preconditioner_factors L313/L204<br/>block-diag D_k + Bphi diag(gamma_mean) BphiT, per-harmonic SuperLU"]
+  P --> RC["real_coupled<br/>assemble_real_coupled_preconditioner<br/>problem.py L366 / schur_operators.py L260<br/>exact real-packed (H·n or m) LU incl conjugate k+q"]
+  P --> RCF["real_coupled_fast (default)<br/>assemble_real_coupled_fast<br/>schur_operators.py L240 → FastCoupledPreconditioner (fast_coupled.py L129)"]
+  P --> SC["spectral_coupled<br/>assemble_coupled_preconditioner<br/>problem.py L340 / schur_operators.py L224<br/>complex mode-coupled LU (drops conjugate term)"]
+  P --> LIN["linear<br/>build_preconditioner_factors('linear')<br/>per-harmonic LU of D_k only (no tangent)"]
+  RCF --> FAC{"pypardiso available &<br/>TWPA_REQUIRE_PARDISO?"}
+  FAC -->|pardiso| PAR["PyPardisoSolver mtype=11<br/>symbolic once (phase 11/12), numeric each step (22)<br/>_factor L315"]
+  FAC -->|"fallback (debug only)"| SLU["SuperLU spla.splu<br/>only if --allow-superlu-fallback (unsets TWPA_REQUIRE_PARDISO)"]

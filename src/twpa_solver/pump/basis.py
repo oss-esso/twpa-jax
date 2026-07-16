@@ -32,11 +32,14 @@ All four policies share the same positive-phasor real reconstruction. The
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import numpy as np
+
+logger = logging.getLogger(__name__)
 
 POLICIES = (
     "dense_real",
@@ -94,7 +97,7 @@ class PumpBasis:
         return self.modes.index(self.source_mode)
 
     def to_metadata(self) -> dict[str, Any]:
-        return {
+        metadata = {
             "pump_modes": list(self.modes),
             "pump_basis": self.basis,
             "real_reconstruction_factor": self.real_reconstruction_factor,
@@ -103,21 +106,34 @@ class PumpBasis:
             "pump_mode_policy": self.policy,
             "pump_source_mode": self.source_mode,
         }
+        logger.debug(
+            "pump_basis_to_metadata n_modes=%s policy=%s omega_p=%s "
+            "phase_convention=%s source_mode=%s",
+            self.n_modes, self.policy, self.omega_p,
+            self.phase_convention, self.source_mode,
+        )
+        return metadata
 
 
 def positive_odd_modes(k: int) -> list[int]:
     """Return [1, 3, 5, ..., 2k-1] (the JC odd pump mode list)."""
     if k < 1:
+        logger.debug("positive_odd_modes_invalid k=%s", k)
         raise ValueError(f"--pump-mode-count must be >= 1, got {k}")
-    return [2 * i - 1 for i in range(1, k + 1)]
+    modes = [2 * i - 1 for i in range(1, k + 1)]
+    logger.debug("positive_odd_modes k=%s n_modes=%s max_mode=%s", k, len(modes), modes[-1])
+    return modes
 
 
 def parse_explicit_modes(spec: str) -> list[int]:
     """Parse a comma-separated mode list like '1,3,5,7'."""
     toks = [t for t in spec.replace(" ", "").split(",") if t != ""]
     if not toks:
+        logger.debug("parse_explicit_modes_invalid spec=%r", spec)
         raise ValueError(f"could not parse --pump-modes from {spec!r}")
-    return [int(t) for t in toks]
+    modes = [int(t) for t in toks]
+    logger.debug("parse_explicit_modes spec=%r n_modes=%s", spec, len(modes))
+    return modes
 
 
 def _unwrap_design_meta(design_meta: dict[str, Any]) -> dict[str, Any]:
@@ -203,6 +219,11 @@ def resolve_pump_basis(
     source_mode: int = 1,
 ) -> PumpBasis:
     """Resolve CLI options + design metadata into a concrete PumpBasis."""
+    logger.debug(
+        "pump_basis_resolve_start policy=%s omega_p=%s harmonics=%s mode_count=%s "
+        "explicit_modes=%r",
+        policy, omega_p, harmonics, mode_count, explicit_modes,
+    )
     if policy not in POLICIES:
         raise ValueError(f"unknown pump-mode-policy {policy!r}, choose from {POLICIES}")
 
@@ -235,12 +256,14 @@ def resolve_pump_basis(
     else:  # pragma: no cover - guarded above
         raise ValueError(policy)
 
-    return PumpBasis(
+    basis = PumpBasis(
         modes=modes,
         policy=policy,
         omega_p=omega_p,
         source_mode=source_mode,
     )
+    logger.debug("pump_basis_resolve_complete policy=%s modes=%r source_mode=%s", policy, basis.modes, source_mode)
+    return basis
 
 
 def load_pump_basis_from_solution(
@@ -254,6 +277,7 @@ def load_pump_basis_from_solution(
     (which only stored a `harmonics` array) and new mode-aware solutions.
     """
     d = Path(pump_dir)
+    logger.debug("pump_basis_load_start pump_dir=%s", d)
     sol_path = d / "pump_solution.npz"
     if not sol_path.exists():
         raise FileNotFoundError(f"missing pump solution: {sol_path}")
@@ -295,6 +319,7 @@ def load_pump_basis_from_solution(
         omega_p=omega_p,
         source_mode=source_mode,
     )
+    logger.debug("pump_basis_load_complete shape=%s modes=%r omega_p=%s", X.shape, basis.modes, basis.omega_p)
     return X, basis
 
 
@@ -313,4 +338,5 @@ def promote_solution_to_basis(
     for j, m in enumerate(dst_basis.modes):
         if m in src_index:
             X_dst[j] = X_src[src_index[m]]
+    logger.debug("pump_basis_promote_complete src_modes=%r dst_modes=%r shape=%s", src_basis.modes, dst_basis.modes, X_dst.shape)
     return X_dst

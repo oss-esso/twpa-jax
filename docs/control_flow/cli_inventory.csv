@@ -1,0 +1,91 @@
+flag,accepted_values,default,scope,dispatch_location,effect,status
+--mode,"cold|warmstart|both",warmstart,exec,run_gain_map.py:main:2827,which passes run + gate,production
+--executor,"subprocess|inprocess",inprocess,exec,run_gain_map.py:main:2815,in-process engine vs exp08/exp09 subprocess,production
+--inproc-pump-backend,"full|schur_cpu_mt",schur_cpu_mt,pump,run_gain_map.py:_make_solve_problem:569,full vs Schur-reduced problem,production
+--inproc-preconditioner,"mean_tangent|real_coupled|real_coupled_fast|spectral_coupled|linear",real_coupled_fast,precond,solver.py:solve_one:233,pump preconditioner,production;real_coupled_fast_schur_only
+--inproc-continuation,"fixed|adaptive_copy|adaptive_secant|adaptive_tangent|affine|ptc|arclength",adaptive_secant,continuation,run_gain_map.py:solve_point:643,intra-cell continuation method,production;arclength_experimental
+--inproc-schur-cache-size,int,2,resource,run_gain_map.py:InProcessEngine:518,LRU bound of Schur partitions,production
+--inproc-precond-reuse,int,1,precond,solver.py:solve_one:217,modified-Newton factor reuse,production
+--inproc-precond-refresh-gmres,int,0,precond,solver.py:solve_one:221,staleness refresh trigger,production
+--inproc-fold-predictor,"none|secant",secant,continuation,run_gain_map.py:run_warm_pass_inprocess:1214,column secant predictor,production
+--inproc-gmres-maxiter,int,80,resource,run_gain_map.py:_settings:537,GMRES restart cycles,production
+--inproc-solve-deadline-s,float,0.0,resource,solver.py:solve_one:183,per-solve wall budget (0=off),production
+--inproc-max-newton,int,16,resource,run_gain_map.py:_settings:536,max Newton iterations,production
+--inproc-fallback-fixed-steps,int,20,continuation,run_gain_map.py:solve_point:697,fixed ladder after adaptive gives up,production
+--inproc-continuation-deadline-s,float,0.0,resource,run_gain_map.py:solve_point:686,adaptive/affine budget (0 inherits solve-deadline),production
+--inproc-fail-fast,flag,off,recovery,run_gain_map.py:run_warm_pass_inprocess:1197,skip recovery chain from last converged,production
+--initial-pump-dir,path,None,recovery,run_gain_map.py:run_warm_pass_inprocess:1217,seed each column first cell,production;single_column_only
+--initial-pump-power-dbm,float,None,recovery,run_gain_map.py:run_warm_pass_inprocess:1239,power coord of seed,production;required_with_initial_pump_dir
+--fold-skip-patience,int,0,recovery,run_gain_map.py:run_warm_pass_inprocess:1216,fold short-circuit patience (0=off),production
+--column-arclength-recovery,flag,off,recovery,run_gain_map.py:run_warm_pass_inprocess:1289,per-cell arclength crossings as guesses,experimental
+--column-arclength-ds,float,0.02,continuation,run_gain_map.py:trace_column_arclength:963,arclength step,experimental
+--column-arclength-max-steps,int,80,continuation,run_gain_map.py:trace_column_arclength:964,arclength steps,experimental
+--column-arclength-deadline-s,float,180.0,resource,run_gain_map.py:trace_column_arclength:965,arclength trace budget,experimental
+--column-power-substep,flag,off,recovery,run_gain_map.py:run_warm_pass_inprocess:1359,adaptive power-axis micro-continuation,production
+--column-power-substep-init-db,float,0.1,continuation,run_gain_map.py:solve_power_substep:882,init/max dBm micro-step,production
+--column-power-substep-min-db,float,0.005,continuation,run_gain_map.py:solve_power_substep:883,stall floor (fold evidence),production
+--column-power-substep-deadline-s,float,120.0,resource,run_gain_map.py:solve_power_substep:884,per-target budget,production
+--traversal,"column|backbone|nearest|serpentine|floodfill",column,traversal,run_gain_map.py:_traversal_order:1439,map order; non-column forces chunk_size 0,production;non_column_experimental
+--backbone-direction,"ltr|rtl|center_out|two_ended",center_out,traversal,run_gain_map.py:_traversal_order:1451,backbone row order,production
+--predictor,"copy|power_secant|freq_secant|corner|plane|portfolio",power_secant,continuation,run_gain_map.py:_select_guess:1563,inter-cell guess (traversal only),production
+--portfolio-policy,"best|ranked",best,continuation,run_gain_map.py:run_map_traversal:1753,portfolio retry policy,production
+--recovery,"none|reseed|alt_parent|bridge|ladder",reseed,recovery,run_gain_map.py:_recover:1620,failed-cell recovery ladder,production
+--bridge-steps,int,4,recovery,run_gain_map.py:solve_bridge:837,bridge sub-steps,production
+--bridge-mode,"diagonal|freq_first|power_first|adaptive",adaptive,recovery,run_gain_map.py:solve_bridge:855,bridge path,production
+--fold-policy,"patience|cross_axis|bridge_gate|combined|arclength",patience,recovery,run_gain_map.py:_recover:1644,when a fail counts toward fold,production;arclength_experimental
+--inproc-arclength-ds,float,0.1,continuation,run_gain_map.py:solve_point:671,intra-cell arclength ds,experimental
+--inproc-arclength-max-steps,int,80,continuation,run_gain_map.py:solve_point:672,intra-cell arclength steps,experimental
+--fold-follow,flag,off,output,run_gain_map.py:run_fold_follow:1680,trace fold curve no gain map,diagnostic
+--outdir,path,outputs/exp10_pump_map_warmstart,output,run_gain_map.py:main:2756,output dir,production
+--circuit-dir,path,outputs/ipm_python_design,pump/signal,run_gain_map.py:InProcessEngine:503,circuit matrices dir (alias --ipm-dir),production
+--n-power,int,50,traversal,run_gain_map.py:build_points:2455,power grid size,production
+--n-frequency,int,50,traversal,run_gain_map.py:build_points:2455,freq grid size,production
+--frequency-chunk-size,int,10,parallelism,run_gain_map.py:run_frequency_chunks:2687,subprocess column chunks (0=off),production
+--local-traversal-chunks,flag,off,parallelism,run_gain_map.py:main:2764,allow non-column traversal in chunks,experimental
+--resume-chunks,bool,True,exec,run_gain_map.py:run_frequency_chunks:2703,skip complete chunks,production
+--chunk-worker,flag,off,exec,run_gain_map.py:main:2763,internal worker marker (SUPPRESS),internal
+--frequency-index-start,int,None,exec,run_gain_map.py:main:2793,internal chunk slice (SUPPRESS),internal
+--frequency-index-stop,int,None,exec,run_gain_map.py:main:2793,internal chunk slice (SUPPRESS),internal
+--pump-power-min-dbm,float,-30.0,pump,run_gain_map.py:build_points:2455,power window min,production
+--pump-power-max-dbm,float,-20.0,pump,run_gain_map.py:build_points:2455,power window max,production
+--pump-freq-min-ghz,float,7.0,pump,run_gain_map.py:build_points:2455,freq window min,production
+--pump-freq-max-ghz,float,8.0,pump,run_gain_map.py:build_points:2455,freq window max,production
+--attenuation-db,float,None,pump,run_gain_map.py:attenuation_db_for:97,flat loss override (None=loss model),production
+--z0-ohm,float,50.0,signal,run_gain_map.py:_solve_signal:1087,reference impedance,production
+--signal-ghz,float,None,signal,run_gain_map.py:signal_ghz_for:109,fixed signal freq,production
+--signal-detuning-mhz,float,100.0,signal,run_gain_map.py:signal_ghz_for:109,pump-tracking detuning,production
+--signal-spectrum,bool,True,signal,run_gain_map.py:_gain:1008,per-cell signal spectrum,production
+--signal-offset-start-mhz,float,100.0,signal,run_gain_map.py:spectrum_offsets_mhz:121,first offset,production
+--signal-offset-step-mhz,float,500.0,signal,run_gain_map.py:spectrum_offsets_mhz:121,offset spacing,production
+--signal-offset-count-per-side,int,5,signal,run_gain_map.py:spectrum_offsets_mhz:121,offsets per side,production
+--signal-workers,int,6,parallelism,run_gain_map.py:_gain:1025,spectrum thread pool size,production
+--signal-backend,"direct|schur",direct,signal,run_gain_map.py:_solve_signal:1062,direct vs Schur-reduced signal solve,production
+--signal-solver,"superlu|pardiso",superlu,sparse,floquet.py:solve_linear_system:199,signal sparse solver,production
+--skip-baselines,flag,off,signal,run_gain_map.py:_solve_signal:1092,skip off/pumpdiag baselines (schur only),production
+--pump-port,int,4,pump,run_gain_map.py:InProcessEngine:506,pump drive node,production
+--source-port,int,1,signal,run_gain_map.py:InProcessEngine:507,signal source node,production
+--out-port,int,2,signal,run_gain_map.py:InProcessEngine:508,signal output node,production
+--pump-mode-policy,"dense_real|positive_phasor_explicit|positive_odd_jc|auto_jc",positive_odd_jc,pump,basis.py:resolve_pump_basis:195,pump-mode basis policy,production;no_argparse_choices
+--pump-mode-count,int,10,pump,run_gain_map.py:_build_problem:550,K for odd basis,production
+--harmonics,int,3,pump,run_gain_map.py:_build_problem:550,dense H when mode-count unset,production
+--nt,int,40,pump,problem.py:HarmonicGrid:24,time samples (>=2*maxmode+1),production
+--sidebands,int,6,signal,floquet.py:sideband_list:84,+/-S conversion blocks,production
+--gamma-nt,int,96,signal,gamma.py:compute_gamma_hat:64,gamma(t) samples,production
+--pump-current-jc-scale,float,2.0,pump,run_gain_map.py:build_problem_for:589,JC positive-phasor 2x scale,production
+--continuation-steps,int,20,continuation,run_gain_map.py:solve_point:650,fixed continuation steps,production
+--newton-tol,float,1e-9,continuation,run_gain_map.py:_settings:536,Newton tolerance,production
+--linear-seed-maxiter,int,5,continuation,seeds.py:build_linear_phasor_seed:46,unused in in-process path,parsed_but_unused
+--adaptive-initial-step,float,1.0,continuation,run_gain_map.py:solve_point:695,adaptive init step,production
+--adaptive-min-step,float,0.05,continuation,run_gain_map.py:solve_point:696,adaptive min step,production
+--gate-gain-db,float,0.01,output,run_gain_map.py:evaluate_gate:1835,gate gain-drift tolerance,production
+--gate-min-converged-frac,float,0.98,output,run_gain_map.py:evaluate_gate:1835,gate min converged fraction,production
+--gate-spotcheck,int,0,output,run_gain_map.py:main:2833,N cold recomputes for gate,production
+--pump-timeout-s,float,600.0,resource,run_gain_map.py:run_point:343,pump subprocess timeout,production;subprocess_only
+--gain-timeout-s,float,300.0,resource,run_gain_map.py:run_point:368,gain subprocess timeout,production;subprocess_only
+--python-executable,str,sys.executable,exec,run_gain_map.py:run_point:320,worker python,production;subprocess_only
+--overwrite,flag,off,output,run_gain_map.py:main:2780,rmtree outdir,production
+--allow-superlu-fallback,flag,off,precond,run_gain_map.py:main:2749,permit PARDISO->SuperLU fallback,debug
+--log-factor-backend,flag,off,precond,run_gain_map.py:main:2754,log PARDISO vs SuperLU,debug
+--column-freq-ghz,float,None,recovery,resume_column_force_gain.py:main:176,force-gain column selector (None=all),diagnostic
+--force-out,path,required,output,resume_column_force_gain.py:main:178,force-gain output dir,diagnostic
+--force-max-nonfinite,int,3,resource,resume_column_force_gain.py:main:180,stop after N nonfinite pump states,diagnostic

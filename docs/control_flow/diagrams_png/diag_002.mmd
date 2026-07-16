@@ -1,0 +1,8 @@
+flowchart TD
+  MSP["_make_solve_problem L561"] --> Q{"--inproc-pump-backend"}
+  Q -->|"full"| FULL["return FullPumpProblem unchanged<br/>solver sees all n nodes"]
+  Q -->|"schur_cpu_mt (default)"| SCH["build_schur_problem<br/>schur_operators.py L300"]
+  SCH --> PART["build_partition<br/>schur_partition.py L79<br/>(factor D_ee,k once/harmonic)"]
+  PART --> ASM["assemble_schur_complements<br/>schur_partition.py L149<br/>S_k = D_nn - D_ne D_ee^-1 D_en"]
+  ASM --> SRP["SchurReducedProblem<br/>schur_operators.py L43<br/>retained-node method surface"]
+  SRP --> LRU["LRU cache per pump freq<br/>L571-579 (--inproc-schur-cache-size, default 2)"]

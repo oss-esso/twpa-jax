@@ -1,0 +1,17 @@
+flowchart TD
+  A["main() L2745"] --> B{"executor?<br/>L2774"}
+  B -->|"inprocess (default)"| C{"n_frequency > chunk_size<br/>and chunk_size>0?<br/>L2774"}
+  B -->|subprocess| SUB["run_cold_pass/run_warm_pass<br/>L402/419 → run_point L298<br/>(spawns experiments/exp08 + exp09)"]
+  C -->|yes| CH["run_frequency_chunks L2687<br/>subprocess workers, --chunk-worker<br/>merge rows L2741"]
+  C -->|no| ENG["InProcessEngine L501"]
+  CH --> ENG
+  ENG --> T{"uses_traversal_orchestrator?<br/>L1793 (traversal!=column OR<br/>recovery!=reseed OR fold_policy!=patience)"}
+  T -->|no| WARM["run_warm_pass_inprocess L1195<br/>(legacy column pass)"]
+  T -->|yes| TRAV["run_map_traversal L1717<br/>(forces chunk_size=0, L2761)"]
+  WARM --> SP["solve_point L606"]
+  TRAV --> SP
+  SP --> WR["write pump + gain<br/>→ row dict"]
+  WR --> GATE["evaluate_gate L1835<br/>write_points_csv/arrays/spectrum/summary"]
+  GATE --> RC{"gate.evaluated and<br/>not passed?"}
+  RC -->|yes| E1["exit 1"]
+  RC -->|no| E0["exit 0"]

@@ -220,6 +220,28 @@ existing gate/CLI tests). Everything below is off unless a flag selects it.
   arclength/fold-follow are functional but **experimental** on the stiff 2c device
   (fold-follow may report no fold in range; the arclength target endpoint is
   linearly interpolated, so it is used as a warm guess, not a polished root).
+- **Mid-GMRES deadline abort** (`solver.py` `gmres_call`): `solve_deadline_s`
+  checks elapsed wall time on every GMRES iteration via `callback_type="pr_norm"`,
+  raising `GmresDeadlineExceeded` from inside the callback instead of only
+  checking between Newton iterations (the old scheme let one pathological GMRES
+  call run ~200s past a 14s budget with `gmres_total` in the thousands).
+- **Adaptive-continuation fallback resumes, not restarts** (`solve_adaptive_continuation`):
+  when lambda-bisection shrinks below `min_step` (near a genuine fold in source
+  scale, reduction ratio stuck near 1.0 at every lambda=1 attempt), it falls back
+  to a fixed-step ladder (`solve_continuation`). This used to pass the *original*
+  seed and lambda=0, discarding every state the adaptive phase had already
+  converged and re-deriving the cheap low-lambda region from scratch -- on a real
+  map column (fp=7.329 GHz, -28.25 dBm,
+  `outputs/measurement_match_debug_01/column_debug_col3_trim`, debug-logged) this
+  burned the whole 14s per-point deadline getting back only to lambda=0.75 after
+  the adaptive phase had already reached lambda=0.9375 converged. Fixed:
+  `solve_continuation` takes a `lambda_start` (default 0.0, so all other callers
+  are unaffected) and the fallback resumes from `(X_current, lambda_current)`,
+  sized to the remaining span at the original `1/fallback_fixed_steps`
+  granularity (`math.ceil(remaining / step_size)` steps, not the full
+  `fallback_fixed_steps`). Column-level `--column-arclength-recovery` (separate
+  from this intra-solve fallback) already retries fresh on every failing cell,
+  not once per column. Tests: `tests/test_adaptive_continuation_fallback.py`.
 
 The engine's `X` is Schur-reduced (retained-port shape, constant across
 frequencies), so chained warm starts and residual ranking all use the same

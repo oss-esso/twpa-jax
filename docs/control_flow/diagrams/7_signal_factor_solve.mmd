@@ -1,0 +1,25 @@
+%% Diagram 7: Signal-side factor solve (detailed)
+%% _gain L980; _solve_signal L1059; floquet.py; gamma.py
+flowchart TD
+  CV["converged pump X (pump_solution.npz)"] --> LP["load_pump (signal/io.py L48): reconstruct basis + omega_p"]
+  LP --> GH["compute_gamma_hat (gamma.py L64): x(t)=2 Re sum X_k e^{ikwt};\ngamma=cos(psi/phi0) Ic/phi0; gamma_hat[ell] over gamma_nt=96 samples"]
+  GH --> KH["build_khat (gamma.py L153): khat[ell]=Bphi diag(gamma_hat[ell]) BphiT"]
+  KH --> OFF["khat_off_0=Bphi diag(Ic/phi0) BphiT (_gain L997)"]
+  KH --> BASE{"--signal-spectrum? L1008"}
+  BASE -->|yes| KB["assemble_khat_conversion_base (floquet L88): signal-freq-independent base"]
+  BASE --> LOOPF["loop signal offsets: ThreadPool(--signal-workers) L1025"]
+  KB --> LOOPF
+  LOOPF --> ONE["_solve_signal L1059"]
+  ONE --> SBK{"--signal-backend: direct L1090 / schur L1091"}
+  SBK --> ASMB["assemble_conversion_matrix[_from_base] L115/L103\nblock(m,q)=khat[m-q]+D(w_s+m w_p) diag over sidebands [-S..S]"]
+  ASMB --> RHS["build_rhs L149: unit current at (signal_m=0, source node)"]
+  ASMB --> SOLV["solve_linear_system L199 (superlu|pardiso)"]
+  RHS --> SOLV
+  SOLV --> RES["r=A y - b; linear_rel_residual L278/L438"]
+  RES --> EX["extract_sideband_node L162: phi_out at (signal_m,out) -> vout_on=i w_s phi_out"]
+  EX --> BL["baselines: off (khat_off_0) + pumpdiag (khat[0]) solve_single_block_transfer L176"]
+  BL --> GN["gain_db_from_s(port_s_from_unit_current_response) gain.py L16 / linear.py L69"]
+  GN --> VAL{"isfinite & rel_residual<=1e-7? L318/L487"}
+  VAL -->|yes| VS["status VALID_SOLVED"]
+  VAL -->|no| CK["status CHECK -> cell ERROR (solve_point L781/L798)"]
+  ONE -. "loops: map cells (warm pass) x signal freqs x sidebands x ports; shared khat_big_base + signal Schur partition cache L1063" .-> ONE

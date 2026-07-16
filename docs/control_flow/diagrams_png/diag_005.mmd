@@ -1,0 +1,8 @@
+flowchart TD
+  IC{"--inproc-continuation"} --> F["fixed → solve_continuation L472<br/>linspace(1/N..1,N), secant predictor if enabled,<br/>return on first non-converged step"]
+  IC --> AC["adaptive_copy → solve_adaptive_continuation L537<br/>predictor='none' (copy)"]
+  IC --> AS["adaptive_secant (default) → solve_adaptive_continuation L537<br/>predictor='secant' (2-point lambda extrapolation L591)"]
+  IC --> AT["adaptive_tangent → solve_adaptive_continuation L537<br/>predictor='tangent' → tangent_predictor L812 (J·Xdot=S)"]
+  IC --> AF["affine → solve_affine_continuation L700<br/>controller='newton_contraction' (target 4 Newton its, L654)"]
+  IC --> PT["ptc → solve_pseudo_transient L836<br/>(X^{n+1}-X^n)/delta + R=0, SER timestep growth L904"]
+  IC --> AL["arclength → solve_arclength L910 then solve_direct L676<br/>pseudo-arclength (X,lambda) bordering algorithm"]

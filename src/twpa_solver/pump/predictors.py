@@ -26,8 +26,11 @@ the campaign test matrix):
 from __future__ import annotations
 
 from collections.abc import Callable
+import logging
 
 import numpy as np
+
+logger = logging.getLogger(__name__)
 
 
 def _shapes_match(*arrays: np.ndarray | None) -> bool:
@@ -45,7 +48,9 @@ def _shapes_match(*arrays: np.ndarray | None) -> bool:
 
 def copy_predictor(parent: np.ndarray) -> np.ndarray:
     """Zeroth-order predictor: copy the parent state."""
-    return np.array(parent, dtype=np.complex128, copy=True)
+    guess = np.array(parent, dtype=np.complex128, copy=True)
+    logger.debug("predictor_copy shape=%s", guess.shape)
+    return guess
 
 
 def axis_secant(
@@ -69,14 +74,19 @@ def axis_secant(
     shapes disagree, or the abscissa is degenerate.
     """
     if not _shapes_match(x_prev2, x_prev1):
+        logger.debug("predictor_axis_secant_unavailable reason=shape_mismatch")
         return None
     if t_prev2 is None or t_prev1 is None:
+        logger.debug("predictor_axis_secant_unavailable reason=missing_abscissa")
         return None
     denom = t_prev1 - t_prev2
     if abs(denom) < 1e-30:
+        logger.debug("predictor_axis_secant_unavailable reason=degenerate_abscissa")
         return None
     beta = (t_target - t_prev1) / denom
-    return x_prev1 + beta * (x_prev1 - x_prev2)
+    guess = x_prev1 + beta * (x_prev1 - x_prev2)
+    logger.debug("predictor_axis_secant_complete beta=%s shape=%s", beta, guess.shape)
+    return guess
 
 
 def corner_predictor(
@@ -97,8 +107,11 @@ def corner_predictor(
     Returns ``None`` if any neighbour is missing or shapes disagree.
     """
     if not _shapes_match(x_i_jm1, x_im1_j, x_im1_jm1):
+        logger.debug("predictor_corner_unavailable reason=shape_mismatch")
         return None
-    return x_im1_j + x_i_jm1 - x_im1_jm1
+    guess = x_im1_j + x_i_jm1 - x_im1_jm1
+    logger.debug("predictor_corner_complete shape=%s", guess.shape)
+    return guess
 
 
 def plane_predictor(
@@ -122,9 +135,11 @@ def plane_predictor(
     """
     usable = [(p, f, x) for (p, f, x) in samples if x is not None]
     if len(usable) < max(3, min_samples):
+        logger.debug("predictor_plane_unavailable reason=insufficient_samples n=%d", len(usable))
         return None
     shape = usable[0][2].shape
     if any(x.shape != shape for _, _, x in usable):
+        logger.debug("predictor_plane_unavailable reason=shape_mismatch")
         return None
 
     m = len(usable)
@@ -139,11 +154,14 @@ def plane_predictor(
     # Reject a rank-deficient design (all samples on one P or one f line): the
     # plane is under-determined and the fit would be meaningless.
     if np.linalg.matrix_rank(design, tol=1e-9) < 3:
+        logger.debug("predictor_plane_unavailable reason=rank_deficient")
         return None
 
     coeffs, *_ = np.linalg.lstsq(design, rhs, rcond=None)
     a0 = coeffs[0, :]  # value at the target (design centred on target)
-    return a0.reshape(shape).astype(np.complex128, copy=False)
+    guess = a0.reshape(shape).astype(np.complex128, copy=False)
+    logger.debug("predictor_plane_complete samples=%d shape=%s", len(usable), guess.shape)
+    return guess
 
 
 def rank_candidates(
@@ -170,4 +188,5 @@ def rank_candidates(
             rho = float("inf")
         scored.append((name, guess, rho))
     scored.sort(key=lambda item: item[2])
+    logger.debug("predictor_candidates_ranked candidates=%r", [(n, r) for n, _, r in scored])
     return scored

@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import logging
 import math
 import time
 from dataclasses import dataclass
 
 import numpy as np
 import scipy.sparse.linalg as spla
+
+logger = logging.getLogger(__name__)
 
 
 def _real_dot(A: np.ndarray, B: np.ndarray) -> float:
@@ -137,13 +140,22 @@ class HarmonicNewtonKrylovSolver:
         s = self.settings
         t0 = time.perf_counter()
         X = np.array(X0, dtype=np.complex128, copy=True)
+        logger.debug(
+            "solve_one_entry X0_shape=%s source_scale=%s max_newton=%d newton_tol=%s",
+            X0.shape, source_scale, s.max_newton, s.newton_tol,
+        )
 
         nrm = problem.norms(X, source_scale, s.compute_time_residual)
+        logger.debug("solve_one_initial_norms coeff_rel=%s coeff_abs=%s", nrm.get("coeff_rel"), nrm.get("coeff_abs"))
 
         # A bad secant/tangent predictor can overflow the Josephson evaluation.
         # Let the map record a controlled pump failure instead of handing NaN or
         # Inf values to SuperLU/PARDISO, which may terminate the native process.
         if not _finite_state(X) or not _finite_residual(nrm):
+            logger.debug(
+                "solve_one_fail reason=%s finite_state=%s finite_residual=%s",
+                "non-finite initial state or residual", _finite_state(X), _finite_residual(nrm),
+            )
             return X, self._make_report(
                 False, source_scale, nrm, 0, 0, 0.0, t0,
                 "non-finite initial state or residual",
@@ -159,6 +171,10 @@ class HarmonicNewtonKrylovSolver:
             print(msg)
 
         if nrm["coeff_rel"] < s.newton_tol:
+            logger.debug(
+                "solve_one_converged newton_iterations=0 coeff_rel=%s",
+                nrm["coeff_rel"],
+            )
             return X, self._make_report(
                 True, source_scale, nrm, 0, 0, 0.0, t0, ""
             )
@@ -180,8 +196,13 @@ class HarmonicNewtonKrylovSolver:
         last_gmres = 0
 
         for it in range(1, s.max_newton + 1):
+            logger.debug(
+                "newton_iter_start it=%d coeff_rel=%s elapsed_s=%.3f",
+                it, nrm["coeff_rel"], time.perf_counter() - t0,
+            )
             if s.solve_deadline_s > 0.0 and (time.perf_counter() - t0) > s.solve_deadline_s:
                 failure_reason = f"solve exceeded {s.solve_deadline_s:.1f}s budget at Newton {it}"
+                logger.debug("deadline_exceeded phase=newton_top it=%d reason=%s", it, failure_reason)
                 return X, self._make_report(
                     False, source_scale, nrm, it - 1, gmres_total,
                     factor_total, t0, failure_reason,
@@ -191,6 +212,7 @@ class HarmonicNewtonKrylovSolver:
             pre_coeff = nrm["coeff_rel"]
             R = problem.residual_coeffs(X, source_scale)
             if not _finite_state(R):
+                logger.debug("solve_one_fail it=%d reason=%s", it, "non-finite residual before linear solve")
                 return X, self._make_report(
                     False, source_scale, nrm, it - 1, gmres_total,
                     factor_total, t0,
@@ -202,6 +224,7 @@ class HarmonicNewtonKrylovSolver:
 
             tangent = problem.tangent_state(X)
             if not _finite_state(tangent.gamma_t) or not _finite_state(tangent.gamma_mean):
+                logger.debug("solve_one_fail it=%d reason=%s", it, "non-finite tangent before linear solve")
                 return X, self._make_report(
                     False, source_scale, nrm, it - 1, gmres_total,
                     factor_total, t0,
@@ -221,6 +244,13 @@ class HarmonicNewtonKrylovSolver:
                 or (s.precond_reuse_refresh_gmres > 0
                     and last_gmres >= s.precond_reuse_refresh_gmres)
             )
+            logger.debug(
+                "preconditioner_reuse_decision it=%d refresh=%s have_cache=%s "
+                "steps_since_factor=%d precond_reuse=%d last_gmres=%d "
+                "refresh_gmres_threshold=%d preconditioner=%s",
+                it, refresh, have_cache, steps_since_factor, s.precond_reuse,
+                last_gmres, s.precond_reuse_refresh_gmres, s.preconditioner,
+            )
 
             spectral_tangent = None
             if refresh and (s.jvp_mode == "spectral"
@@ -231,6 +261,7 @@ class HarmonicNewtonKrylovSolver:
 
             tf = time.perf_counter()
             if refresh:
+                logger.debug("preconditioner_rebuild it=%d kind=%s", it, s.preconditioner)
                 if s.preconditioner == "real_coupled":
                     cached_real = problem.assemble_real_coupled_preconditioner(spectral_tangent)
                     cached_coupled = cached_factors = None
@@ -240,6 +271,10 @@ class HarmonicNewtonKrylovSolver:
                     # (exp10 in-process backend); the direct exp08 solver runs
                     # the full problem, which has no such method.
                     if not hasattr(problem, "assemble_real_coupled_fast"):
+                        logger.debug(
+                            "preconditioner_unavailable it=%d kind=real_coupled_fast "
+                            "reason=%s", it, "problem lacks assemble_real_coupled_fast",
+                        )
                         raise NotImplementedError(
                             "real_coupled_fast is available only for the "
                             "Schur-reduced backend (exp10 --inproc-preconditioner "
@@ -258,14 +293,27 @@ class HarmonicNewtonKrylovSolver:
                 steps_since_factor = 0
             else:
                 steps_since_factor += 1
+                logger.debug(
+                    "preconditioner_reused it=%d steps_since_factor=%d",
+                    it, steps_since_factor,
+                )
             real_factor = cached_real
             coupled_factor = cached_coupled
             factors = cached_factors
             factor_s = time.perf_counter() - tf
             factor_total += factor_s
+            logger.debug("preconditioner_factor_timing it=%d factor_s=%.6f factor_total=%.6f", it, factor_s, factor_total)
             if refresh and s.preconditioner == "real_coupled_fast" and cached_real is not None:
-                precond_assembly_total += float(getattr(cached_real, "last_assembly_runtime_s", 0.0))
-                precond_numeric_factor_total += float(getattr(cached_real, "last_factor_runtime_s", 0.0))
+                assembly_rt = float(getattr(cached_real, "last_assembly_runtime_s", 0.0))
+                factor_rt = float(getattr(cached_real, "last_factor_runtime_s", 0.0))
+                precond_assembly_total += assembly_rt
+                precond_numeric_factor_total += factor_rt
+                logger.debug(
+                    "preconditioner_backend_timing it=%d assembly_runtime_s=%.6f "
+                    "factor_runtime_s=%.6f backend=%s",
+                    it, assembly_rt, factor_rt,
+                    getattr(cached_real, "last_factor_backend", None),
+                )
 
             def matvec(v_real: np.ndarray) -> np.ndarray:
                 V = unpack_complex(v_real, shape)
@@ -318,6 +366,10 @@ class HarmonicNewtonKrylovSolver:
             def cb(_pr_norm: float) -> None:
                 gmres_counter["n"] += 1
 
+            logger.debug(
+                "gmres_call_begin it=%d rtol=%s atol=%s restart=%d maxiter=%d",
+                it, s.gmres_rtol, s.gmres_atol, s.gmres_restart, s.gmres_maxiter,
+            )
             try:
                 delta_real, info = gmres_call(
                     A=Aop,
@@ -337,6 +389,10 @@ class HarmonicNewtonKrylovSolver:
                     f"solve exceeded {s.solve_deadline_s:.1f}s budget mid-GMRES "
                     f"at Newton {it}"
                 )
+                logger.debug(
+                    "deadline_exceeded phase=mid_gmres it=%d gmres_iters=%d reason=%s",
+                    it, gmres_counter["n"], failure_reason,
+                )
                 return X, self._make_report(
                     False, source_scale, nrm, it - 1, gmres_total,
                     factor_total, t0, failure_reason,
@@ -345,9 +401,14 @@ class HarmonicNewtonKrylovSolver:
                 )
             gmres_total += gmres_counter["n"]
             last_gmres = gmres_counter["n"]
+            logger.debug(
+                "gmres_call_end it=%d gmres_iters=%d info=%d gmres_total=%d",
+                it, gmres_counter["n"], info, gmres_total,
+            )
 
             if info != 0:
                 failure_reason = f"GMRES did not fully converge, info={info}"
+                logger.debug("gmres_not_converged it=%d info=%d", it, info)
 
             Delta = unpack_complex(delta_real, shape)
 
@@ -364,7 +425,12 @@ class HarmonicNewtonKrylovSolver:
                     s.compute_time_residual,
                 )
 
-                if trial_nrm["coeff_rel"] < nrm["coeff_rel"]:
+                decreased = trial_nrm["coeff_rel"] < nrm["coeff_rel"]
+                logger.debug(
+                    "line_search_step it=%d alpha=%.6e trial_coeff_rel=%s decreased=%s",
+                    it, alpha, trial_nrm["coeff_rel"], decreased,
+                )
+                if decreased:
                     accepted = True
                     best_X = Xtrial
                     best_nrm = trial_nrm
@@ -374,6 +440,7 @@ class HarmonicNewtonKrylovSolver:
 
             if not accepted:
                 failure_reason = failure_reason or f"line search failed at Newton {it}"
+                logger.debug("line_search_failed it=%d min_alpha=%s reason=%s", it, s.min_alpha, failure_reason)
                 return X, self._make_report(
                     False,
                     source_scale,
@@ -389,6 +456,10 @@ class HarmonicNewtonKrylovSolver:
 
             X = best_X
             nrm = best_nrm
+            logger.debug(
+                "line_search_accepted it=%d alpha=%.6e coeff_rel=%s",
+                it, alpha, nrm["coeff_rel"],
+            )
 
             # Stall detection: if accepted steps keep barely reducing the
             # residual while still far from tolerance, the operating point is
@@ -396,9 +467,17 @@ class HarmonicNewtonKrylovSolver:
             if s.stall_patience > 0 and nrm["coeff_rel"] > 100.0 * s.newton_tol:
                 ratio = nrm["coeff_rel"] / max(pre_coeff, 1e-300)
                 stall_count = stall_count + 1 if ratio > s.stall_ratio else 0
+                logger.debug(
+                    "stall_check it=%d ratio=%.6f stall_count=%d stall_patience=%d",
+                    it, ratio, stall_count, s.stall_patience,
+                )
                 if stall_count >= s.stall_patience:
                     failure_reason = (
                         f"stalled at Newton {it} (reduction ratio {ratio:.3f})"
+                    )
+                    logger.debug(
+                        "stall_detected it=%d ratio=%.6f coeff_rel=%s reason=%s",
+                        it, ratio, nrm["coeff_rel"], failure_reason,
                     )
                     if s.verbose:
                         print(f"  newton={it:02d} STALL ratio={ratio:.3f} coeff_rel={nrm['coeff_rel']:.3e}")
@@ -423,6 +502,10 @@ class HarmonicNewtonKrylovSolver:
                 print(msg)
 
             if nrm["coeff_rel"] < s.newton_tol:
+                logger.debug(
+                    "newton_converged it=%d coeff_rel=%s gmres_total=%d",
+                    it, nrm["coeff_rel"], gmres_total,
+                )
                 return X, self._make_report(
                     True,
                     source_scale,
@@ -437,6 +520,10 @@ class HarmonicNewtonKrylovSolver:
                 )
 
         failure_reason = failure_reason or "maximum Newton iterations reached"
+        logger.debug(
+            "newton_loop_exhausted max_newton=%d reason=%s coeff_rel=%s",
+            s.max_newton, failure_reason, nrm["coeff_rel"],
+        )
         return X, self._make_report(
             False,
             source_scale,
@@ -475,11 +562,19 @@ class HarmonicNewtonKrylovSolver:
         continuation_steps: int,
         x_init: np.ndarray | None = None,
         max_wall_s: float = 0.0,
+        lambda_start: float = 0.0,
     ) -> tuple[np.ndarray, list[StepReport]]:
+        """Fixed-step source-scale ladder from ``lambda_start`` to 1.0.
+
+        ``lambda_start`` lets a caller resume a ladder mid-span (e.g. the
+        adaptive-continuation fallback below, which restarts from the best
+        state already reached instead of re-deriving the cheap low-lambda
+        region from scratch).
+        """
         reports: list[StepReport] = []
         continuation_t0 = time.perf_counter()
 
-        lambdas = np.linspace(1.0 / continuation_steps, 1.0, continuation_steps)
+        lambdas = np.linspace(lambda_start, 1.0, continuation_steps + 1)[1:]
 
         X_prevprev: np.ndarray | None = None
         X_prev = problem.zeros() if x_init is None else np.array(x_init, dtype=np.complex128, copy=True)
@@ -675,14 +770,37 @@ class HarmonicNewtonKrylovSolver:
                     )
                     trace.accepted_steps = len(trace.accepted_lambdas)
                     return X_current, reports, trace
+                # Resume the fixed ladder from X_current/lambda_current (the
+                # best state the adaptive phase already reached), not from
+                # x_init/lambda=0. Restarting from the original seed threw
+                # away all adaptive progress and re-derived the cheap
+                # low-lambda region from scratch, burning the wall-time
+                # budget before the ladder could get back near the fold with
+                # finer steps (see docs/control_flow debug trace, point 8 of
+                # column_debug_col3_trim: adaptive reached lambda=0.9375
+                # converged, then the old fallback restarted at lambda=0.05
+                # and only got back to lambda=0.75 before the deadline hit).
+                # Steps sized to the original 1/fallback_fixed_steps
+                # granularity, applied to the remaining span only.
+                remaining = 1.0 - lambda_current
+                step_size = 1.0 / fallback_fixed_steps
+                fallback_steps = max(1, math.ceil(remaining / step_size - 1e-9))
+                logger.debug(
+                    "adaptive_continuation_fallback lambda_current=%.6f "
+                    "remaining=%.6f fallback_steps=%d coeff_rel=%s",
+                    lambda_current, remaining, fallback_steps,
+                    reports[-1].coeff_rel if reports else None,
+                )
                 print(
                     "adaptive continuation failed below minimum step; "
-                    f"falling back to fixed {fallback_fixed_steps} steps"
+                    f"falling back to fixed {fallback_steps} steps from "
+                    f"lambda={lambda_current:.6f} (resuming, not restarting)"
                 )
                 X_fallback, fallback_reports = self.solve_continuation(
                     problem,
-                    continuation_steps=fallback_fixed_steps,
-                    x_init=x_init,
+                    continuation_steps=fallback_steps,
+                    x_init=X_current,
+                    lambda_start=lambda_current,
                     max_wall_s=max(
                         0.0,
                         max_wall_s - (time.perf_counter() - continuation_t0),
@@ -1151,7 +1269,7 @@ class HarmonicNewtonKrylovSolver:
         preconditioner_assembly_runtime_s: float = 0.0,
         preconditioner_numeric_factor_runtime_s: float = 0.0,
     ) -> StepReport:
-        return StepReport(
+        report = StepReport(
             converged=converged,
             source_scale=source_scale,
             coeff_abs=float(nrm["coeff_abs"]),
@@ -1166,6 +1284,14 @@ class HarmonicNewtonKrylovSolver:
             preconditioner_assembly_runtime_s=float(preconditioner_assembly_runtime_s),
             preconditioner_numeric_factor_runtime_s=float(preconditioner_numeric_factor_runtime_s),
         )
+        logger.debug(
+            "step_report converged=%s source_scale=%s coeff_rel=%s newton_iterations=%d "
+            "gmres_iterations_total=%d factor_runtime_s=%.6f runtime_s=%.3f failure_reason=%r",
+            report.converged, report.source_scale, report.coeff_rel,
+            report.newton_iterations, report.gmres_iterations_total,
+            report.factor_runtime_s, report.runtime_s, report.failure_reason,
+        )
+        return report
 
 
 def gmres_call(

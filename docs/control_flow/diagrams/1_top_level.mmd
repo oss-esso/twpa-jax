@@ -1,0 +1,29 @@
+%% Diagram 1: Complete top-level execution flow (pump + signal)
+%% run_gain_map.py main() L2745; solve_point L606; evaluate_gate L1835
+flowchart TD
+  A["main() run_gain_map.py L2745"] --> P["parse_args L2111"]
+  P --> BP["build_points L2454 (dbm_to_peak_current_a L76)"]
+  P --> B{"executor? L2774"}
+  B -->|"subprocess"| SUB["run_cold_pass/run_warm_pass L402/419\n-> run_point L298 -> experiments/exp08 + exp09"]
+  B -->|"inprocess (default)"| C{"n_frequency>chunk_size and chunk_size>0? L2774"}
+  C -->|yes| CH["run_frequency_chunks L2687\n(--chunk-worker subprocesses, merge L2741)"]
+  C -->|no| ENG["InProcessEngine.__init__ L501\nload_circuit x2 (core/circuit.py L103)"]
+  CH --> ENG
+  ENG --> T{"uses_traversal_orchestrator? L1793"}
+  T -->|no| WARM["run_warm_pass_inprocess L1195"]
+  T -->|yes| TRAV["run_map_traversal L1717 (forces chunk_size=0 L2761)"]
+  WARM --> SP["solve_point L606"]
+  TRAV --> SP
+  SP --> A1["_build_problem L546 -> FullPumpProblem (problem.py L89)"]
+  A1 --> A2["_make_solve_problem L561 (Schur reduce, backend dispatch)"]
+  A2 --> A3["HarmonicNewtonKrylovSolver solve (solver.py L127)"]
+  A3 --> A4["summarize_solution/write_results (pump/io.py L13/33) -> pump_solution.npz"]
+  A4 --> GN{"converged or force_gain? L786"}
+  GN -->|yes| G["_gain L980 -> _solve_signal L1059 (signal, Diagram 7)"]
+  GN -->|no| ROW["row status=ERROR"]
+  G --> ROW2["row status=PASS/ERROR L805"]
+  ROW --> GATE["evaluate_gate L1835; write_points_csv/arrays/spectrum/summary L1904-2109"]
+  ROW2 --> GATE
+  GATE --> RC{"gate.evaluated and not passed? L2891"}
+  RC -->|yes| E1["exit 1"]
+  RC -->|no| E0["exit 0"]

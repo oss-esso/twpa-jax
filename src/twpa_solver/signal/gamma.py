@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import logging
 from pathlib import Path
 
 import numpy as np
@@ -10,12 +11,15 @@ import scipy.sparse as sp
 from twpa_solver.core.circuit import CircuitMatrices
 from twpa_solver.signal.io import PumpSolution
 
+logger = logging.getLogger(__name__)
+
 def synthesize_real_from_positive_harmonics(
     X: np.ndarray,
     omega: float,
     nt: int,
     modes: list[int] | np.ndarray | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
+    logger.debug("gamma_waveform_synthesis_start X_shape=%s omega=%s nt=%d modes=%r", X.shape, omega, nt, modes)
     """Reconstruct the real pump waveform x(t) = 2 Re sum_k X_k exp(+i k omega t).
 
     `modes` are the positive integer pump-harmonic indices (one per row of X).
@@ -31,11 +35,13 @@ def synthesize_real_from_positive_harmonics(
     t = np.arange(nt, dtype=float) * (2.0 * np.pi / omega) / nt
     E = np.exp(1j * omega * t[:, None] * k[None, :])
     x_t = 2.0 * np.real(E @ X)
+    logger.debug("gamma_waveform_synthesis_complete t_shape=%s waveform_shape=%s max_abs=%s", t.shape, x_t.shape, np.max(np.abs(x_t)))
     return t, x_t
 
 
 def load_dc_branch_flux(dc_solution: str | Path | None, circuit: CircuitMatrices) -> np.ndarray | None:
     if dc_solution is None:
+        logger.debug("gamma_dc_flux_load_skipped reason=not_provided")
         return None
 
     p = Path(dc_solution)
@@ -58,6 +64,7 @@ def load_dc_branch_flux(dc_solution: str | Path | None, circuit: CircuitMatrices
     if psi_dc.size != circuit.Bphi.shape[1]:
         raise ValueError(f"psi_dc length {psi_dc.size} != branch count {circuit.Bphi.shape[1]}")
 
+    logger.debug("gamma_dc_flux_loaded path=%s size=%d", p, psi_dc.size)
     return psi_dc
 
 
@@ -68,6 +75,7 @@ def compute_gamma_hat(
     gamma_nt: int,
     dc_branch_flux: np.ndarray | None = None,
 ) -> dict[int, np.ndarray]:
+    logger.debug("gamma_hat_compute_start max_ell=%d gamma_nt=%d pump_modes=%r", max_ell, gamma_nt, pump.modes)
     t, x_t = synthesize_real_from_positive_harmonics(
         pump.X,
         pump.omega_p,
@@ -79,6 +87,7 @@ def compute_gamma_hat(
     if dc_branch_flux is not None:
         psi_t = psi_t + dc_branch_flux[None, :]
     gamma_t = (circuit.Ic[None, :] / circuit.phi0) * np.cos(psi_t / circuit.phi0)
+    logger.debug("gamma_hat_time_domain_built psi_shape=%s gamma_shape=%s gamma_abs_range=(%s,%s)", psi_t.shape, gamma_t.shape, np.min(np.abs(gamma_t)), np.max(np.abs(gamma_t)))
 
     gamma_hat: dict[int, np.ndarray] = {}
 
@@ -86,6 +95,7 @@ def compute_gamma_hat(
         phase = np.exp(-1j * ell * pump.omega_p * t)
         gamma_hat[ell] = np.mean(gamma_t * phase[:, None], axis=0)
 
+    logger.debug("gamma_hat_compute_complete n_coeffs=%d ell_range=(%d,%d)", len(gamma_hat), -max_ell, max_ell)
     return gamma_hat
 
 
@@ -155,6 +165,7 @@ def build_khat(
     gamma_hat: dict[int, np.ndarray],
     drop_tol: float,
 ) -> dict[int, sp.csr_matrix]:
+    logger.debug("khat_build_start n_gamma=%d drop_tol=%s", len(gamma_hat), drop_tol)
     khat: dict[int, sp.csr_matrix] = {}
 
     for ell, gh in gamma_hat.items():
@@ -165,4 +176,5 @@ def build_khat(
         Kh = Bphi @ sp.diags(gh, offsets=0, format="csr") @ Bphi.T
         khat[ell] = Kh.astype(np.complex128).tocsr()
 
+    logger.debug("khat_build_complete n_blocks=%d nnz_by_ell=%r", len(khat), {ell: block.nnz for ell, block in khat.items()})
     return khat

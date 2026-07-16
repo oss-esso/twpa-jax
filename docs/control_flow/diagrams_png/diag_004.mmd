@@ -1,0 +1,9 @@
+flowchart TD
+  GS["_gain L980<br/>load_pump L984 → gamma_hat L988 → khat L994"] --> ONE["_solve_signal L1059"]
+  ONE --> SB{"--signal-backend"}
+  SB -->|"direct (default)"| D["solve_gain_one<br/>floquet.py L217<br/>full (2S+1)·n coupled system"]
+  SB -->|"schur"| S["solve_gain_one_schur<br/>floquet.py L377<br/>reduced (2S+1)·m via signal Schur partition"]
+  D --> LS{"--signal-solver<br/>solve_linear_system L199"}
+  S --> LS
+  LS -->|"superlu (default)"| SU["scipy spla.spsolve"]
+  LS -->|"pardiso"| PA["_pardiso_spsolve_reuse L59<br/>real-embed complex, symbolic reuse (TLS)"]
