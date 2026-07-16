@@ -474,8 +474,10 @@ class HarmonicNewtonKrylovSolver:
         problem: FullPumpProblem,
         continuation_steps: int,
         x_init: np.ndarray | None = None,
+        max_wall_s: float = 0.0,
     ) -> tuple[np.ndarray, list[StepReport]]:
         reports: list[StepReport] = []
+        continuation_t0 = time.perf_counter()
 
         lambdas = np.linspace(1.0 / continuation_steps, 1.0, continuation_steps)
 
@@ -485,6 +487,8 @@ class HarmonicNewtonKrylovSolver:
         lam_prev: float | None = None
 
         for lam_raw in lambdas:
+            if max_wall_s > 0.0 and time.perf_counter() - continuation_t0 > max_wall_s:
+                return X_prev, reports
             lam = float(lam_raw)
 
             X_guess = X_prev
@@ -679,6 +683,10 @@ class HarmonicNewtonKrylovSolver:
                     problem,
                     continuation_steps=fallback_fixed_steps,
                     x_init=x_init,
+                    max_wall_s=max(
+                        0.0,
+                        max_wall_s - (time.perf_counter() - continuation_t0),
+                    ) if max_wall_s > 0.0 else 0.0,
                 )
                 reports.extend(fallback_reports)
                 trace.accepted_steps = len(trace.accepted_lambdas)

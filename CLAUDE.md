@@ -136,6 +136,74 @@ existing gate/CLI tests). Everything below is off unless a flag selects it.
   (`+ --bridge-steps`, `--bridge-mode {diagonal,freq_first,power_first,adaptive}`).
   Bridge = physical-parameter continuation from a solved parent to the target
   along (P,f), `InProcessEngine.solve_bridge`.
+- **Power substep** `--column-power-substep` (`+ --column-power-substep-init-db`
+  0.1, `--column-power-substep-min-db` 0.005, `--column-power-substep-deadline-s`
+  120). On a failed warm cell, adaptive natural-parameter continuation **along the
+  map power axis** from the last converged state: walk up in adaptive dBm
+  micro-steps (geometric in current, grow x1.5 / halve on fail), warm-starting
+  each; `InProcessEngine.solve_power_substep`. This is the diagnostics'
+  "0.005-0.01 dB steps cross the wall" finding operationalized inside the map:
+  the coarse 0.30 dB power grid overshoots gain-lobe crests that finer stepping
+  crosses. A step-independent stall (step < min_db) is recorded
+  (`pump_power_substep_stall_dbm`, sets `verified_fold`) as a real
+  numerical/fold boundary rather than retried. **Demonstrated:** 2c themis
+  column fp=8.099 GHz, coarse map died at -29.36 dBm (3-4 PASS); substep
+  recovered to ~-25.75 dBm (16 PASS, +3.9 dB, gains through the multi-lobe
+  ripple) before a genuine boundary. The intra-loop `last_good_X` is
+  retained-shape (Schur), so substep solves are shape-compatible with no disk
+  round-trip (the disk-load seed path in `--initial-pump-dir` is full-shape and
+  is a separate concern). Compare a recovered map to the Themis measurement with
+  `scripts/compare_map_to_measurement.py` (peak-gain + collapse-power envelope,
+  aligned by the ~+0.99 GHz / few-dB calibration offsets;
+  `docs/17.03.10_Themis_SetupAug25_noVTS_transmission_15mK`).
+- **Calibration-shift map fit** (`scripts/align_map_to_measurement.py`): instead of
+  hand-tuning the calibration offsets, fit them as nuisance parameters on the 2-D
+  peak-gain maps. Model `G_meas(f,P) ~= G_sim(f-df, P-dP) + dG`; for weighted LSQ
+  `dG` is analytic per `(df,dP)`, so a coarse+fine 2-D grid search over `(df,dP)`
+  remains (`align_maps`). Reduces the Themis cube (`105C5_*GHz.npy`: transmission
+  over power x signal-freq per pump freq) to a peak-gain map and plots it (the raw
+  `docs/14.18.08_Themis_...` ships data only, no plot); resamples the sim with
+  `RegularGridInterpolator` at shifted coords, masks non-overlap + NaN (failed) sim
+  cells, ROI-weights so the amplified ridge (not the flat background) drives the fit,
+  `--loss {l2,huber}`. Writes JSON + a measurement-map PNG + a 4-panel comparison
+  (meas / aligned sim / residual / **loss surface**, clipped color so the min basin
+  is visible). Fit one section only with `--fit-freq-ghz LO HI` / `--fit-power-dbm
+  LO HI` (hard-mask the measurement grid outside the window); `--min-overlap-frac`
+  (default 0.25) rejects tiny-overlap corner fits (a soft 1/overlap penalty alone
+  lets a ~9-cell corner with near-zero local residual win -- the guard is relative
+  to the floor-weighted window, whose max achievable overlap is only ~0.3-0.4
+  because the sim fails at high power, so 0.25 is the practical ceiling not 0.5).
+  **Demonstrated (14.18.08 vs `map_2c_scan_6p0_8p5_100x70`):** full-map best
+  df=-0.30 GHz, dP=+2.55 dB, dG=-1.30 dB, RMS 6.0 dB, df-elongated (weakly
+  identified) basin. **Per-section fits are far better identified:** restricting to
+  one comb branch gives **df ~= 0 GHz** (the two datasets' combs are already
+  frequency-aligned -- no ~+1 GHz offset like 17.03.10; the full-map df=-0.30 was a
+  comb-alias compromise since a single df can't align all lobes when the comb phase
+  drifts) and **dP ~= +2.5..+3.3 dB robustly across 6.2-7.45 GHz** (the one real
+  calibration offset), with a compact single-minimum loss surface. RMS stays ~2-4 dB
+  per lobe because the sim still (a) does not reach the measured high-power lobes
+  (numerical-boundary cap) and (b) has a slightly different comb periodicity -- a
+  model-fidelity/coverage gap, not a fit bug. Band edge 7.45+ GHz has ~no sim
+  coverage (junk dG). Tests: `tests/test_align_map.py`.
+- **Forced-gain column resume** (`scripts/resume_column_force_gain.py` +
+  `InProcessEngine.solve_point(force_gain=True)`): diagnostic to test whether a
+  column's high-power wall is the real device fold or a numerical boundary. Marches
+  one column (`--column-freq-ghz`, nearest grid col; omit = all columns) up in
+  power, warm-starting each cell from the previous, and runs the gain solve on the
+  **last Newton iterate regardless of convergence** — the normal path only gains
+  converged pumps (`solve_point` gate is `converged or force_gain`; it also returns
+  the last-iterate `X` so the warm chain continues past the wall). Never skips;
+  stops a column after `--force-max-nonfinite` (default 3) consecutive non-finite
+  pump states (warm chain diverged). Writes per-cell dirs, a per-column CSV
+  (`pump_converged`, `forced_gain`, `gain_db` columns) and a PNG (gain vs power,
+  converged pts vs forced pts). Takes the SAME engine/grid flags as
+  `run_gain_map.py`. **Demonstrated:** 2c fp=8.099 GHz — converged branch 9.2→12.3→
+  15.7 dB (-32..-30 dBm), then -29 dBm pump FAILS (coeff_rel 0.089) and the forced
+  gain **collapses to 1.5 dB**, i.e. the non-converged waveform does not sustain the
+  gain (evidence the wall is near a genuine transition, not a mere solver miss). The
+  in-loop warm state is retained-shape (Schur), so force-marching through a
+  non-converged iterate is shape-compatible with no disk round-trip. Tests:
+  `tests/test_run_gain_map_cli.py::test_force_gain_*`.
 - **Fold policy** `--fold-policy {patience,cross_axis,bridge_gate,combined,arclength}`
   — when a failed cell counts toward the per-column fold short-circuit; `combined`
   is the report's recommended ladder (power/freq parent + portfolio + bridge before

@@ -605,7 +605,7 @@ class InProcessEngine:
 
     def solve_point(
         self, point: GridPoint, pass_dir: Path, *, mode: str, warm_X: np.ndarray | None,
-        prebuilt: tuple | None = None,
+        prebuilt: tuple | None = None, force_gain: bool = False,
     ) -> tuple[dict[str, Any], np.ndarray | None]:
         a = self.args
         pdir = pass_dir / "points" / point_name(point.index, point.power_dbm, point.pump_freq_ghz)
@@ -679,6 +679,15 @@ class InProcessEngine:
                 continuation_info["fold_lambda"] = arc_info.get("fold_lambda")
             else:
                 predictor = "none" if cont == "adaptive_copy" else cont
+                # A zero continuation deadline historically meant unlimited
+                # adaptive work. For map fail-fast runs, inherit the per-solve
+                # deadline so a failed cold seed cannot spend the whole map on
+                # repeated adaptive/fallback attempts.
+                continuation_deadline = float(
+                    getattr(a, "inproc_continuation_deadline_s", 0.0)
+                )
+                if continuation_deadline <= 0.0:
+                    continuation_deadline = float(a.inproc_solve_deadline_s)
                 if cont == "affine":
                     X, reports, trace = solver.solve_affine_continuation(
                         solve_problem,
@@ -686,7 +695,7 @@ class InProcessEngine:
                         initial_step=a.adaptive_initial_step,
                         min_step=a.adaptive_min_step,
                         fallback_fixed_steps=a.inproc_fallback_fixed_steps,
-                        max_wall_s=a.inproc_continuation_deadline_s,
+                        max_wall_s=continuation_deadline,
                     )
                 else:
                     X, reports, trace = solver.solve_adaptive_continuation(
@@ -697,7 +706,7 @@ class InProcessEngine:
                         growth=1.5,
                         shrink=0.5,
                         fallback_fixed_steps=a.inproc_fallback_fixed_steps,
-                        max_wall_s=a.inproc_continuation_deadline_s,
+                        max_wall_s=continuation_deadline,
                     )
                 continuation_info["method"] = cont
                 continuation_info["steps"] = len(trace.attempted_lambdas)
@@ -771,7 +780,10 @@ class InProcessEngine:
             "spectrum_peak_gain_db", "spectrum_peak_signal_ghz")})
         row["gain_status"] = "ERROR"
 
-        if converged:
+        # ``force_gain`` runs the gain solve on the last-iterate pump waveform
+        # even when Newton did not converge (above-threshold / fold region), so
+        # the diagnostic column resume can see what the gain does past the wall.
+        if converged or force_gain:
             g, gain_timing, spectrum = self._gain(pump_dir, gain_dir, point.pump_freq_ghz)
             row.update(gain_timing)
             if spectrum is not None:
@@ -794,7 +806,9 @@ class InProcessEngine:
                                    and row["gain_status"] == "VALID_SOLVED") else "ERROR"
         row["elapsed_s"] = time.perf_counter() - t0
         row["pump_dir"] = str(pump_dir)
-        return row, (X if converged else None)
+        # In force_gain mode return the last-iterate X regardless of convergence
+        # so the caller can keep warm-starting up the column past the wall.
+        return row, (X if (converged or force_gain) else None)
 
     def solve_bridge(
         self, parent_X: np.ndarray, parent_current: float, parent_freq: float,
@@ -857,6 +871,74 @@ class InProcessEngine:
                 return None
             guess = nxt
         return guess
+
+    def solve_power_substep(
+        self,
+        freq_ghz: float,
+        from_X: np.ndarray,
+        from_current: float,
+        to_current: float,
+        *,
+        init_db: float = 0.1,
+        min_db: float = 0.005,
+        deadline_s: float = 120.0,
+    ) -> tuple[np.ndarray | None, dict[str, Any]]:
+        """Adaptive natural-parameter continuation along the map power axis.
+
+        Walk the pump current from ``from_current`` (a converged state) to
+        ``to_current`` (the failed target cell), warm-starting one full-scale
+        Newton solve per micro-step. The step is measured in dBm (geometric in
+        current: ``I *= 10**(step_db/20)``) so the schedule matches the physical
+        gain-lobe spacing; it grows x1.5 on success and halves on failure. When
+        the step must shrink below ``min_db`` the branch has a step-independent
+        stall at that power (a numerical/fold boundary), and this returns
+        ``None`` -- distinct from a coarse-grid miss, which recovers here.
+
+        The returned ``X`` (retained-shape, like every chained warm state) is a
+        strong guess for the real target solve, not the written solution: the
+        caller re-runs ``solve_point`` from it so gain + files are produced by
+        the normal path. Bounded by ``deadline_s`` wall time.
+        """
+        info: dict[str, Any] = {
+            "reached_target": False, "substeps": 0, "min_step_db": init_db,
+            "terminal_reason": "", "last_current": from_current,
+        }
+        if to_current <= from_current or from_X is None:
+            info["terminal_reason"] = "noop"
+            return None, info
+        solver = exp08.HarmonicNewtonKrylovSolver(self._settings())
+        # dBm distance is +20*log10(I2/I1); step geometrically in current.
+        total_db = 20.0 * math.log10(to_current / from_current)
+        t0 = time.perf_counter()
+        guess = from_X
+        cur = from_current
+        done_db = 0.0            # dBm advanced from from_current
+        step_db = min(init_db, total_db)
+        while done_db < total_db - 1e-9:
+            if time.perf_counter() - t0 > deadline_s:
+                info["terminal_reason"] = "deadline"
+                break
+            trial_db = min(done_db + step_db, total_db)
+            trial_cur = from_current * (10.0 ** (trial_db / 20.0))
+            prob, _basis, _omega = self._build_problem(freq_ghz, trial_cur)
+            solve_prob = self._make_solve_problem(prob, freq_ghz)
+            X, report = solver.solve_one(solve_prob, guess, 1.0)
+            info["substeps"] += 1
+            if report.converged:
+                guess, cur, done_db = X, trial_cur, trial_db
+                info["last_current"] = cur
+                step_db = min(init_db, step_db * 1.5)
+            else:
+                step_db *= 0.5
+                info["min_step_db"] = min(info["min_step_db"], step_db)
+                if step_db < min_db:
+                    info["terminal_reason"] = "step_floor"
+                    break
+        if done_db >= total_db - 1e-9:
+            info["reached_target"] = True
+            info["terminal_reason"] = "reached"
+            return guess, info
+        return None, info
 
     def trace_column_arclength(
         self,
@@ -1090,6 +1172,26 @@ def past_fold_skip_row(point: GridPoint) -> dict[str, Any]:
     return row
 
 
+def continuation_failure_is_fold_evidence(row: dict[str, Any]) -> bool:
+    """Recognize a failed seed that explored continuation far enough to count.
+
+    A first-step Newton failure is ambiguous and may just be a poor seed. Once
+    adaptive continuation has attempted multiple lambda values but still did
+    not reach full drive, repeated fail-fast failures are stronger local
+    evidence that the column crossed the accessible harmonic-balance branch.
+    """
+    if row.get("status") == "PASS":
+        return False
+    method = row.get("pump_continuation_method")
+    steps = row.get("pump_continuation_steps")
+    return (
+        method in {"adaptive_secant", "adaptive_copy", "adaptive_tangent", "affine"}
+        and row.get("pump_continuation_reached_target") is False
+        and isinstance(steps, (int, float))
+        and int(steps) >= 2
+    )
+
+
 def run_warm_pass_inprocess(
     points: list[GridPoint], pass_dir: Path, engine: InProcessEngine,
     *, fail_fast: bool = False,
@@ -1244,8 +1346,45 @@ def run_warm_pass_inprocess(
             if row["status"] != "PASS" and mode == "warm" and not fail_fast:
                 row, X = engine.solve_point(point, pass_dir, mode="seed", warm_X=None)
                 retried = row["status"] == "PASS"
+
+            # Adaptive power-substep recovery: the coarse power step can miss a
+            # gain-lobe crest that a finer natural continuation crosses (see
+            # diagnostics/2c_measurement_comparison). Walk from the last
+            # converged state up to this target in adaptive dBm micro-steps; a
+            # step-independent stall (min_db floor) is a real numerical/fold
+            # boundary and leaves the cell FAILED so the fold short-circuit can
+            # act on it.
+            if (
+                row["status"] != "PASS"
+                and getattr(engine.args, "column_power_substep", False)
+                and not fail_fast
+                and last_good_X is not None
+                and last_good_cur is not None
+                and cur > last_good_cur
+            ):
+                X_sub, sub_info = engine.solve_power_substep(
+                    point.pump_freq_ghz, last_good_X, last_good_cur, cur,
+                    init_db=engine.args.column_power_substep_init_db,
+                    min_db=engine.args.column_power_substep_min_db,
+                    deadline_s=engine.args.column_power_substep_deadline_s,
+                )
+                row["pump_power_substep_substeps"] = sub_info["substeps"]
+                row["pump_power_substep_terminal_reason"] = sub_info["terminal_reason"]
+                if X_sub is not None:
+                    sub_row, sub_X = engine.solve_point(
+                        point, pass_dir, mode="warm", warm_X=X_sub)
+                    if sub_row["status"] == "PASS":
+                        row, X = sub_row, sub_X
+                        pred_tag = f"{pred_tag}->substep"
+                elif sub_info["terminal_reason"] == "step_floor":
+                    # Step-independent stall -> treat as fold evidence so the
+                    # per-column short-circuit can stop retrying above it.
+                    row["pump_power_substep_stall_dbm"] = point.power_dbm
+                    verified_fold = True
+
             row["warm_retry_reseed"] = retried
             row["pump_predictor"] = pred_tag
+            verified_fold = verified_fold or continuation_failure_is_fold_evidence(row)
             rows.append(row)
             done += 1
             print(f"[warm {done}/{total}] P={point.power_dbm:.4g} dBm "
@@ -1999,7 +2138,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=float,
         default=0.0,
         help="Total wall-time budget for adaptive/affine continuation, excluding "
-        "the final target solve. 0 disables.",
+        "the final target solve. 0 inherits --inproc-solve-deadline-s.",
     )
     p.add_argument("--inproc-fail-fast", action="store_true",
                    help="In-process warm pass: skip reseed/fallback recovery on a failed "
@@ -2044,6 +2183,37 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Total wall-time budget for each column pseudo-arclength trace. "
         "Separate from the per-target Newton deadline; 0 disables the trace "
         "deadline.",
+    )
+    p.add_argument(
+        "--column-power-substep",
+        action="store_true",
+        help="On a failed warm cell, recover by adaptive natural-parameter "
+        "continuation along the power axis from the last converged state: "
+        "walk up in adaptive dBm micro-steps, warm-starting each. Crosses "
+        "gain-lobe crests the coarse power grid misses; a step-independent "
+        "stall (min-db floor) is recorded as a numerical/fold boundary "
+        "rather than retried. See diagnostics/2c_measurement_comparison.",
+    )
+    p.add_argument(
+        "--column-power-substep-init-db",
+        type=float,
+        default=0.1,
+        help="Initial (and maximum) dBm micro-step for --column-power-substep; "
+        "grows x1.5 on success, halves on failure.",
+    )
+    p.add_argument(
+        "--column-power-substep-min-db",
+        type=float,
+        default=0.005,
+        help="Minimum dBm micro-step for --column-power-substep. Below this the "
+        "branch is declared to have a step-independent stall (fold/numerical "
+        "boundary) and the cell is left failed.",
+    )
+    p.add_argument(
+        "--column-power-substep-deadline-s",
+        type=float,
+        default=120.0,
+        help="Per-target wall-time budget for the --column-power-substep walk.",
     )
     p.add_argument("--inproc-preconditioner",
                    choices=["mean_tangent", "real_coupled", "real_coupled_fast",

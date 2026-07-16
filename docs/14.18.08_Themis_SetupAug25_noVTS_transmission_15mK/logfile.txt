@@ -1,0 +1,12 @@
+TWPA_V1_W1  105C5
+
+VNA Parameters:
+CenterFrequency: 8.0 GHz and Span: 8000.0 MHz
+SignalPower: -30 dBm
+
+Setup Parameters:
+PumpFrequency: 5.979849004 GHz
+PumpPower: -29.08 dBm
+Calibration: cali on unpumped device
+
+Starting time: 14.18.08
