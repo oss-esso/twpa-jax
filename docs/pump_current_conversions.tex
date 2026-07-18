@@ -1,0 +1,114 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{amsmath,amssymb,booktabs}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage{hyperref}
+
+\title{Pump-Current Conversions in the \texttt{twpa\_jax} Maps}
+\author{Thesis working note}
+\date{18 July 2026}
+
+\begin{document}
+\maketitle
+
+\section{Purpose}
+
+The gain-map programs convert an external pump-power coordinate into an
+on-chip current before solving the nonlinear IPM circuit.  Two different
+conventions have been used historically through the option
+\texttt{--pump-current-jc-scale}.  They must not be confused with the ordinary
+RMS-to-peak or Fourier-coefficient conversions.
+
+\section{Power to physical peak current}
+
+For an external pump power $P_{\mathrm{dBm}}$, after subtracting the line
+attenuation $A_{\mathrm{dB}}$, the on-chip power is
+\begin{equation}
+  P_{\mathrm{W}}
+  =10^{-3}10^{(P_{\mathrm{dBm}}-A_{\mathrm{dB}})/10}.
+\end{equation}
+The map code then computes
+\begin{equation}
+  I_{\mathrm{peak}}
+  =\sqrt{\frac{2P_{\mathrm{W}}}{Z_0}}.
+  \label{eq:peak-current}
+\end{equation}
+Thus the current stored in each map point is already a peak current.  In
+particular, multiplying it by $\sqrt{2}$ again would be incorrect.
+
+\section{Fourier and phasor bookkeeping}
+
+For a real single-tone current, the conventions are
+\begin{align}
+  i(t) &= I_{\mathrm{peak}}\cos(\omega t+\phi),\\
+       &= 2\operatorname{Re}\!\left[I_+e^{i\omega t}\right],\\
+  I_+ &= \frac{I_{\mathrm{peak}}e^{i\phi}}{2}.
+\end{align}
+Equivalently, with an RMS RF phasor $I_{\mathrm{rms}}$,
+\begin{equation}
+  i(t)=\sqrt{2}\operatorname{Re}\!\left[I_{\mathrm{rms}}e^{i\omega t}\right],
+  \qquad I_{\mathrm{rms}}=\frac{I_{\mathrm{peak}}}{\sqrt{2}},
+  \qquad I_+=\frac{I_{\mathrm{rms}}}{\sqrt{2}}.
+\end{equation}
+The positive-phasor pump basis reconstructs the real waveform as
+$2\operatorname{Re}\sum_k X_k e^{ik\omega_pt}$.  This factor of two belongs
+to the reconstruction of a positive-frequency coefficient; it is not an
+instruction to multiply the already-computed map current by two.
+
+\section{The two map conversions}
+
+Both paths use Eq.~\eqref{eq:peak-current}.  They differ only in the extra
+source multiplier applied before the pump solve:
+\begin{equation}
+  I_{\mathrm{solve}}=s_{\mathrm{JC}}I_{\mathrm{peak}},
+  \qquad s_{\mathrm{JC}}=\texttt{pump-current-jc-scale}.
+\end{equation}
+
+\begin{table}[h]
+\centering
+\begin{tabular}{@{}llll@{}}
+\toprule
+Setting & Source current & Meaning & Use \\
+\midrule
+$s_{\mathrm{JC}}=2.0$
+  & $2I_{\mathrm{peak}}$
+  & Historical JC-parity calibration
+  & Legacy comparisons only \\
+$s_{\mathrm{JC}}=1.0$
+  & $I_{\mathrm{peak}}$
+  & Current validated Python/IPM conversion
+  & Current map regeneration \\
+\bottomrule
+\end{tabular}
+\caption{The two source-current conventions.}
+\end{table}
+
+The factor-two path doubles the current amplitude.  If interpreted as a
+matched-port power, that corresponds to a factor of four in power, or
+$10\log_{10}(4)\simeq6.02$ dB.  It therefore moves the nonlinear operating
+point substantially and can make a gain ridge appear at an apparently
+unreachable external power.
+
+The factor-one path does not add this historical JC multiplier.  As of
+18~July~2026 it is the validated conversion for regenerating the Python/IPM
+reference maps, and should be selected explicitly with
+\begin{verbatim}
+--pump-current-jc-scale 1.0
+\end{verbatim}
+The command-line default remains $2.0$ for backwards compatibility; relying
+on the default is consequently unsafe for new map regeneration.
+
+\section{Practical rule}
+
+Use the following checklist:
+\begin{enumerate}
+  \item Convert dBm to $I_{\mathrm{peak}}$ using Eq.~\eqref{eq:peak-current}.
+  \item Do not apply an additional RMS/peak factor.
+  \item Use \texttt{--pump-current-jc-scale 1.0} for current Python/IPM maps.
+  \item Use \texttt{2.0} only when deliberately reproducing a historical
+        JC-parity run.
+\end{enumerate}
+
+\end{document}

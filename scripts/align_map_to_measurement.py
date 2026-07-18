@@ -282,6 +282,37 @@ def align_maps(
     }
 
 
+def crop_for_plot(
+    meas: dict[str, np.ndarray],
+    fit: dict[str, Any],
+    freq_range: tuple[float, float] | None,
+    power_range: tuple[float, float] | None,
+) -> tuple[dict[str, np.ndarray], dict[str, Any]]:
+    """Restrict measurement + fit arrays to the simulated (freq, power) window.
+
+    The numeric fit already only SCORES cells inside ``fit_freq_range`` /
+    ``fit_power_range`` (via the zero-weight mask in ``_score_shift``), but it
+    still returns full-grid arrays -- plotting those directly shows the whole
+    measurement comb, not just the window actually simulated, which reads as
+    "comparing against the whole map" even though the fit itself did not.
+    """
+    if freq_range is None and power_range is None:
+        return meas, fit
+    f = meas["pump_freq_ghz"]
+    p = meas["pump_power_dbm"]
+    fmask = (f >= freq_range[0]) & (f <= freq_range[1]) if freq_range else np.ones_like(f, dtype=bool)
+    pmask = (p >= power_range[0]) & (p <= power_range[1]) if power_range else np.ones_like(p, dtype=bool)
+    meas_c = {
+        "pump_freq_ghz": f[fmask],
+        "pump_power_dbm": p[pmask],
+        "peak_gain_db": meas["peak_gain_db"][np.ix_(fmask, pmask)],
+    }
+    fit_c = dict(fit)
+    fit_c["aligned_sim_db"] = fit["aligned_sim_db"][np.ix_(fmask, pmask)]
+    fit_c["residual_db"] = fit["residual_db"][np.ix_(fmask, pmask)]
+    return meas_c, fit_c
+
+
 def plot_measurement_map(meas: dict[str, np.ndarray], out_png: Path) -> None:
     try:
         import matplotlib
@@ -438,10 +469,16 @@ def main(argv: list[str] | None = None) -> int:
     print(json.dumps(summary, indent=2))
     print(f"wrote {args.out}", flush=True)
 
-    if args.measurement_plot is not None:
-        plot_measurement_map(meas, args.measurement_plot)
-    if args.comparison_plot is not None:
-        plot_comparison(meas, fit, args.comparison_plot)
+    if args.measurement_plot is not None or args.comparison_plot is not None:
+        meas_plot, fit_plot = crop_for_plot(
+            meas, fit,
+            tuple(args.fit_freq_ghz) if args.fit_freq_ghz else None,
+            tuple(args.fit_power_dbm) if args.fit_power_dbm else None,
+        )
+        if args.measurement_plot is not None:
+            plot_measurement_map(meas_plot, args.measurement_plot)
+        if args.comparison_plot is not None:
+            plot_comparison(meas_plot, fit_plot, args.comparison_plot)
     return 0
 
 

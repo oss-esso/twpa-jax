@@ -14,6 +14,100 @@ treat that language there as provisional, not settled.
 
 ---
 
+## 2026-07-17 — Multistability investigation (Track A, `docs/multistability_and_cli_trim_plan.md`)
+
+**Goal:** determine whether the map's cold-reseed path (a warm attempt fails
+-> retry `mode="seed"`, `warm_X=None`, X=0 Newton ladder, `run_gain_map.py:1622`,
+flagged `warm_retry_reseed=True`) can land on a genuinely different converged
+fixed point than the branch a continuously-pumped device sits on -- i.e.
+confirm or kill the multistability theory for the ~6.5 dB Themis peak-gain
+undershoot (`themis-2c-reproduction-boundary-vs-fidelity` memory).
+
+### A1 -- discontinuity scanner (`scripts/debug_branch_discontinuity_scan.py`)
+
+Read-only scan of `map_points.csv`: flags cells where `warm_retry_reseed=True`
+and the local `gain_db` second-difference exceeds N-sigma of the column's
+smooth trend. Deviation from plan: the intended sanity-check dir
+(`outputs/measurement_match_debug_01/column_debug_col3_trim`, the known col3
+fp=7.329 GHz wall) turned out to have **zero** `warm_retry_reseed=True` rows --
+that debug run used bare `column` traversal with no `--recovery reseed`
+enabled, so nothing to detect there. Validated instead against
+`outputs/campaign_continuation_methods/c04_baseline_prod` (real
+recovery-enabled 50x50 campaign map): its one ground-truth reseed cell
+(fp=7.704 GHz, i_power=27) was correctly flagged (second-diff -6.28 dB vs
+column sigma 1.46 dB, threshold 4.39 dB at 3-sigma).
+
+### A2 -- alternate-seed probe (`scripts/debug_alternate_seed_probe.py`)
+
+**Reproducibility dead end on the archived cell.** Tried to directly probe
+the A1-flagged cell (`c04_baseline_prod`, fp=7.70408163265 GHz, i_power=27,
+P=-28.39 dBm, recorded PASS/gain_db=23.62). Replaying the deterministic
+cold-reseed path with reconstructed solver settings (same `mode="seed"`,
+`warm_X=None`) against **current** solver code gave `FAIL`/gain_db=19.77 --
+3 repeated trials,
+bit-identical every time (rules out threading nondeterminism). Regenerating
+that exact column fresh under current code confirmed it: the cell just fails
+now, no reseed success at all. The archived campaign map is not reproducible
+under the current checkout and inputs; this is consistent with solver/input
+drift since generation, but the archived output does not contain enough
+provenance to attribute the mismatch to solver code alone. It is therefore
+not a live discontinuity to probe. The reproducibility caveat is important:
+**archived maps are not safe to treat as current-code ground truth** for this
+kind of forensic replay.
+
+**Live search.** A fresh full 50x50 map regenerated under current code
+(`outputs/a2_fresh_map_50x50_full`, same flags as `c04_baseline_prod`) found
+3 live `warm_retry_reseed=True` cells (reseed events are rare either way --
+1/2500 in the archived map, 3/2500 here). Probed all 3: for each, loaded both
+power-adjacent neighbors' **real converged X** off disk (not a fresh
+independent cold solve of the neighbor -- tried that first and it does not
+reproduce the neighbor's own production branch either, since a truly isolated
+cold solve at a mid-column power has no warm history from the column's -35
+dBm start and can land somewhere else entirely), restricted to the Schur
+retained-port shape (`twpa_solver.pump.backends.schur_partition.restrict`,
+inverse of `SchurReducedProblem.reconstruct_full`), and warm-started the
+target directly at lambda=1 (`solver.solve_direct`, no ladder) from each.
+
+| cell (fp GHz, i_power) | cold gain_db | warm_lo | warm_hi | x_norm_diff (lo / hi) |
+|---|---|---|---|---|
+| 8.2347, 27 | 17.097 (PASS) | FAIL, 16.71 | FAIL, 17.28 | 0.029 / 0.094 |
+| 7.8265, 37 | 25.727 (PASS) | FAIL, 13.34 | **PASS, 25.727** | 0.446 / 6.8e-10 |
+| 7.6224, 40 | 23.552 (PASS) | FAIL, 23.552 | **PASS, 23.552** | 1.8e-5 / 1.2e-9 |
+
+**Finding: no confirmed multistability.** Two of the three cells have both a
+cold result and a warm result that converge; those pairs land on the target's
+exact same branch (`x_norm_diff` ~1e-9, gain agreement ~1e-7 dB). The third
+cell has a converged cold result but both direct warm attempts fail, so it does
+not provide an independent converged comparison. The converged cold results
+also match the map's recorded solutions (`x_norm_diff_vs_prod` ~2e-8,
+essentially reproduction noise). Where a warm attempt fails, it fails
+**outright** (coeff_rel 1e-4 to 1e-2) rather than settling on a second,
+distinct, stable fixed point. Cell 2's `warm_lo` is the most dramatic gap
+(44.6% relative X-norm difference, -12.4 dB), but it is a stalled
+non-convergent iterate, not evidence of an alternate branch. Per the
+terminology rule: this is a **convergence-failure** asymmetry in how easily a
+single-step direct Newton warm-start reaches the branch from different
+starting points. The cold-reseed multistability explanation for the Themis
+undershoot is **not supported in these tested cases**; this is not a proof
+that no other branch exists elsewhere in parameter space.
+
+### A3 -- skipped
+
+No distinct alternate branch was found to cross-check against the Themis
+measurement (A3 is conditional on A2 confirming multistability). Not run.
+
+### Net effect
+
+In these probes, cold reseed succeeds by taking a more gradual (0->1 lambda)
+numerical path through the same nonlinearity that a single-shot warm-start
+sometimes cannot; it did not produce a second converged physical solution.
+This argues against pursuing "prefer warm-neighbor X over X=0 as the reseed
+seed" as a fix (Phase A4's conditional proposal item is therefore **not**
+written up, since A2 did not confirm the premise it would fix). The ~6.5 dB
+Themis gap needs a different explanation than reseed branch selection.
+
+---
+
 ## 2026-07-16 — Session start: control-flow investigation setup
 
 Starting point: a detailed control-flow diagram of the pump solve was supplied
@@ -350,3 +444,30 @@ undecided as of this entry:
   cold's own lambda=0.9375 converged step) against the stalled lambda=1
   attempt, to see whether the spatial trend is already present pre-stall or
   only appears at the wall.
+
+### Track-A discriminator runs (2026-07-17)
+
+The first discriminator column was run at Themis `fp=7.31122 GHz` with no
+fold-patience skipping, 60 Newton iterations, a 60 s per-point deadline, and
+an eight-point refined power grid from -29.08 to -26.50 dBm.  The boundary
+was between -27.606 and -27.237 dBm (five PASS, three ERROR), for a peak
+current of about `4.83e-6 A`.  This is far below the archived map's last PASS
+at -22.043 dBm / `9.166e-6 A`, confirming that the archived campaign is not
+reproducible with the current solver code.
+
+Basis refinement at the same points gave the same boundary for 5 modes / 20,
+10 modes / 40, and 15 modes / 60 time samples: five PASS and three ERROR,
+with the last PASS at -27.606 dBm (`4.831e-6 A`).  The gain value changes
+when the signal sideband setting changes, but the pump boundary does not;
+there is no evidence that the truncated pump basis is causing the early
+failure.
+
+Independent JosephsonCircuits.jl continuation was run at the three
+representative columns.  At 6.1817 and 7.71462 GHz the continuation reached
+the archived-map endpoint currents without a nonconvergence marker.  At
+7.31122 GHz it reached 8.078e-6 A cleanly, while the endpoint 9.166e-6 A
+returned after the 60-iteration cap with residuals `rel=2.76e-6` and
+`inf=1.02e-3`.  Thus JC does not independently confirm a fold at the
+current-code boundary; the only hard endpoint failure is near the archived
+boundary, and the Python boundary remains strongly code/formulation
+dependent.

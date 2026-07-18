@@ -1,0 +1,12 @@
+{
+  "target_power_dbm": -25.0,
+  "measurement_selected_power_dbm": -25.058666666666667,
+  "signal_band_ghz": [
+    4.0,
+    12.0
+  ],
+  "frequency_shift_ghz": 0.99,
+  "map_dirs": [
+    "outputs\\exp10_pump_map_trailing_50x50_m30_m20_123p9_cg66_halfcurrent_run_gain_map"
+  ]
+}

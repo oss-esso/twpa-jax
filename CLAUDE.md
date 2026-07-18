@@ -24,6 +24,18 @@ re-fits the CSV. C = fixed coupling loss, A*sqrt(f) = skin effect, B*f = dielect
 pure `A*sqrt(f)+B*f` fits terribly (RMS 4.6 dB, B<0). Sanity: model at 8 GHz ≈
 35.4 dB, matching the old band-calibrated flat 35 dB.
 
+## Pump-current conversion (validated 2026-07-18)
+
+The map power conversion in `exp10_full_ipm_pump_map_warmstart.py` and
+`scripts/run_gain_map.py` already computes the on-chip **peak** current,
+`I_peak = sqrt(2 P_W / Z0)`. The currently validated Python/IPM conversion is
+therefore **`--pump-current-jc-scale 1.0`**: do not apply an additional factor of
+two for current map regeneration. The factor `2.0` is the historical JC-parity
+conversion and remains the parser default for backwards compatibility, so current
+runs must pass `--pump-current-jc-scale 1.0` explicitly. See
+`docs/pump_current_conversions.tex` for the distinction between the two source
+conventions and their physical meaning.
+
 `--attenuation-db` defaults to `None` (= use the model); pass a float to force a
 flat value. Only `run_gain_map.py` is wired to the model; the `experiments/exp10_*`
 scripts still use their local flat `dbm_to_peak_current_a`. Tests:

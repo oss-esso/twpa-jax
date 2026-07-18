@@ -1219,6 +1219,18 @@ def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(conflict_handler="resolve")
     p.add_argument("--outdir", default=os.path.join("outputs", "ipm_python_design"))
     p.add_argument("--coupler-mode", choices=["cached", "optimize"], default="cached")
+    p.add_argument(
+        "--lj-ph",
+        type=float,
+        default=123.9,
+        help="Josephson inductance in pH (default: 123.9).",
+    )
+    p.add_argument(
+        "--cg-ff",
+        type=float,
+        default=66.0,
+        help="Ground capacitance in fF (default: 66).",
+    )
     p.add_argument("--write-matrices", action="store_true")
     p.add_argument("--draw", action="store_true")
     p.add_argument("--lj-scatter-sigma", type=float, default=0.0)
@@ -1231,7 +1243,7 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
 
-    params = IPMParams()
+    params = IPMParams(Lj=args.lj_ph * 1.0e-12, Cg=args.cg_ff * 1.0e-15)
     coupler = make_coupler_discrete(params, args.coupler_mode)
     circuit, ends = make_ipm(params, coupler)
     scatter_meta = apply_lj_scatter(

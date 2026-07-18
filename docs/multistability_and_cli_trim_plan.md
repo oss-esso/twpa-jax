@@ -86,6 +86,20 @@ reseed and gain_db/coeff_rel jumps discontinuously vs the smooth local trend.
 - Manual: the known col3 fp=7.329 GHz wall region gets flagged (sanity check
   the detector fires where we already know reseeding happened).
 
+**Status: DONE** (`scripts/debug_branch_discontinuity_scan.py`). Deviation
+found during implementation: `outputs/measurement_match_debug_01/column_debug_col3_trim`
+(the known col3 fp=7.329 GHz wall) has `warm_retry_reseed=False` on every row
+-- that debug run used a bare `column` pass with no `--recovery reseed`
+enabled, so it never actually cold-reseeded; the wall there is a plain
+FAIL->SKIP_PAST_FOLD with no reseed to test against. The sanity check instead
+validated against `campaign_continuation_methods/c04_baseline_prod` (real
+recovery-enabled 50x50 run): its **only** `warm_retry_reseed=True` cell
+(fp=7.704 GHz, i_power=27, P=-28.39 dBm) was correctly flagged -- second-diff
+-6.28 dB vs column sigma 1.46 dB (>3sigma threshold 4.39 dB). Detector fires
+on the one ground-truth reseed instance available; too small an n to say more
+than "the detector works as specified." Phase A2 (direct seed-vs-warm probe)
+is the real multistability test.
+
 ## Phase A2: Targeted alternate-seed probe
 
 **Overview**: At a flagged (or already-known) wall point, empirically test
@@ -104,8 +118,26 @@ converged fixed points at the same (P,f) = confirmed multistability.
 
 **Success criteria**:
 - Automated: both solves complete (converged or force_gain) and are logged.
-- Manual: if gains agree within noise -> single branch, cold-seed theory
-  dead. If they diverge meaningfully -> branch switch confirmed.
+- Manual: if both solves converge and gains agree within noise, no alternate
+  branch was found at that target. If two converged results diverge
+  meaningfully, branch switching is confirmed.
+
+**Status: DONE** (`scripts/debug_alternate_seed_probe.py`, now CLI-parameterized
+by freq/power/i_power/neighbor pump dirs rather than hardcoded, since the
+original target cell turned out unusable -- see below). Result: **no
+multistability confirmed in the tested cells.** Full detail in
+`docs/convergence_investigation_log.md` 2026-07-17 entry; summary:
+- The A1-flagged archived cell (`c04_baseline_prod`, fp=7.704 GHz, i27) does
+  not reproduce under the current checkout and inputs (deterministic repro
+  gives FAIL, archived record says PASS). The available provenance cannot
+  attribute that mismatch to solver code alone; it is not a live
+  discontinuity. Regenerating that column fresh gives zero reseed events.
+- Regenerated a full fresh 50x50 map under current code, found 3 live reseed
+  events, and probed all 3 (cold vs. both real-neighbor-X direct warm starts,
+  restricted to Schur retained-port shape). Two cells have a converged warm
+  result matching cold to x_norm_diff ~1e-9; the third has no converged warm
+  result. The failing attempts fail outright and never settle on a distinct
+  second branch.
 
 ## Phase A3: Cross-check against measurement
 
@@ -118,6 +150,10 @@ picking the "other" branch closes some of the 6.5 dB peak-gain gap.
 - Manual: read RMS/peak-gain-diff before/after branch choice; report the
   delta honestly either way.
 
+**Status: SKIPPED.** A2 did not confirm multistability (no distinct
+alternate branch found), so there is nothing to cross-check against
+measurement.
+
 ## Phase A4: Write up
 
 **Overview**: Append dated section to `docs/convergence_investigation_log.md`:
@@ -128,6 +164,12 @@ reseed seed) as a *proposal*, not implemented in this pass.
 **Success criteria**:
 - Manual: log entry has file paths + concrete numbers, follows "convergence
   failure not fold" terminology rule.
+
+**Status: DONE.** `docs/convergence_investigation_log.md` 2026-07-17 entry.
+No fix proposal written (A2 did not confirm the premise a fix would address).
+**Track A conclusion: multistability via cold reseed is not supported by the
+evidence; the ~6.5 dB Themis peak-gain undershoot needs a different
+explanation.**
 
 ---
 
@@ -214,3 +256,12 @@ so zero behavior change there.
 
 A1 -> A2 -> A3 -> A4 first (open physics question). B1-B3 after (mechanical,
 low-risk, independent).
+
+## Discriminator execution status (2026-07-17)
+
+The post-A discriminator was executed at the representative Themis columns.
+The Python no-skip/high-budget run and 5/10/15-mode basis ladder all place the
+7.31122-GHz boundary between -27.606 and -27.237 dBm.  JosephsonCircuits.jl
+continuation runs were completed at 6.1817, 7.31122, and 7.71462 GHz.  Their
+artefacts are under `D:/Projects/Thesis/track_a_discriminator_20260717` and
+the detailed interpretation is recorded in `docs/convergence_investigation_log.md`.
