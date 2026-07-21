@@ -1,0 +1,128 @@
+{
+  "status": "PYTHON_IPM_BUILD_OK",
+  "total_elements": 45232,
+  "non_ground_nodes": 17453,
+  "min_node": 1,
+  "max_node": 17453,
+  "counts": {
+    "port": 4,
+    "resistor": 4,
+    "capacitor": 21429,
+    "linear_inductor": 15556,
+    "coupling_capacitor": 2660,
+    "mutual_inductor_k": 2653,
+    "josephson_inductor": 2926
+  },
+  "params": {
+    "start_node_top": 1,
+    "start_node_bot": 10000,
+    "ground": 0,
+    "array_length": 418,
+    "num_rows": 7,
+    "arrays_per_dc": 1,
+    "coupling_dB": -14.0,
+    "Z0": 50.0,
+    "coupler_freq_hz": 8000000000.0,
+    "length_of_long_TL": 900,
+    "length_of_short_TL": 90,
+    "coupler_section_length": 800,
+    "len1": 0,
+    "len2": 50,
+    "len3": 0,
+    "len4": 0,
+    "Lj": 7.9e-11,
+    "Cj": 1.4500000000000001e-13,
+    "Cg": 3.3000000000000005e-14,
+    "Cl_per_um": 1.6950000000000002e-16,
+    "Ll_per_um": 4.2399999999999996e-13,
+    "Rleft": 50.0,
+    "Rright": 50.0,
+    "Rm": 50.0,
+    "cell_length_um": 10.0,
+    "cached_coupler_width_um": 41.12583438003677,
+    "cached_coupler_gap_um": 46.16761265015487,
+    "cached_coupler_gap_to_ground_um": 10.935243038629784,
+    "cached_coupler_length_um": 3787.65667557678
+  },
+  "coupler": {
+    "L_cell": 4.231176594367187e-12,
+    "Cc_cell": 2.933241378522524e-16,
+    "C_gnd_cell": 1.3821191194783695e-15,
+    "K_ind": 0.22373388904618993,
+    "N_coupled": 379,
+    "N_uncoupled": 30,
+    "geometry": {
+      "width_um": 41.12583438003677,
+      "gap_between_lines_um": 46.16761265015487,
+      "gap_to_ground_um": 10.935243038629784,
+      "length_um": 3787.65667557678,
+      "k_db": -13.999999903666628,
+      "z_input_ohm": 50.00000048092842
+    }
+  },
+  "ends": {
+    "top_end_node": 11030,
+    "bottom_end_node": 17453,
+    "jj_mod_used": 2926
+  },
+  "interpretation": {
+    "port1": "top signal input",
+    "port2": "top signal output",
+    "port3": "bottom pump rail left/reference side",
+    "port4": "bottom pump source side; counter-propagating relative to signal 1->2"
+  },
+  "lj_scatter_enabled": false,
+  "lj_scatter_sigma": 0.0,
+  "lj_scatter_seed": 1,
+  "lj_scatter_count": 2926,
+  "lj_scatter_clip_min": 0.5,
+  "lj_scatter_clip_max": 1.5,
+  "matrices": {
+    "C_shape": [
+      17453,
+      17453
+    ],
+    "C_nnz": 28625,
+    "G_shape": [
+      17453,
+      17453
+    ],
+    "G_nnz": 4,
+    "K_shape": [
+      17453,
+      17453
+    ],
+    "K_nnz": 60771,
+    "Bphi_shape": [
+      17453,
+      2926
+    ],
+    "Bphi_nnz": 5852,
+    "Ic_min": 4.165898460783987e-06,
+    "Ic_max": 4.165898460783987e-06,
+    "ports": {
+      "1": [
+        1,
+        0
+      ],
+      "3": [
+        10000,
+        0
+      ],
+      "2": [
+        11030,
+        0
+      ],
+      "4": [
+        17453,
+        0
+      ]
+    },
+    "port_vectors": {
+      "1": 0,
+      "3": 9999,
+      "2": 11029,
+      "4": 17452
+    }
+  }
+}

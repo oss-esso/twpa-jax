@@ -119,19 +119,22 @@ class IPMParams:
     Z0: float = 50.0
     coupler_freq_hz: float = 8.0e9
 
-    length_of_long_TL: int = 250
-    length_of_short_TL: int = 30
-    coupler_section_length: int = 1500
-    len1: int = 100
+    length_of_long_TL: int = 900
+    length_of_short_TL: int = 90
+    coupler_section_length: int = 800
+    len1: int = 0
     len2: int = 50
-    len3: int = 100
-    len4: int = 300
+    len3: int = 0
+    len4: int = 0
 
     Lj: float = 123.9e-12
     Cj: float = 145.0e-15
     Cg: float = 66.0e-15
-    Cl: float = 10 * 1.73e-15
-    Ll: float = 10 * 4.13e-12
+    # Ordinary transmission-line values per micron.  The effective values
+    # used by each discrete cell are exposed through the Cl and Ll properties
+    # below, so they always follow cell_length_um.
+    Cl_per_um: float = 0.1695e-15
+    Ll_per_um: float = 0.424e-12
 
     Rleft: float = 50.0
     Rright: float = 50.0
@@ -145,6 +148,16 @@ class IPMParams:
     cached_coupler_gap_um: float = 44.762
     cached_coupler_gap_to_ground_um: float = 10.5973385055
     cached_coupler_length_um: float = 3787.7
+
+    @property
+    def Cl(self) -> float:
+        """Ground capacitance of one ordinary TL cell, in farads."""
+        return self.Cl_per_um * self.cell_length_um
+
+    @property
+    def Ll(self) -> float:
+        """Series inductance of one ordinary TL cell, in henries."""
+        return self.Ll_per_um * self.cell_length_um
 
 
 # =============================================================================
@@ -1121,12 +1134,54 @@ def draw_schematics(outdir: str) -> None:
 # CLI
 # =============================================================================
 
+def _add_optional_argument(parser: argparse.ArgumentParser, name: str, **kwargs: Any) -> None:
+    parser.add_argument(name, default=None, **kwargs)
+
+
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(conflict_handler="resolve")
     p.add_argument("--outdir", default=os.path.join("outputs", "ipm_python_design"))
     p.add_argument("--coupler-mode", choices=["cached", "optimize"], default="cached")
     p.add_argument("--write-matrices", action="store_true")
     p.add_argument("--draw", action="store_true")
+
+    # Topology and discretization overrides.  Lengths are numbers of discrete
+    # cells, except where the option name explicitly carries a physical unit.
+    _add_optional_argument(p, "--start-node-top", type=int)
+    _add_optional_argument(p, "--start-node-bot", type=int)
+    _add_optional_argument(p, "--ground", type=int)
+    _add_optional_argument(p, "--array-length", type=int)
+    _add_optional_argument(p, "--num-rows", type=int)
+    _add_optional_argument(p, "--arrays-per-dc", type=int)
+    _add_optional_argument(p, "--length-of-long-tl", type=int)
+    _add_optional_argument(p, "--length-of-short-tl", type=int)
+    _add_optional_argument(p, "--coupler-section-length", type=int)
+    _add_optional_argument(p, "--len1", type=int)
+    _add_optional_argument(p, "--len2", type=int)
+    _add_optional_argument(p, "--len3", type=int)
+    _add_optional_argument(p, "--len4", type=int)
+
+    # Electrical parameters use convenient engineering units in the CLI.
+    _add_optional_argument(p, "--coupling-db", type=float)
+    _add_optional_argument(p, "--z0-ohm", type=float)
+    _add_optional_argument(p, "--coupler-freq-ghz", type=float)
+    _add_optional_argument(p, "--lj-ph", type=float)
+    _add_optional_argument(p, "--cj-ff", type=float)
+    _add_optional_argument(p, "--cg-ff", type=float)
+    _add_optional_argument(p, "--cl-per-um-ff", type=float)
+    _add_optional_argument(p, "--ll-per-um-ph", type=float)
+    _add_optional_argument(p, "--rleft-ohm", type=float)
+    _add_optional_argument(p, "--rright-ohm", type=float)
+    _add_optional_argument(p, "--rm-ohm", type=float)
+    _add_optional_argument(p, "--cell-length-um", type=float)
+
+    # Cached coupler geometry overrides.  These are ignored when
+    # --coupler-mode optimize is selected.
+    _add_optional_argument(p, "--cached-coupler-width-um", type=float)
+    _add_optional_argument(p, "--cached-coupler-gap-um", type=float)
+    _add_optional_argument(p, "--cached-coupler-gap-to-ground-um", type=float)
+    _add_optional_argument(p, "--cached-coupler-length-um", type=float)
+
     p.add_argument("--lj-scatter-sigma", type=float, default=0.0)
     p.add_argument("--lj-scatter-seed", type=int, default=1)
     p.add_argument("--lj-scatter-clip-min", type=float, default=0.5)
@@ -1134,10 +1189,58 @@ def parse_args() -> argparse.Namespace:
     return p.parse_args()
 
 
+def params_from_args(args: argparse.Namespace) -> IPMParams:
+    direct_fields = {
+        "start_node_top": "start_node_top",
+        "start_node_bot": "start_node_bot",
+        "ground": "ground",
+        "array_length": "array_length",
+        "num_rows": "num_rows",
+        "arrays_per_dc": "arrays_per_dc",
+        "length_of_long_TL": "length_of_long_tl",
+        "length_of_short_TL": "length_of_short_tl",
+        "coupler_section_length": "coupler_section_length",
+        "len1": "len1",
+        "len2": "len2",
+        "len3": "len3",
+        "len4": "len4",
+    }
+    overrides: dict[str, Any] = {}
+    for field, arg_name in direct_fields.items():
+        value = getattr(args, arg_name)
+        if value is not None:
+            overrides[field] = value
+
+    scaled_fields = {
+        "coupling_dB": ("coupling_db", 1.0),
+        "Z0": ("z0_ohm", 1.0),
+        "coupler_freq_hz": ("coupler_freq_ghz", 1e9),
+        "Lj": ("lj_ph", 1e-12),
+        "Cj": ("cj_ff", 1e-15),
+        "Cg": ("cg_ff", 1e-15),
+        "Cl_per_um": ("cl_per_um_ff", 1e-15),
+        "Ll_per_um": ("ll_per_um_ph", 1e-12),
+        "Rleft": ("rleft_ohm", 1.0),
+        "Rright": ("rright_ohm", 1.0),
+        "Rm": ("rm_ohm", 1.0),
+        "cell_length_um": ("cell_length_um", 1.0),
+        "cached_coupler_width_um": ("cached_coupler_width_um", 1.0),
+        "cached_coupler_gap_um": ("cached_coupler_gap_um", 1.0),
+        "cached_coupler_gap_to_ground_um": ("cached_coupler_gap_to_ground_um", 1.0),
+        "cached_coupler_length_um": ("cached_coupler_length_um", 1.0),
+    }
+    for field, (arg_name, scale) in scaled_fields.items():
+        value = getattr(args, arg_name)
+        if value is not None:
+            overrides[field] = value * scale
+
+    return IPMParams(**overrides)
+
+
 def main() -> None:
     args = parse_args()
 
-    params = IPMParams()
+    params = params_from_args(args)
     coupler = make_coupler_discrete(params, args.coupler_mode)
     circuit, ends = make_ipm(params, coupler)
     scatter_meta = apply_lj_scatter(
