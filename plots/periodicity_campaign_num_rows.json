@@ -1,0 +1,39 @@
+{
+  "num_rows3": {
+    "value": 3.0,
+    "n_peaks": 0,
+    "spacing_ghz": NaN,
+    "peak_freqs_ghz": [],
+    "power_dbm": -25.0,
+    "n_finite": 51
+  },
+  "num_rows6": {
+    "value": 6.0,
+    "n_peaks": 5,
+    "spacing_ghz": 0.25,
+    "peak_freqs_ghz": [
+      7.2,
+      7.38,
+      7.5600000000000005,
+      7.74,
+      7.92
+    ],
+    "power_dbm": -25.0,
+    "n_finite": 51
+  },
+  "num_rows9": {
+    "value": 9.0,
+    "n_peaks": 6,
+    "spacing_ghz": 0.184,
+    "peak_freqs_ghz": [
+      7.18,
+      7.34,
+      7.54,
+      7.68,
+      7.86,
+      7.92
+    ],
+    "power_dbm": -25.0,
+    "n_finite": 37
+  }
+}

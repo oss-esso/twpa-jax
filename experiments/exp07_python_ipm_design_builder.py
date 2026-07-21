@@ -1231,6 +1231,12 @@ def parse_args() -> argparse.Namespace:
         default=66.0,
         help="Ground capacitance in fF (default: 66).",
     )
+    p.add_argument(
+        "--cj-ff",
+        type=float,
+        default=145.0,
+        help="Josephson junction capacitance in fF (default: 145).",
+    )
     p.add_argument("--write-matrices", action="store_true")
     p.add_argument("--draw", action="store_true")
     p.add_argument("--lj-scatter-sigma", type=float, default=0.0)
@@ -1243,7 +1249,9 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
 
-    params = IPMParams(Lj=args.lj_ph * 1.0e-12, Cg=args.cg_ff * 1.0e-15)
+    params = IPMParams(
+        Lj=args.lj_ph * 1.0e-12, Cg=args.cg_ff * 1.0e-15, Cj=args.cj_ff * 1.0e-15
+    )
     coupler = make_coupler_discrete(params, args.coupler_mode)
     circuit, ends = make_ipm(params, coupler)
     scatter_meta = apply_lj_scatter(

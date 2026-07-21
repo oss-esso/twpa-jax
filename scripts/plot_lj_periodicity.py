@@ -14,7 +14,9 @@ Plot the existing measurement and map::
     python scripts/plot_lj_periodicity.py \
       --map-dir outputs/exp10_pump_map_trailing_50x50_m30_m20_123p9_cg66_halfcurrent_run_gain_map
 
-Generate one-frequency-slice maps for several Lj values and plot them::
+Generate one-frequency-slice maps for several Lj values and plot them.  The
+simulation power is adjusted to preserve approximately the same ``I/Ic`` as
+the reference ``Lj``::
 
     python scripts/plot_lj_periodicity.py --run-sweep \
       --lj-values 70 80 90 100 110 123.9 140
@@ -77,14 +79,30 @@ def load_measurement(
 
 def load_simulation(
     map_dir: Path,
-    target_power_dbm: float,
+    target_power_dbm: float | None,
 ) -> tuple[np.ndarray, np.ndarray, float]:
     arrays = np.load(map_dir / "map_arrays.npz")
     powers = np.asarray(arrays["pump_power_dbm"], dtype=float)
     frequencies = np.asarray(arrays["pump_frequency_ghz"], dtype=float)
     gains = np.asarray(arrays["gain_db_warm"], dtype=float)
-    power_index = int(np.argmin(np.abs(powers - target_power_dbm)))
+    # Lj sweeps deliberately generate one power row per map.  For a full map,
+    # select the requested reference power instead.
+    if powers.size == 1:
+        power_index = 0
+    elif target_power_dbm is not None:
+        power_index = int(np.argmin(np.abs(powers - target_power_dbm)))
+    else:
+        raise ValueError(f"{map_dir} has multiple power rows; target power is required")
     return frequencies, gains[power_index], float(powers[power_index])
+
+
+def matched_power_dbm(reference_power_dbm: float, reference_lj_ph: float, lj_ph: float) -> float:
+    """Power giving approximately the same I/Ic when Lj changes.
+
+    Ic = Phi0/Lj, while the map's peak current is proportional to 10**(P/20).
+    Therefore P(Lj) = P(ref) + 20 log10(ref_Lj/Lj).
+    """
+    return float(reference_power_dbm + 20.0 * np.log10(reference_lj_ph / lj_ph))
 
 
 def run_lj_sweep(args: argparse.Namespace) -> list[Path]:
@@ -96,6 +114,9 @@ def run_lj_sweep(args: argparse.Namespace) -> list[Path]:
 
     for lj in args.lj_values:
         tag = f"lj{lj:g}".replace(".", "p")
+        target_power_dbm = matched_power_dbm(
+            args.reference_power_dbm, args.reference_lj_ph, lj
+        )
         design_dir = design_root / f"ipm_{tag}_cg{args.cg_ff:g}".replace(".", "p")
         map_dir = map_root / f"map_{tag}_cg{args.cg_ff:g}".replace(".", "p")
         log_path = map_root / f"{tag}.log"
@@ -142,9 +163,9 @@ def run_lj_sweep(args: argparse.Namespace) -> list[Path]:
                 "--n-frequency",
                 str(args.n_frequency),
                 "--pump-power-min-dbm",
-                str(args.target_power_dbm),
+                str(target_power_dbm),
                 "--pump-power-max-dbm",
-                str(args.target_power_dbm),
+                str(target_power_dbm),
                 "--pump-freq-min-ghz",
                 str(args.pump_freq_min_ghz),
                 "--pump-freq-max-ghz",
@@ -220,7 +241,7 @@ def plot_curves(
     plt.close(fig)
 
     metadata = {
-        "target_power_dbm": target_power_dbm,
+        "measurement_target_power_dbm": target_power_dbm,
         "measurement_selected_power_dbm": meas_power,
         "signal_band_ghz": list(signal_band_ghz),
         "frequency_shift_ghz": frequency_shift_ghz,
@@ -239,6 +260,18 @@ def main() -> int:
     )
     parser.add_argument("--map-dir", type=Path, action="append", default=[])
     parser.add_argument("--target-power-dbm", type=float, default=-25.0)
+    parser.add_argument(
+        "--reference-power-dbm",
+        type=float,
+        default=-25.0,
+        help="Measurement/reference power. Lj-sweep simulation powers are shifted from this.",
+    )
+    parser.add_argument(
+        "--reference-lj-ph",
+        type=float,
+        default=123.9,
+        help="Lj corresponding to --reference-power-dbm (pH).",
+    )
     parser.add_argument("--signal-band-ghz", type=float, nargs=2, default=(4.0, 12.0))
     parser.add_argument("--frequency-shift-ghz", type=float, default=0.99)
     parser.add_argument("--output", type=Path, default=Path("plots/lj_periodicity.png"))
@@ -264,7 +297,7 @@ def main() -> int:
         args.measurement_dir,
         maps,
         args.output,
-        args.target_power_dbm,
+        args.target_power_dbm if not args.run_sweep else args.reference_power_dbm,
         tuple(args.signal_band_ghz),
         args.frequency_shift_ghz,
     )

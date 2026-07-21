@@ -1,5 +1,5 @@
 {
-  "target_power_dbm": -25.0,
+  "measurement_target_power_dbm": -25.0,
   "measurement_selected_power_dbm": -25.058666666666667,
   "signal_band_ghz": [
     4.0,

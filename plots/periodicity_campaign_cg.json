@@ -1,0 +1,97 @@
+{
+  "cg22": {
+    "value": 22.0,
+    "n_peaks": 3,
+    "spacing_ghz": 0.5,
+    "peak_freqs_ghz": [
+      7.2,
+      7.58,
+      7.76
+    ],
+    "power_dbm": -25.0,
+    "n_finite": 45
+  },
+  "cg33": {
+    "value": 33.0,
+    "n_peaks": 4,
+    "spacing_ghz": 0.3333333333333333,
+    "peak_freqs_ghz": [
+      7.1,
+      7.38,
+      7.58,
+      7.86
+    ],
+    "power_dbm": -25.0,
+    "n_finite": 47
+  },
+  "cg44": {
+    "value": 44.0,
+    "n_peaks": 4,
+    "spacing_ghz": 0.3333333333333333,
+    "peak_freqs_ghz": [
+      7.18,
+      7.38,
+      7.6,
+      7.8
+    ],
+    "power_dbm": -25.0,
+    "n_finite": 51
+  },
+  "cg55": {
+    "value": 55.0,
+    "n_peaks": 5,
+    "spacing_ghz": 0.25,
+    "peak_freqs_ghz": [
+      7.06,
+      7.26,
+      7.46,
+      7.66,
+      7.84
+    ],
+    "power_dbm": -25.0,
+    "n_finite": 51
+  },
+  "cg66": {
+    "value": 66.0,
+    "n_peaks": 5,
+    "spacing_ghz": 0.25,
+    "peak_freqs_ghz": [
+      7.2,
+      7.38,
+      7.5600000000000005,
+      7.74,
+      7.92
+    ],
+    "power_dbm": -25.0,
+    "n_finite": 51
+  },
+  "cg88": {
+    "value": 88.0,
+    "n_peaks": 6,
+    "spacing_ghz": 0.1960000000000001,
+    "peak_freqs_ghz": [
+      7.08,
+      7.14,
+      7.32,
+      7.46,
+      7.68,
+      7.86
+    ],
+    "power_dbm": -25.0,
+    "n_finite": 44
+  },
+  "cg110": {
+    "value": 110.0,
+    "n_peaks": 5,
+    "spacing_ghz": 0.2350000000000001,
+    "peak_freqs_ghz": [
+      7.02,
+      7.2,
+      7.32,
+      7.5,
+      7.8
+    ],
+    "power_dbm": -25.0,
+    "n_finite": 33
+  }
+}

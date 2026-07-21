@@ -1,0 +1,23 @@
+{
+  "measurement (14.18.08_Themis_SetupAug25_noVTS_transmission_15mK, -25.06 dBm)": {
+    "n_peaks": 4,
+    "peak_spacing_ghz": 0.3333333333333333,
+    "fft_period_ghz": 0.25062656641603454,
+    "span_ghz": 1.0,
+    "selected_power_dbm": -25.058666666666667
+  },
+  "exp10_pump_map_trailing_50x50_m30_m20_123p9_cg66_halfcurrent_run_gain_map (-25.10 dBm)": {
+    "n_peaks": 5,
+    "peak_spacing_ghz": 0.25,
+    "fft_period_ghz": 0.20050125313282763,
+    "span_ghz": 1.0,
+    "selected_power_dbm": -25.10204081632653
+  },
+  "exp10_pump_map_trailing_50x50_m30_m20_recovered79_cg33_run_gain_map (-25.10 dBm)": {
+    "n_peaks": 4,
+    "peak_spacing_ghz": 0.3333333333333333,
+    "fft_period_ghz": 0.25062656641603454,
+    "span_ghz": 1.0,
+    "selected_power_dbm": -25.10204081632653
+  }
+}

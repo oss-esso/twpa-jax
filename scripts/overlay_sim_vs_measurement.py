@@ -40,6 +40,8 @@ def main() -> int:
     p.add_argument("--signal-band-ghz", type=float, nargs=2, default=(4.0, 12.0))
     p.add_argument("--contour-levels", type=float, nargs="+", default=[3.0, 6.0, 10.0, 15.0, 20.0])
     p.add_argument("--vmax", type=float, default=None, help="Colorbar max gain (dB); default auto.")
+    p.add_argument("--freq-range-ghz", type=float, nargs=2, default=None,
+                    help="Restrict plotted x-axis to this pump-freq window (GHz); default full measurement range.")
     p.add_argument("--out", required=True, type=Path)
     args = p.parse_args()
 
@@ -79,6 +81,8 @@ def main() -> int:
 
     for ax in (ax1, ax2, ax3):
         ax.set_xlabel("pump frequency (GHz)")
+        if args.freq_range_ghz is not None:
+            ax.set_xlim(*args.freq_range_ghz)
     ax1.set_ylabel("pump power (dBm)")
 
     fig.suptitle(f"{args.map_dir.name} vs {args.measurement_dir.name}")
