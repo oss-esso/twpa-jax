@@ -3055,8 +3055,8 @@ def run_frequency_chunks(
     return cold_rows, warm_rows, chunk_specs
 
 
-def main() -> int:
-    raw_argv = sys.argv[1:]
+def main(argv: list[str] | None = None) -> int:
+    raw_argv = sys.argv[1:] if argv is None else list(argv)
     args = parse_args(raw_argv)
     logging.basicConfig(
         level=getattr(logging, str(args.log_level).upper()),

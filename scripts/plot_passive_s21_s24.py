@@ -16,7 +16,6 @@ S11/S21/S31/S41.
 from __future__ import annotations
 
 import argparse
-import sys
 import time
 from pathlib import Path
 
@@ -26,12 +25,10 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "experiments"))
-import ripple_common as rc  # noqa: E402
+from twpa_solver.signal.passive import db20, passive_s_matrix
 
 
-def parse_args() -> argparse.Namespace:
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--ipm-dir", type=Path, required=True)
     p.add_argument("--outdir", type=Path, required=True)
@@ -45,11 +42,11 @@ def parse_args() -> argparse.Namespace:
         default="s21_s24",
         help="Default two-panel S21/S24 plot, or two three-panel directional plots.",
     )
-    return p.parse_args()
+    return p.parse_args(argv)
 
 
-def main() -> None:
-    args = parse_args()
+def main(argv: list[str] | None = None) -> None:
+    args = parse_args(argv)
     if args.points < 2:
         raise SystemExit("--points must be at least 2")
     if args.stop_ghz <= args.start_ghz:
@@ -58,7 +55,7 @@ def main() -> None:
     args.outdir.mkdir(parents=True, exist_ok=True)
     freq_ghz = np.linspace(args.start_ghz, args.stop_ghz, args.points)
     t0 = time.perf_counter()
-    s = rc.passive_s_matrix(
+    s = passive_s_matrix(
         args.ipm_dir,
         freq_ghz * 1e9,
         ports=(1, 2, 3, 4),
@@ -67,7 +64,7 @@ def main() -> None:
     names = ("s11", "s21", "s31", "s41", "s14", "s24", "s34")
     port_pairs = ((1, 1), (2, 1), (3, 1), (4, 1), (1, 4), (2, 4), (3, 4))
     traces = {
-        name: rc.db20(s[:, out - 1, source - 1])
+        name: db20(s[:, out - 1, source - 1])
         for name, (out, source) in zip(names, port_pairs)
     }
     s21_db = traces["s21"]

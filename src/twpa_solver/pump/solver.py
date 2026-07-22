@@ -268,7 +268,7 @@ class HarmonicNewtonKrylovSolver:
                 elif s.preconditioner == "real_coupled_fast":
                     # Exact real-coupled with assembly + symbolic-factorization
                     # reuse. Implemented ONLY for the Schur-reduced problem
-                    # (exp10 in-process backend); the direct exp08 solver runs
+                    # (in-process Schur backend); the full solver runs
                     # the full problem, which has no such method.
                     if not hasattr(problem, "assemble_real_coupled_fast"):
                         logger.debug(
@@ -277,8 +277,8 @@ class HarmonicNewtonKrylovSolver:
                         )
                         raise NotImplementedError(
                             "real_coupled_fast is available only for the "
-                            "Schur-reduced backend (exp10 --inproc-preconditioner "
-                            "real_coupled_fast). For the direct exp08 solver use "
+                            "Schur-reduced backend (in-process preconditioner "
+                            "real_coupled_fast). For the full solver use "
                             "--preconditioner real_coupled."
                         )
                     cached_real = problem.assemble_real_coupled_fast(tangent)

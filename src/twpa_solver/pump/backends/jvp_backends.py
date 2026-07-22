@@ -1,6 +1,6 @@
 """JVP backends and a finite-difference sanity check.
 
-Audit result: the production exp08 JVP (``jvp_coeffs_with_tangent``) is a
+Audit result: the production JVP (``jvp_coeffs_with_tangent``) is a
 hand-coded analytic / alternating-frequency-time (AFT) Jacobian-vector product
 
     (J V)_k = D_k V_k + AFT[ Gamma(t) * (Bphi^T v(t)) ],

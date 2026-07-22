@@ -276,8 +276,8 @@ def fit_gain_candidates(
         print(f"wrote {out_csv}")
 
 
-def main() -> int:
-    args = build_parser().parse_args()
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
     apply_thesis_style()
     outdir = args.outdir or (args.run_dir / "plots")
     maps_dir = outdir / "maps"

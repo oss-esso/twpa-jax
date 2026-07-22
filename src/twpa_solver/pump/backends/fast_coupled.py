@@ -108,7 +108,7 @@ def _log_factor_backend_once(backend: str, detail: str = "") -> None:
 def _pardiso_thread_context():
     """Limit MKL/PARDISO threads for stable sparse factorization.
 
-    On the mixed OpenBLAS+MKL Windows environment used for these experiments,
+    On the mixed OpenBLAS+MKL Windows environment used for production runs,
     MKL PARDISO intermittently fails the same Schur-reduced matrix during
     reordering (error -3) when it runs with its default multi-thread count. A
     single-threaded PARDISO call is deterministic here; expose an env override

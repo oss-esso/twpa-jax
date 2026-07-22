@@ -258,7 +258,7 @@ class CircuitBuilder:
         sp.save_npz(outdir / "G.npz", G)
         sp.save_npz(outdir / "K.npz", K)
         sp.save_npz(outdir / "Bphi.npz", Bphi)
-        # Export Josephson inductance vector in the schema expected by Exp08.
+        # Export the Josephson inductance vector in the pump-solver schema.
         # Some earlier patch paths only created Ic, so compute Lj directly here.
         Lj = np.array([float(jj.Lj) for jj in self.josephson], dtype=np.float64)
 
@@ -268,7 +268,7 @@ class CircuitBuilder:
 
         np.savez(
             outdir / "ipm_arrays.npz",
-            # Compatibility with exp08_full_ipm_pump_solve.py / exp09_full_ipm_gain_from_pump.py
+            # Compatibility with the pump-solver and gain artifact schema.
             nodes=np.array(assembled["node_count"], dtype=np.int64),
             node_count=np.array(assembled["node_count"], dtype=np.int64),
             ports=np.array(ports_dict, dtype=object),

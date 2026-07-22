@@ -1,7 +1,6 @@
 
-# experiments/exp07_python_ipm_design_builder.py
 """
-Experiment 07: standalone Python IPM design builder.
+Standalone Python IPM design builder.
 
 No Julia. No JosephsonCircuits.
 
@@ -41,7 +40,7 @@ Matrix convention:
         The pair stamps B Lpair^{-1} B.T into K_lin instead of independent 1/L stamps.
 
 Run:
-    python experiments/exp07_python_ipm_design_builder.py --write-matrices --draw
+    python -m twpa_solver.builders.ipm --write-matrices --draw
 
 Fast default:
     --coupler-mode cached
@@ -1138,7 +1137,7 @@ def _add_optional_argument(parser: argparse.ArgumentParser, name: str, **kwargs:
     parser.add_argument(name, default=None, **kwargs)
 
 
-def parse_args() -> argparse.Namespace:
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(conflict_handler="resolve")
     p.add_argument("--outdir", default=os.path.join("outputs", "ipm_python_design"))
     p.add_argument("--coupler-mode", choices=["cached", "optimize"], default="cached")
@@ -1186,7 +1185,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--lj-scatter-seed", type=int, default=1)
     p.add_argument("--lj-scatter-clip-min", type=float, default=0.5)
     p.add_argument("--lj-scatter-clip-max", type=float, default=1.5)
-    return p.parse_args()
+    return p.parse_args(argv)
 
 
 def params_from_args(args: argparse.Namespace) -> IPMParams:
@@ -1237,8 +1236,8 @@ def params_from_args(args: argparse.Namespace) -> IPMParams:
     return IPMParams(**overrides)
 
 
-def main() -> None:
-    args = parse_args()
+def main(argv: list[str] | None = None) -> None:
+    args = parse_args(argv)
 
     params = params_from_args(args)
     coupler = make_coupler_discrete(params, args.coupler_mode)

@@ -10,7 +10,8 @@ drives it without modification: it only ever sees retained-sized arrays.
 
 The nonlinear Josephson term needs only retained (Josephson-incident) node
 fluxes, so no eliminated-node reconstruction happens during the iteration. Full
-(H, n) coefficients are reconstructed once after convergence for exp09.
+(H, n) coefficients are reconstructed once after convergence for gain
+post-processing.
 
 Preconditioners on the retained system use ``D_nn`` as the linear part (the
 sparse retained diagonal block), i.e. they drop the dense Schur correction
@@ -30,7 +31,7 @@ import numpy as np
 import scipy.sparse as sp
 import scipy.sparse.linalg as spla
 
-import twpa_solver.pump.hb as exp08
+from .. import hb
 
 from .schur_partition import (
     SchurPartition,
@@ -58,7 +59,7 @@ class SchurReducedProblem:
     nodes) does not precondition the reduced system at all.
     """
 
-    full: exp08.FullIPMPumpProblem
+    full: hb.FullIPMPumpProblem
     partition: SchurPartition
     linear_apply_mode: str = "assembled"
     # Harmonic-banding cutoffs for the real_coupled retained preconditioner.
@@ -149,13 +150,13 @@ class SchurReducedProblem:
         return R
 
     # ---------------------------------------------------------------- tangent
-    def tangent_state(self, Xn: np.ndarray) -> exp08.TangentState:
+    def tangent_state(self, Xn: np.ndarray) -> hb.TangentState:
         psi_t = self._branch_flux_time(Xn) + self.dc_branch_flux[None, :]
         gamma_t = self.branch.gamma(psi_t)
-        return exp08.TangentState(gamma_t=gamma_t, gamma_mean=np.mean(gamma_t, axis=0))
+        return hb.TangentState(gamma_t=gamma_t, gamma_mean=np.mean(gamma_t, axis=0))
 
     def jvp_coeffs_with_tangent(
-        self, Vn: np.ndarray, tangent: exp08.TangentState
+        self, Vn: np.ndarray, tangent: hb.TangentState
     ) -> np.ndarray:
         logger.debug("schur_jvp_tangent_apply shape=%s harmonics=%d", Vn.shape, self.H)
         JV = np.empty_like(Vn)
@@ -171,8 +172,8 @@ class SchurReducedProblem:
         return self.jvp_coeffs_with_tangent(Vn, self.tangent_state(Xn))
 
     def spectral_tangent_state(
-        self, tangent: exp08.TangentState
-    ) -> exp08.SpectralTangentState:
+        self, tangent: hb.TangentState
+    ) -> hb.SpectralTangentState:
         modes_int = [int(round(k)) for k in self.grid.k]
         needed = sorted(
             {k - q for k in modes_int for q in modes_int}
@@ -186,16 +187,16 @@ class SchurReducedProblem:
             khat[ell] = (
                 self.Bphi_r @ sp.diags(gh, 0, format="csr") @ self.BphiT_r
             ).astype(np.complex128).tocsr()
-        return exp08.SpectralTangentState(khat=khat)
+        return hb.SpectralTangentState(khat=khat)
 
     # ------------------------------------------------------------------ norms
     def norms(
         self, Xn: np.ndarray, source_scale: float, compute_time_residual: bool
     ) -> dict[str, float | None]:
         R = self.residual_coeffs(Xn, source_scale)
-        R_flat = exp08.pack_complex(R)
+        R_flat = hb.pack_complex(R)
         coeff_abs = float(np.linalg.norm(R_flat) / math.sqrt(R_flat.size))
-        S_flat = exp08.pack_complex(self.source_coeffs(source_scale))
+        S_flat = hb.pack_complex(self.source_coeffs(source_scale))
         src_abs = float(np.linalg.norm(S_flat) / max(math.sqrt(S_flat.size), 1.0))
         # Time residual is computed on the full reconstructed solution (it
         # couples eliminated nodes) -- skipped during the iteration and reported
@@ -222,7 +223,7 @@ class SchurReducedProblem:
 
     # ------------------------------------------------------- preconditioners
     def build_preconditioner_factors(
-        self, Xn: np.ndarray, mode: str, tangent: exp08.TangentState | None = None
+        self, Xn: np.ndarray, mode: str, tangent: hb.TangentState | None = None
     ) -> list[spla.SuperLU] | None:
         if mode == "none":
             return None
@@ -242,7 +243,7 @@ class SchurReducedProblem:
         ]
 
     def assemble_coupled_preconditioner(
-        self, spectral: exp08.SpectralTangentState
+        self, spectral: hb.SpectralTangentState
     ) -> spla.SuperLU:
         logger.debug(
             "preconditioner_uses_dnn_approx variant=%s", "spectral_coupled"
@@ -260,7 +261,7 @@ class SchurReducedProblem:
             rows.append(row)
         return spla.splu(sp.bmat(rows, format="csc"))
 
-    def assemble_real_coupled_fast(self, tangent: exp08.TangentState):
+    def assemble_real_coupled_fast(self, tangent: hb.TangentState):
         """Exact real-coupled preconditioner with assembly + symbolic reuse.
 
         Builds the precompute (scatter map + symbolic factorization) once per
@@ -287,7 +288,7 @@ class SchurReducedProblem:
         return fc
 
     def assemble_real_coupled_preconditioner(
-        self, spectral: exp08.SpectralTangentState
+        self, spectral: hb.SpectralTangentState
     ) -> spla.SuperLU:
         """Reduced real-packed preconditioner with the conjugate term kept.
 
@@ -333,7 +334,7 @@ class SchurReducedProblem:
 
 
 def build_schur_problem(
-    full: exp08.FullIPMPumpProblem,
+    full: hb.FullIPMPumpProblem,
     port_indices: list[int],
     *,
     linear_apply_mode: str = "assembled",

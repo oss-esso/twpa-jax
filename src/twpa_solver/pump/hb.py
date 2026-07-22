@@ -2,8 +2,6 @@ from __future__ import annotations
 
 # Compatibility aggregation module.
 # New code should import from problem/solver/seeds/io directly.
-# Old backend code can temporarily do:
-#     import twpa_solver.pump.hb as exp08
 
 from twpa_solver.pump.problem import (
     FullPumpProblem,

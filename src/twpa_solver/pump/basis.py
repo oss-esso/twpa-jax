@@ -1,5 +1,4 @@
-# experiments/pump_basis.py
-"""Pump-mode basis policies shared by exp08 (pump solve) and exp09 (gain).
+"""Pump-mode basis policies shared by pump solving and gain analysis.
 
 A "pump basis" is the explicit list of positive integer pump-harmonic indices
 used to represent the physical real pump waveform via the JosephsonCircuits.jl

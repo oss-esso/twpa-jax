@@ -1,8 +1,8 @@
 """Copy a 2c/3c IPM design and optionally add Josephson Lj scatter.
 
 Examples:
-    python experiments/build_scattered_ipm_design.py --design 2c --outdir outputs/ipm_python_design_ljscatter_s1pct_seed1 --lj-scatter-sigma 0.01 --lj-scatter-seed 1
-    python experiments/build_scattered_ipm_design.py --design 3c --outdir outputs/ipm_python_design_3c_ljscatter_s1pct_seed1 --lj-scatter-sigma 0.01 --lj-scatter-seed 1
+    python -m twpa_solver.builders.scattered --design 2c --outdir outputs/ipm_2c_ljscatter_s1pct_seed1 --lj-scatter-sigma 0.01 --lj-scatter-seed 1
+    python -m twpa_solver.builders.scattered --design 3c --outdir outputs/ipm_3c_ljscatter_s1pct_seed1 --lj-scatter-sigma 0.01 --lj-scatter-seed 1
 
 The source IPM directories are treated as authoritative. This matters because
 old maps may have been generated from artifacts whose arrays are not reproduced
@@ -22,8 +22,8 @@ import numpy as np
 
 
 DEFAULT_SOURCES = {
-    "2c": Path("outputs/ipm_python_design"),
-    "3c": Path("outputs/ipm_python_design_3c"),
+    "2c": Path("designs/ipm_2c_fixed"),
+    "3c": Path("designs/ipm_3c_fixed"),
 }
 
 

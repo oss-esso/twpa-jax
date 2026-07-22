@@ -1,0 +1,14 @@
+{
+  "nodes": 1,
+  "jj_branches": 0,
+  "C_nnz": 1,
+  "G_nnz": 1,
+  "K_nnz": 1,
+  "Bphi_nnz": 0,
+  "ports": {
+    "1": 0
+  },
+  "metadata": {
+    "test": "one_node_linear"
+  }
+}
