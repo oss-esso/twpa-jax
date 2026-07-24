@@ -288,8 +288,36 @@ pump source current = 2 x the design's AC pump current. Runs land under
 `outputs/exp14_*`; build the table with
 `python experiments/exp14_seven_design_summary.py`.
 
+## Matrix-tracing driver (`scripts/run_gain_map_column_matrices.py`)
+
+Diagnostic one-column driver that runs `run_gain_map` in-process (forces
+`--n-frequency 1`, single `--column-frequency-ghz`) and archives the sparse
+matrices flowing through solver frames (`src/twpa_solver/`, `experiments/`,
+`run_gain_map.py`), plus the static design matrices. The production engine flags
+are baked in (`PRODUCTION_ENGINE_FLAGS`: schur_cpu_mt + real_coupled_fast +
+secant + fail-fast + patience 2 + cache 1 + detuning 100 MHz + direct/superlu +
+mode-count 10 + nt 40 + no-spectrum); pass extra run_gain_map flags (e.g.
+`--log-level INFO`) after `--extra-map-args` (REMAINDER, must be last).
+
+**Capture uses `sys.setprofile` (call/return), NOT `sys.settrace` (per-line) —
+do not switch it back.** Line tracing the stiff assembly loops slowed one pump
+solve **~40x** (factor 2.2s -> 92s; the hot `assemble_real_coupled_fast`/Schur
+assembly lives *inside* a traced module, so scoping settrace to solver files did
+not help). `setprofile` scans a target frame's `f_locals` only on `return`
+(args + assembled results both present) -> ~4x over untraced (92.8s -> 8.95s for
+3 points), archiving matrices that cross function boundaries. Trade-off: a matrix
+built and discarded within one function without surviving to its return is not
+archived (per-line count 1103 -> boundary count ~42). The callback is **fail-safe**
+(catches `Exception` per matrix, logs + skips, reports `matrix_save_errors`) so a
+save error never aborts the solve; only `KeyboardInterrupt`/`SystemExit` propagate.
+Because the hook is hot, a **Ctrl-C tends to surface inside `dispatch`** -- that is a
+real interrupt, not a tracer bug. On Windows the archive paths are deep: use a
+**short `--outdir`** to stay under MAX_PATH (a deep default outdir can hit an OSError
+that is now skipped rather than fatal). Tests: `tests/test_column_matrices_tracer.py`.
+
 ## Tests
 `tests/` covers the solver: `test_loss_model.py` (loss fit),
 `test_pump_basis.py` (pump-mode basis), `test_fxjtwpa_node_order.py`,
-`test_exp10_gate.py` (map gate). Run with `--basetemp` off the repo to dodge a
-Windows ACL issue on `.pytest_tmp`.
+`test_exp10_gate.py` (map gate), `test_column_matrices_tracer.py` (setprofile
+matrix tracer). Run with `--basetemp` off the repo to dodge a Windows ACL issue
+on `.pytest_tmp`.
