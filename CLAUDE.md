@@ -92,6 +92,25 @@ default, idempotent).
 For a correct real pump, `conj_symmetry_rel_err == 0` (gamma_hat[-ell] =
 conj(gamma_hat[ell])).
 
+### Quantum efficiency (`twpa_solver.signal.quantum_efficiency`)
+`calc_qe(S, S_noise=None)` / `calc_qe_ideal(S)` are direct ports of
+JosephsonCircuits.jl's `calcqe`/`calcqeideal`, vectorized (no separate `!`
+in-place variant — numpy's row-sum already gives the cache-efficient behavior
+the Julia loop hand-rolled). Both expect `S` in the **photon ladder-operator
+basis**, not the classical voltage-ratio S this repo's `solve_gain_one(_schur)`
+returns: signal and idler sidebands sit at different frequencies, so converting
+requires the Manley-Rowe reweighting `S_ladder[m,n] = S_classical[m,n] *
+sqrt(freq[n]/freq[m])` before calling calc_qe (see
+`experiments/exp19_calcqe_validation.py::ladder_basis_weights`). Validated on
+ipm_2c_fixed/jc_jtwpa/jc_fqjtwpa by building the 2x2 [signal,idler]x[signal,idler]
+sub-matrix via two `solve_gain_one_schur` calls (excite signal_m, excite
+idler_m); the resulting unitarity check `|S_ss|^2-|S_is|^2==1` (lossless
+non-degenerate amp) holds to ~2%/~0.4% for ipm_2c_fixed/jc_fqjtwpa but is off
+~47% for jc_jtwpa — expected, not a bug: a real unitarity check needs the full
+multi-sideband S (jc_jtwpa solves 10 sidebands), and the 2x2 truncation used
+for this compact demo drops power leaking to other sidebands. Tests:
+`tests/test_quantum_efficiency.py` (ports the Julia docstring examples exactly).
+
 ### Policy selection per design family
 - Unbiased 4WM (JPA, JTWPA, FQJTWPA): `positive_odd_jc`, K = `Nmodulationharmonics`.
 - Biased / DC / 3WM (FXJPA): symmetry broken -> use **`dense_real`** (all-mode

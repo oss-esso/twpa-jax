@@ -29,6 +29,10 @@ from twpa_solver.signal.floquet import (
     solve_linear_system,
     voltage_from_flux,
 )
+from twpa_solver.signal.quantum_efficiency import (
+    calc_qe,
+    calc_qe_ideal,
+)
 from twpa_solver.signal.stability import (
     NON_ANALYTIC_LOSS_MODELS,
     ComplexResonance,
@@ -66,6 +70,8 @@ __all__ = [
     "solve_gain_one_schur",
     "solve_linear_system",
     "voltage_from_flux",
+    "calc_qe",
+    "calc_qe_ideal",
     "NON_ANALYTIC_LOSS_MODELS",
     "ComplexResonance",
     "SigmaMinEstimate",
