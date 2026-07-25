@@ -1,9 +1,9 @@
 {
   "status": "PYTHON_IPM_BUILD_OK",
   "total_elements": 45232,
-  "non_ground_nodes": 17453,
+  "non_ground_nodes": 18484,
   "min_node": 1,
-  "max_node": 17453,
+  "max_node": 107453,
   "counts": {
     "port": 4,
     "resistor": 4,
@@ -15,7 +15,7 @@
   },
   "params": {
     "start_node_top": 1,
-    "start_node_bot": 10000,
+    "start_node_bot": 100000,
     "ground": 0,
     "array_length": 418,
     "num_rows": 7,
@@ -39,10 +39,10 @@
     "Rright": 50.0,
     "Rm": 50.0,
     "cell_length_um": 10.0,
-    "cached_coupler_width_um": 41.12583438003677,
-    "cached_coupler_gap_um": 46.16761265015487,
-    "cached_coupler_gap_to_ground_um": 10.935243038629784,
-    "cached_coupler_length_um": 3787.65667557678
+    "cached_coupler_width_um": 39.897,
+    "cached_coupler_gap_um": 44.762,
+    "cached_coupler_gap_to_ground_um": 10.5973385055,
+    "cached_coupler_length_um": 3787.7
   },
   "coupler": {
     "L_cell": 4.231176594367187e-12,
@@ -62,7 +62,7 @@
   },
   "ends": {
     "top_end_node": 11030,
-    "bottom_end_node": 17453,
+    "bottom_end_node": 107453,
     "jj_mod_used": 2926
   },
   "interpretation": {
@@ -79,22 +79,22 @@
   "lj_scatter_clip_max": 1.5,
   "matrices": {
     "C_shape": [
-      17453,
-      17453
+      18484,
+      18484
     ],
-    "C_nnz": 28625,
+    "C_nnz": 29655,
     "G_shape": [
-      17453,
-      17453
+      18484,
+      18484
     ],
     "G_nnz": 4,
     "K_shape": [
-      17453,
-      17453
+      18484,
+      18484
     ],
-    "K_nnz": 60771,
+    "K_nnz": 62609,
     "Bphi_shape": [
-      17453,
+      18484,
       2926
     ],
     "Bphi_nnz": 5852,
@@ -106,7 +106,7 @@
         0
       ],
       "3": [
-        10000,
+        100000,
         0
       ],
       "2": [
@@ -114,15 +114,15 @@
         0
       ],
       "4": [
-        17453,
+        107453,
         0
       ]
     },
     "port_vectors": {
       "1": 0,
-      "3": 9999,
+      "3": 11030,
       "2": 11029,
-      "4": 17452
+      "4": 18483
     }
   }
 }

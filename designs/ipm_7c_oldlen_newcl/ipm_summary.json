@@ -1,14 +1,14 @@
 {
   "status": "PYTHON_IPM_BUILD_OK",
-  "total_elements": 45232,
-  "non_ground_nodes": 17453,
+  "total_elements": 46832,
+  "non_ground_nodes": 19284,
   "min_node": 1,
-  "max_node": 17453,
+  "max_node": 22053,
   "counts": {
     "port": 4,
     "resistor": 4,
-    "capacitor": 21429,
-    "linear_inductor": 15556,
+    "capacitor": 22229,
+    "linear_inductor": 16356,
     "coupling_capacitor": 2660,
     "mutual_inductor_k": 2653,
     "josephson_inductor": 2926
@@ -23,13 +23,13 @@
     "coupling_dB": -14.0,
     "Z0": 50.0,
     "coupler_freq_hz": 8000000000.0,
-    "length_of_long_TL": 900,
-    "length_of_short_TL": 90,
-    "coupler_section_length": 800,
-    "len1": 0,
+    "length_of_long_TL": 250,
+    "length_of_short_TL": 30,
+    "coupler_section_length": 1500,
+    "len1": 100,
     "len2": 50,
-    "len3": 0,
-    "len4": 0,
+    "len3": 100,
+    "len4": 300,
     "Lj": 7.9e-11,
     "Cj": 1.45e-13,
     "Cg": 3.3000000000000005e-14,
@@ -39,10 +39,10 @@
     "Rright": 50.0,
     "Rm": 50.0,
     "cell_length_um": 10.0,
-    "cached_coupler_width_um": 41.12583438003677,
-    "cached_coupler_gap_um": 46.16761265015487,
-    "cached_coupler_gap_to_ground_um": 10.935243038629784,
-    "cached_coupler_length_um": 3787.65667557678
+    "cached_coupler_width_um": 39.897,
+    "cached_coupler_gap_um": 44.762,
+    "cached_coupler_gap_to_ground_um": 10.5973385055,
+    "cached_coupler_length_um": 3787.7
   },
   "coupler": {
     "L_cell": 4.231176594367187e-12,
@@ -61,8 +61,8 @@
     }
   },
   "ends": {
-    "top_end_node": 11030,
-    "bottom_end_node": 17453,
+    "top_end_node": 7230,
+    "bottom_end_node": 22053,
     "jj_mod_used": 2926
   },
   "interpretation": {
@@ -79,22 +79,22 @@
   "lj_scatter_clip_max": 1.5,
   "matrices": {
     "C_shape": [
-      17453,
-      17453
+      19284,
+      19284
     ],
-    "C_nnz": 28625,
+    "C_nnz": 30454,
     "G_shape": [
-      17453,
-      17453
+      19284,
+      19284
     ],
     "G_nnz": 4,
     "K_shape": [
-      17453,
-      17453
+      19284,
+      19284
     ],
-    "K_nnz": 60771,
+    "K_nnz": 65009,
     "Bphi_shape": [
-      17453,
+      19284,
       2926
     ],
     "Bphi_nnz": 5852,
@@ -110,19 +110,19 @@
         0
       ],
       "2": [
-        11030,
+        7230,
         0
       ],
       "4": [
-        17453,
+        22053,
         0
       ]
     },
     "port_vectors": {
       "1": 0,
-      "3": 9999,
-      "2": 11029,
-      "4": 17452
+      "3": 7230,
+      "2": 7229,
+      "4": 19283
     }
   }
 }

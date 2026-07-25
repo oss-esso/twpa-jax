@@ -47,6 +47,10 @@ Fast default:
 
 More literal CPW reverse optimization:
     --coupler-mode optimize
+
+Geometryless ideal coupler (single lumped cell hitting an exact coupling_dB
+at coupler_freq_hz, no CPW cross-section search):
+    --coupler-mode ideal
 """
 
 from __future__ import annotations
@@ -107,7 +111,7 @@ class CouplerDiscrete:
 @dataclass
 class IPMParams:
     start_node_top: int = 1
-    start_node_bot: int = 10000
+    start_node_bot: int = 100_000
     ground: int = 0
 
     array_length: int = 418
@@ -425,6 +429,74 @@ def calculate_discrete_params(
     )
 
 
+def make_ideal_coupler(
+    coupling_dB: float = -14.0,
+    freq_hz: float = 8.0e9,
+    Z0: float = 50.0,
+    n_uncoupled: int = 30,
+    cell_length_um: float = 10.0,
+    Ll_per_um: float = 0.424e-12,
+    Cl_per_um: float = 0.1695e-15,
+) -> CouplerDiscrete:
+    """Build a distributed, geometryless coupled-line coupler for a target coupling/frequency.
+
+    Skips the CPW cross-section search (`optimize_coupler_geometry`) entirely
+    -- no width/gap/gap-to-ground is ever solved for. Instead, the even/odd
+    mode impedances are set directly from the target voltage coupling
+    (`Z_even * Z_odd == Z0**2`), and a shared propagation velocity
+    `v_p = 1/sqrt(Ll_per_um * Cl_per_um)` -- the same velocity implied by the
+    ordinary background transmission line elsewhere in the design -- turns
+    those into per-length `L`, `C` via the standard `L' = Z/v_p`,
+    `C' = 1/(Z*v_p)` relations. The coupler is then discretized into
+    `N_coupled` cells of `cell_length_um`, sized to a quarter wavelength at
+    `freq_hz` (`length_um = v_p / (4*freq_hz)`), the same way
+    `calculate_discrete_params` discretizes the physical CPW model. Because
+    each cell is electrically short, cascading them approximates a real
+    distributed quarter-wave coupler over a broad band, unlike a single
+    lumped cell which only matches exactly at `freq_hz`.
+    """
+    if not (-60.0 < coupling_dB < 0.0):
+        raise ValueError(f"coupling_dB must be negative, got {coupling_dB}")
+
+    k_voltage = 10.0 ** (coupling_dB / 20.0)
+
+    Z_even = Z0 * math.sqrt((1.0 + k_voltage) / (1.0 - k_voltage))
+    Z_odd = Z0 * math.sqrt((1.0 - k_voltage) / (1.0 + k_voltage))
+
+    v_p = 1.0 / math.sqrt(Ll_per_um * Cl_per_um)  # um/s, shared by both modes
+    length_um = v_p / (4.0 * freq_hz)
+    N_coupled = max(1, int(round(length_um / cell_length_um)))
+
+    L_even = (Z_even / v_p) * cell_length_um
+    C_even = (1.0 / (Z_even * v_p)) * cell_length_um
+    L_odd = (Z_odd / v_p) * cell_length_um
+    C_odd = (1.0 / (Z_odd * v_p)) * cell_length_um
+
+    L_self = 0.5 * (L_even + L_odd)
+    L_mutual = 0.5 * (L_even - L_odd)
+    C_self = C_even
+    Cc_cell = 0.5 * (C_odd - C_even)
+
+    geom = CouplerGeometry(
+        width_um=0.0,
+        gap_between_lines_um=0.0,
+        gap_to_ground_um=0.0,
+        length_um=float(N_coupled * cell_length_um),
+        k_db=float(coupling_dB),
+        z_input_ohm=float(Z0),
+    )
+
+    return CouplerDiscrete(
+        L_cell=float(L_self),
+        Cc_cell=float(Cc_cell),
+        C_gnd_cell=float(C_self),
+        K_ind=float(L_mutual / L_self),
+        N_coupled=N_coupled,
+        N_uncoupled=n_uncoupled,
+        geometry=geom,
+    )
+
+
 # =============================================================================
 # Netlist construction
 # =============================================================================
@@ -582,6 +654,16 @@ def make_coupler_discrete(params: IPMParams, mode: str) -> CouplerDiscrete:
             geom.gap_between_lines_um,
             geom.length_um,
             params.cell_length_um,
+        )
+
+    if mode == "ideal":
+        return make_ideal_coupler(
+            coupling_dB=params.coupling_dB,
+            freq_hz=params.coupler_freq_hz,
+            Z0=params.Z0,
+            cell_length_um=params.cell_length_um,
+            Ll_per_um=params.Ll_per_um,
+            Cl_per_um=params.Cl_per_um,
         )
 
     raise ValueError(f"unknown coupler mode {mode}")
@@ -1140,7 +1222,9 @@ def _add_optional_argument(parser: argparse.ArgumentParser, name: str, **kwargs:
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(conflict_handler="resolve")
     p.add_argument("--outdir", default=os.path.join("outputs", "ipm_python_design"))
-    p.add_argument("--coupler-mode", choices=["cached", "optimize"], default="cached")
+    p.add_argument(
+        "--coupler-mode", choices=["cached", "optimize", "ideal"], default="cached"
+    )
     p.add_argument("--write-matrices", action="store_true")
     p.add_argument("--draw", action="store_true")
 

@@ -2702,7 +2702,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument(
         "--pump-current-jc-scale",
         type=float,
-        default=2.0,
+        default=1.0,
         help="Multiply the physical port current by this before injecting (JC "
         "positive-phasor source convention; 2.0 matches JosephsonCircuits).",
     )

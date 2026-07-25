@@ -30,19 +30,19 @@
     "len2": 50,
     "len3": 0,
     "len4": 0,
-    "Lj": 7.9e-11,
+    "Lj": 1.58e-10,
     "Cj": 1.45e-13,
-    "Cg": 3.3000000000000005e-14,
+    "Cg": 6.600000000000001e-14,
     "Cl_per_um": 1.695e-16,
     "Ll_per_um": 4.24e-13,
     "Rleft": 50.0,
     "Rright": 50.0,
     "Rm": 50.0,
     "cell_length_um": 10.0,
-    "cached_coupler_width_um": 41.12583438003677,
-    "cached_coupler_gap_um": 46.16761265015487,
-    "cached_coupler_gap_to_ground_um": 10.935243038629784,
-    "cached_coupler_length_um": 3787.65667557678
+    "cached_coupler_width_um": 39.897,
+    "cached_coupler_gap_um": 44.762,
+    "cached_coupler_gap_to_ground_um": 10.5973385055,
+    "cached_coupler_length_um": 3787.7
   },
   "coupler": {
     "L_cell": 4.231176594367187e-12,
@@ -98,8 +98,8 @@
       2926
     ],
     "Bphi_nnz": 5852,
-    "Ic_min": 4.165898460783987e-06,
-    "Ic_max": 4.165898460783987e-06,
+    "Ic_min": 2.0829492303919934e-06,
+    "Ic_max": 2.0829492303919934e-06,
     "ports": {
       "1": [
         1,
