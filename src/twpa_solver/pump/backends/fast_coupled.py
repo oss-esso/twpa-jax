@@ -355,11 +355,13 @@ class FastCoupledPreconditioner:
                 self._pardiso = None
                 self._analyzed = False
                 self._lu = spla.splu(self.M.tocsc())
+                L_factor, U_factor = self._lu.L, self._lu.U
                 self.last_factor_backend = "superlu_fallback"
                 _log_factor_backend_once("superlu_fallback", f"error={self.last_pardiso_error}")
 
         else:
             self._lu = spla.splu(self.M.tocsc())
+            L_factor, U_factor = self._lu.L, self._lu.U
             self.last_factor_backend = "superlu"
             _log_factor_backend_once("superlu")
 

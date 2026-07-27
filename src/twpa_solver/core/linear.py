@@ -63,7 +63,8 @@ def dynamic_block(
     else:
         raise ValueError(f"unknown loss_model={loss_model!r}")
 
-    return (K - omega * omega * C + 1j * omega * G).tocsr()
+    D = (K - omega * omega * C + 1j * omega * G).tocsr()
+    return D
 
 
 def port_s_from_unit_current_response(

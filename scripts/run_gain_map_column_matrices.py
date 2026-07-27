@@ -61,6 +61,107 @@ PRODUCTION_ENGINE_FLAGS: list[str] = [
 def _safe(value: str) -> str:
     return re.sub(r"[^A-Za-z0-9_.+-]+", "_", value)[:120]
 
+
+# Maps each (source file, function) that the tracer has ever observed to the
+# symbol/section it plays in the pump harmonic-balance theory: R(X;lambda) =
+# D X + N(X) - lambda S = 0, D_k = K-(k*wp)^2 C + i*k*wp*G, preconditioner
+# M ~= J via K_hat_ell = Bphi diag(gamma_hat_ell) Bphi^T. "branch" splits the
+# archive into the pump math this maps to vs. the separate signal/gain solve
+# (Floquet sideband blocks), which is not part of that write-up at all.
+# Keyed by (source .py basename, function name); update this table, not the
+# save path logic, when a new capture point is added.
+THEORY_MAP: dict[tuple[str, str], dict[str, str]] = {
+    ("circuit.py", "load_circuit"): {
+        "symbol": "C_G_K_Bphi", "branch": "pump",
+        "section": "sec0_static_design",
+        "description": "Static circuit matrices C, G, K, B_phi (governing "
+            "equation coefficients, before any harmonic/frequency split).",
+    },
+    ("linear.py", "dynamic_block"): {
+        "symbol": "Dk", "branch": "pump",
+        "section": "sec1_frequency_loop",
+        "description": "D_k(wp) = K - (k*wp)^2 C + i*k*wp*G, the linear "
+            "harmonic operator for one pump harmonic k. Built once per "
+            "frequency/harmonic (tag newton_unscoped is correct, not a gap).",
+    },
+    ("fast_coupled.py", "_factor"): {
+        "symbol": "M_input", "branch": "pump",
+        "section": "sec7_sparse_lu",
+        "description": "The assembled real-coupled-fast preconditioner "
+            "matrix M right before SuperLU/PARDISO factorization "
+            "(Pr M Pc = LU).",
+    },
+    ("fast_coupled.py", "_block_target"): {
+        "symbol": "M", "branch": "pump",
+        "section": "sec6_preconditioner",
+        "description": "real_coupled_fast preconditioner assembly: "
+            "(MV)_k = D_k V_k + sum_q[Khat_{k-q} V_q + Khat_{k+q} conj(V_q)].",
+    },
+    ("fast_coupled.py", "_index_contributions"): {
+        "symbol": "M", "branch": "pump",
+        "section": "sec6_preconditioner",
+        "description": "real_coupled_fast preconditioner assembly (sparsity "
+            "pattern / data-index bookkeeping for M).",
+    },
+    ("fast_coupled.py", "_build_scatter"): {
+        "symbol": "M_pattern", "branch": "pump",
+        "section": "sec6_preconditioner",
+        "description": "Fixes M's CSR sparsity pattern once (reference "
+            "Khat_{k-q} blocks used only to union the pattern, not the "
+            "physical values).",
+    },
+    ("gamma.py", "build_khat"): {
+        "symbol": "Khat_ell", "branch": "gain_signal",
+        "section": "gain_side_khat",
+        "description": "Signal/gain-side tangent-stiffness Fourier block "
+            "Khat_ell = Bphi diag(gammahat_ell) Bphi^T -- same formula as "
+            "pump sec6 K_hat_ell, but built for the Floquet gain solve, not "
+            "the pump Newton preconditioner.",
+    },
+    ("floquet.py", "assemble_conversion_matrix"): {
+        "symbol": "Floquet_block", "branch": "gain_signal",
+        "section": "gain_side_floquet",
+        "description": "Signal-sideband Floquet conversion-matrix block "
+            "(not covered by the pump write-up).",
+    },
+    ("floquet.py", "solve_linear_system"): {
+        "symbol": "Floquet_A", "branch": "gain_signal",
+        "section": "gain_side_floquet",
+        "description": "Signal Floquet linear-system matrix for one gain "
+            "solve (not covered by the pump write-up).",
+    },
+    ("floquet.py", "solve_single_block_transfer"): {
+        "symbol": "Floquet_A", "branch": "gain_signal",
+        "section": "gain_side_floquet",
+        "description": "Single-sideband transfer-matrix block in the "
+            "signal Floquet solve (not covered by the pump write-up).",
+    },
+    ("floquet.py", "solve_gain_one"): {
+        "symbol": "Floquet_khat_off", "branch": "gain_signal",
+        "section": "gain_side_floquet",
+        "description": "Off-diagonal Khat block used by one signal gain "
+            "solve (not covered by the pump write-up).",
+    },
+    ("run_gain_map.py", "_gain"): {
+        "symbol": "Floquet_khat_off", "branch": "gain_signal",
+        "section": "gain_side_floquet",
+        "description": "Gain-solve orchestration level (not covered by the "
+            "pump write-up).",
+    },
+    ("run_gain_map.py", "_solve_signal"): {
+        "symbol": "Floquet_khat_off", "branch": "gain_signal",
+        "section": "gain_side_floquet",
+        "description": "Signal-solve orchestration level (not covered by "
+            "the pump write-up).",
+    },
+}
+_UNMAPPED_THEORY = {
+    "symbol": None, "branch": "unmapped", "section": "unmapped",
+    "description": "New capture point not yet classified in THEORY_MAP -- "
+        "add an entry keyed by (source .py basename, function name).",
+}
+
+
 class MatrixTracer:
     def __init__(self, root: Path) -> None:
         self.root = root
@@ -96,6 +197,29 @@ class MatrixTracer:
                     pass
         return "unscoped"
 
+    def _continuation_tag(self, frame) -> str:
+        # Every solve path (cold ladder, adaptive continuation, direct
+        # warm-start) funnels through HarmonicNewtonKrylovSolver.solve_one,
+        # which holds the Newton iteration counter (`it`) and the
+        # continuation scale (`source_scale`, i.e. lambda) as locals for the
+        # whole solve. Walk the call stack up to that frame so every matrix
+        # saved by a callee (dynamic_block, fast_coupled's preconditioner/LU)
+        # can be attributed to the exact continuation step + Newton
+        # iteration it was built for. Bounded depth: this is a hot path
+        # (setprofile fires on every call/return), so don't walk unbounded.
+        f = frame
+        for _ in range(30):
+            if f is None:
+                break
+            if f.f_code.co_name == "solve_one":
+                it = f.f_locals.get("it")
+                lam = f.f_locals.get("source_scale")
+                it_s = f"{int(it):02d}" if isinstance(it, int) else "pre"
+                lam_s = f"{float(lam):.6f}" if isinstance(lam, (int, float)) else "na"
+                return f"newton{it_s}_lambda{lam_s}"
+            f = f.f_back
+        return "newton_unscoped"
+
     def _save(self, value: Any, frame, line: int, name: str) -> None:
         if sp.issparse(value):
             lowered = name.lower()
@@ -108,10 +232,18 @@ class MatrixTracer:
         if key in self.seen:
             return
         self.seen.add(key)
-        function = _safe(frame.f_code.co_name)
-        directory = self.root / self._context(frame) / function / f"line_{line:04d}"
+        source_basename = Path(frame.f_code.co_filename).name
+        function = frame.f_code.co_name
+        theory = THEORY_MAP.get((source_basename, function), _UNMAPPED_THEORY)
+        symbol = theory["symbol"] or _safe(name)
+        continuation_tag = self._continuation_tag(frame)
+        directory = (
+            self.root / theory["branch"] / self._context(frame)
+            / f"{_safe(symbol)}__{_safe(function)}" / continuation_tag
+            / f"line_{line:04d}"
+        )
         directory.mkdir(parents=True, exist_ok=True)
-        path = directory / f"{_safe(name)}_{len(self.index):06d}.npz"
+        path = directory / f"{_safe(symbol)}_{_safe(name)}_{len(self.index):06d}.npz"
         if kind == "sparse":
             sp.save_npz(path, value.tocsr())
             shape, nnz = list(value.shape), int(value.nnz)
@@ -122,12 +254,17 @@ class MatrixTracer:
             "path": str(path.relative_to(self.root)),
             "kind": kind,
             "name": name,
-            "function": frame.f_code.co_name,
+            "function": function,
             "source": str(Path(frame.f_code.co_filename).resolve()),
             "line": line,
             "shape": shape,
             "nnz": nnz,
             "context": self._context(frame),
+            "continuation_tag": continuation_tag,
+            "theory_symbol": theory["symbol"],
+            "theory_branch": theory["branch"],
+            "theory_section": theory["section"],
+            "theory_description": theory["description"],
         })
 
     def dispatch(self, frame, event, arg):
@@ -170,6 +307,63 @@ def copy_static_design(design_dir: Path, outdir: Path) -> None:
         if path.is_file() and path.suffix in {".npz", ".json", ".csv"}:
             shutil.copy2(path, target / path.name)
 
+
+_SECTION_ORDER = [
+    "sec0_static_design", "sec1_frequency_loop", "sec6_preconditioner",
+    "sec7_sparse_lu", "gain_side_khat", "gain_side_floquet", "unmapped",
+]
+
+
+def write_matrix_catalog(trace_root: Path, index: list[dict[str, Any]]) -> Path:
+    """Human-readable reference: what each archived matrix IS, grouped by
+    theory section, so a reader opens this first instead of guessing from
+    raw function/line-number folder names."""
+    by_section: dict[str, list[dict[str, Any]]] = {}
+    for entry in index:
+        by_section.setdefault(entry["theory_section"], []).append(entry)
+
+    lines = [
+        "# Matrix archive catalog",
+        "",
+        "Generated by `scripts/run_gain_map_column_matrices.py`. Maps each "
+        "archived `.npz` to the symbol/equation it plays in the pump "
+        "harmonic-balance theory `R(X;lambda) = D X + N(X) - lambda S = 0`. "
+        "`pump/` matrices are on that equation directly; `gain_signal/` "
+        "matrices are the separate Floquet signal/gain solve, not covered "
+        "by that write-up.",
+        "",
+    ]
+    for section in _SECTION_ORDER:
+        entries = by_section.pop(section, [])
+        if not entries:
+            continue
+        by_symbol: dict[str, list[dict[str, Any]]] = {}
+        for e in entries:
+            by_symbol.setdefault(e["theory_symbol"] or "?", []).append(e)
+        lines.append(f"## {section}")
+        lines.append("")
+        for symbol, items in by_symbol.items():
+            lines.append(f"### `{symbol}` -- {items[0]['theory_description']}")
+            lines.append("")
+            lines.append(
+                f"- captured: {len(items)}x, from "
+                f"`{items[0]['source']}` (`{items[0]['function']}`)"
+            )
+            lines.append(f"- branch: `{items[0]['theory_branch']}`")
+            lines.append(f"- example: `{items[0]['path']}`")
+            shapes = sorted({tuple(e["shape"]) for e in items})
+            lines.append(f"- shape(s) seen: {shapes}")
+            lines.append("")
+    # Anything left in by_section is a bug (section not in _SECTION_ORDER).
+    for section, entries in by_section.items():
+        lines.append(f"## {section} (unlisted section, add to _SECTION_ORDER)")
+        lines.append(f"- {len(entries)} entries")
+        lines.append("")
+
+    out = trace_root / "matrix_catalog.md"
+    out.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return out
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--design-dir", type=Path, default=ROOT / "designs" / "ipm_2c_fixed")
@@ -188,6 +382,12 @@ def main() -> int:
     outdir.mkdir(parents=True, exist_ok=True)
     copy_static_design(args.design_dir.resolve(), outdir)
     trace_root = outdir / "matrix_trace"
+    if trace_root.exists():
+        # Rerunning at the same --outdir must not leave stale matrices from a
+        # prior scheme/run mixed into the new archive (matrix_index.json is
+        # rewritten fresh every run, but the raw .npz tree was never cleared,
+        # so old orphaned files silently accumulated alongside new ones).
+        shutil.rmtree(trace_root)
     tracer = MatrixTracer(trace_root)
     map_args = [
         "--executor", "inprocess", "--mode", "warmstart", "--traversal", "column",
@@ -215,10 +415,12 @@ def main() -> int:
             "save_errors": tracer._save_errors,
             "matrices": tracer.index,
         }, indent=2), encoding="utf-8")
+        catalog_path = write_matrix_catalog(trace_root, tracer.index)
     print(f"matrix_archive={outdir}")
     print(f"matrix_count={len(tracer.index)}")
     print(f"matrix_save_errors={tracer._save_errors}")
     print(f"matrix_index={trace_root / 'matrix_index.json'}")
+    print(f"matrix_catalog={catalog_path}")
     return int(rc)
 
 if __name__ == "__main__":
