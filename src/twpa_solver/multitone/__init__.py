@@ -2,6 +2,7 @@
 
 from twpa_solver.multitone.basis import (
     MultiToneBasis,
+    REAL_RECONSTRUCTION_FACTOR,
     ToneIndex,
     build_lattice_basis,
     build_three_tone_basis,
@@ -48,6 +49,7 @@ from twpa_solver.multitone.compression_curve import (
 
 __all__ = [
     "MultiToneBasis",
+    "REAL_RECONSTRUCTION_FACTOR",
     "ToneIndex",
     "build_lattice_basis",
     "build_three_tone_basis",

@@ -8,6 +8,9 @@ from typing import Iterable
 import numpy as np
 
 
+REAL_RECONSTRUCTION_FACTOR = 2.0
+
+
 @dataclass(frozen=True, order=True)
 class ToneIndex:
     """Integer lattice coordinate for ``h * omega_p + q * delta``."""
@@ -140,7 +143,7 @@ class MultiToneBasis:
             "delta": self.delta,
             "n_p": self.n_p,
             "n_delta": self.n_delta,
-            "real_reconstruction_factor": 2,
+            "real_reconstruction_factor": REAL_RECONSTRUCTION_FACTOR,
             "phase_convention": "exp_plus_i_(h_theta_p_plus_q_theta_delta)",
         }
 
@@ -160,7 +163,10 @@ class MultiToneBasis:
     def synthesize(self, X: np.ndarray) -> np.ndarray:
         """Synthesize ``2 Re sum(X_v exp(i theta_v))`` on the flat torus."""
         spectrum = self.scatter_signed_spectrum(X)
-        waveform = np.fft.ifft2(spectrum, axes=(0, 1)) * (self.n_p * self.n_delta)
+        waveform = (
+            np.fft.ifft2(spectrum, axes=(0, 1))
+            * (self.n_p * self.n_delta)
+        )
         return np.asarray(waveform.real.reshape(self.n_p * self.n_delta, -1), dtype=float)
 
     def gather_positive_modes(self, spectrum: np.ndarray) -> np.ndarray:
