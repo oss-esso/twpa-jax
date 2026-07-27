@@ -50,7 +50,10 @@ def extract_port_waves(
                 * omega
                 * X_full[row, node]
             )
-            current = currents[row, node]
+            # The KCL value is the Norton source current.  The port resistor
+            # itself carries V/Z0, so the current entering the network is the
+            # source current minus that resistor current.
+            current = currents[row, node] - voltage / z0_ohm
             a, b = port_waves(voltage, current, z0_ohm)
             key = (tone, int(port))
             values["a"][key] = complex(a)

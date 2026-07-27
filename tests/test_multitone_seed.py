@@ -3,7 +3,7 @@ from __future__ import annotations
 import numpy as np
 import math
 
-from tests.test_multitone_physics import _jpa, _pump
+from tests.test_multitone_physics import _basis, _jpa, _pump, _pump_source
 from twpa_solver.multitone.basis import build_three_tone_basis
 from twpa_solver.multitone.problem import FullMultiToneProblem
 from twpa_solver.multitone.source import AffineSourcePath, MultiToneDrive
@@ -45,12 +45,8 @@ def test_real_floquet_seed_warm_starts_finite_signal_sweep() -> None:
     circuit, metadata = _jpa()
     pump_problem, pump_state, _solution, khat = _pump(circuit, metadata)
     omega_p = 2.0 * math.pi * 4.75001e9
-    basis = build_three_tone_basis(omega_p, 2.0 * math.pi * 0.25001e9)
-    pump_source = MultiToneDrive(
-        basis.pump_tone,
-        circuit.port_to_index[1],
-        pump_problem.pump_current_a,
-    ).to_coeffs(basis, circuit.C.shape[0])
+    basis = _basis(4.5)
+    pump_source = _pump_source(pump_problem, basis)
     floquet_response = {}
     for node in range(circuit.C.shape[0]):
         result = solve_gain_one_schur(
@@ -74,7 +70,7 @@ def test_real_floquet_seed_warm_starts_finite_signal_sweep() -> None:
         floquet_response[0][node] = result.vout_on / (1j * 2.0 * math.pi * 4.5e9)
     currents = np.geomspace(1e-12, 1e-10, 15)
     seed = promote_pump_solution(
-        pump_state, PumpBasis([1], "dense_real", omega_p), basis
+        pump_state, PumpBasis([1, 3, 5], "dense_real", omega_p), basis
     ) + seed_from_floquet(
         basis,
         floquet_response,
