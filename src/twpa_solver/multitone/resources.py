@@ -56,7 +56,13 @@ def estimate(
             order = int(tone_orders(tone))
             sector_sizes[order] = sector_sizes.get(order, 0) + 1
         matrix_dimension = 2 * max(sector_sizes.values()) * n_retained
-    elif preconditioner not in {"none", "linear", "mean_tangent", "real_coupled_fast"}:
+    elif preconditioner not in {
+        "none",
+        "linear",
+        "mean_tangent",
+        "spectral_coupled",
+        "real_coupled_fast",
+    }:
         raise ValueError(f"unknown preconditioner {preconditioner!r}")
     predicted_factor_nnz = matrix_dimension * max(1, min(matrix_dimension, 2 * n_branches + 3))
     checkpoint = coefficient_state

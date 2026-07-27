@@ -7,15 +7,22 @@ from typing import Any
 
 import numpy as np
 
+from twpa_solver.core import CircuitMatrices
 from twpa_solver.core.linear import (
     dynamic_block,
     port_s_from_unit_current_response,
     port_waves,
 )
-from twpa_solver.multitone.basis import REAL_RECONSTRUCTION_FACTOR
+from twpa_solver.multitone.basis import (
+    REAL_RECONSTRUCTION_FACTOR,
+    MultiToneBasis,
+    ToneIndex,
+)
 
 
-def _port_current_coefficients(X_full, basis, circuit):
+def _port_current_coefficients(
+    X_full: np.ndarray, basis: MultiToneBasis, circuit: CircuitMatrices
+) -> np.ndarray:
     """Return physical port currents from the multitone KCL residual."""
     waveform = basis.synthesize(X_full)
     phase = (circuit.Bphi.T @ waveform.T).T
@@ -32,8 +39,8 @@ def _port_current_coefficients(X_full, basis, circuit):
 
 def extract_port_waves(
     X_full: np.ndarray,
-    basis,
-    circuit,
+    basis: MultiToneBasis,
+    circuit: CircuitMatrices,
     ports: list[int] | tuple[int, ...],
     z0_ohm: float = 50.0,
 ) -> dict[str, Any]:
@@ -65,10 +72,10 @@ def extract_port_waves(
 
 def tone_s21(
     X_full: np.ndarray,
-    basis,
-    circuit,
+    basis: MultiToneBasis,
+    circuit: CircuitMatrices,
     *,
-    signal_tone,
+    signal_tone: ToneIndex,
     source_port: int,
     out_port: int,
     source_current_a: float,
@@ -92,7 +99,9 @@ def tone_s21(
     )
 
 
-def junction_diagnostics(X_full: np.ndarray, basis, circuit) -> list[dict[str, float]]:
+def junction_diagnostics(
+    X_full: np.ndarray, basis: MultiToneBasis, circuit: CircuitMatrices
+) -> list[dict[str, float]]:
     """Return finite-torus phase and cosine diagnostics per junction."""
     waveform = basis.synthesize(X_full)
     phase = (circuit.Bphi.T @ waveform.T).T / circuit.phi0
@@ -106,7 +115,9 @@ def junction_diagnostics(X_full: np.ndarray, basis, circuit) -> list[dict[str, f
     ]
 
 
-def power_balance(X_full: np.ndarray, basis, circuit) -> dict[str, float]:
+def power_balance(
+    X_full: np.ndarray, basis: MultiToneBasis, circuit: CircuitMatrices
+) -> dict[str, float]:
     """Compute real-power and photon-flux balance diagnostics."""
     waveform = basis.synthesize(X_full)
     derivative = np.zeros_like(waveform)

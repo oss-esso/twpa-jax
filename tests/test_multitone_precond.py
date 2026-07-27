@@ -52,3 +52,9 @@ def test_resource_guard_rejects_oversized_sector_request() -> None:
     resource = estimate(full.basis, full.grid, 10_000, full.nb, "floquet_sector")
     with pytest.raises(ResourceLimitExceeded):
         guard(resource, 1e-12)
+
+
+def test_resource_estimate_accepts_supported_spectral_preconditioner() -> None:
+    full, _ = _problems()
+    resource = estimate(full.basis, full.grid, 10, full.nb, "spectral_coupled")
+    assert resource.preconditioner == "spectral_coupled"
