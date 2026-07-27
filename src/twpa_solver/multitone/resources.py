@@ -40,7 +40,9 @@ def estimate(
     """Estimate memory from basis/grid dimensions without allocating arrays."""
     n_tones = int(basis.n_tones)
     n_torus = int(basis.n_p) * int(basis.n_delta)
-    n_grid_nodes = int(getattr(grid, "n", getattr(grid, "n_nodes", 0)))
+    n_grid_nodes = int(
+        getattr(grid, "n", getattr(grid, "n_nodes", n_retained))
+    )
     if n_grid_nodes <= 0 or n_retained <= 0 or n_branches < 0:
         raise ValueError("grid nodes, retained nodes, and branch count are invalid")
     coefficient_state = 16 * n_tones * n_retained
