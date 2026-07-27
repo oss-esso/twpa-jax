@@ -104,15 +104,51 @@ def junction_diagnostics(X_full: np.ndarray, basis, circuit) -> list[dict[str, f
 
 
 def power_balance(X_full: np.ndarray, basis, circuit) -> dict[str, float]:
-    """Compute a conservative stored/dissipated power diagnostic."""
+    """Compute real-power and photon-flux balance diagnostics."""
     waveform = basis.synthesize(X_full)
-    dissipation = float(np.mean(np.sum(waveform * (waveform @ circuit.G.T), axis=1)))
-    total = float(np.mean(np.sum(waveform * (waveform @ circuit.K.T), axis=1)))
-    relative = abs(dissipation) / max(abs(total), 1e-30)
+    derivative = np.zeros_like(waveform)
+    for row, tone in enumerate(basis.tones):
+        coefficient = np.zeros_like(X_full)
+        coefficient[row] = 1j * basis.omegas[row] * X_full[row]
+        derivative += basis.synthesize(coefficient)
+    acceleration = np.zeros_like(waveform)
+    for row, tone in enumerate(basis.tones):
+        coefficient = np.zeros_like(X_full)
+        coefficient[row] = -(basis.omegas[row] ** 2) * X_full[row]
+        acceleration += basis.synthesize(coefficient)
+    phase = (circuit.Bphi.T @ waveform.T).T
+    nonlinear = circuit.Bphi @ (
+        circuit.Ic[None, :] * np.sin(phase / circuit.phi0)
+    ).T
+    internal = (
+        (circuit.C @ acceleration.T).T
+        + (circuit.G @ derivative.T).T
+        + (circuit.K @ waveform.T).T
+        + nonlinear.T
+    )
+    supplied_power = float(np.mean(np.sum(derivative * internal, axis=1)))
+    dissipation = float(
+        np.mean(np.sum(derivative * (circuit.G @ derivative.T).T, axis=1))
+    )
+    reactive_scale = float(np.mean(np.sum(np.abs(derivative * internal), axis=1)))
+    relative = abs(supplied_power - dissipation) / max(
+        reactive_scale, abs(dissipation), 1e-30
+    )
+    nonlinear_coeffs = basis.project(nonlinear.T)
+    photon_terms = []
+    for row, omega in enumerate(basis.omegas):
+        power = 2.0 * np.real(
+            (1j * omega * X_full[row]) @ np.conj(nonlinear_coeffs[row])
+        )
+        photon_terms.append(float(np.sum(power) / omega))
+    photon_flux = float(np.sum(photon_terms))
+    photon_scale = float(np.sum(np.abs(photon_terms)))
     return {
+        "supplied_power": supplied_power,
         "dissipated_power": dissipation,
-        "stored_linear_energy_proxy": total,
         "power_balance_rel_err": relative,
+        "manley_rowe_photon_flux": photon_flux,
+        "manley_rowe_rel_err": abs(photon_flux) / max(photon_scale, 1e-30),
     }
 
 
