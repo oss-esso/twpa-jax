@@ -6,6 +6,7 @@ import pytest
 
 from scripts.run_compression import (
     _build_multitone_basis,
+    _interpolate_p1db_current,
     _resolve_attenuation,
     build_parser,
     main,
@@ -35,6 +36,14 @@ def test_multitone_preconditioner_defaults_exact_and_accepts_sector() -> None:
 def test_signal_frequency_is_required() -> None:
     with pytest.raises(SystemExit):
         build_parser().parse_args(["--output-dir", "unused"])
+
+
+def test_p1db_interpolation_is_logarithmic_in_current() -> None:
+    points = [
+        {"signal_current_a": 1.0e-9, "compression_db": 0.5, "status": "VALID_SOLVED"},
+        {"signal_current_a": 1.0e-8, "compression_db": 1.5, "status": "VALID_SOLVED"},
+    ]
+    assert _interpolate_p1db_current(points) == pytest.approx(10.0 ** -8.5)
 
 
 def test_no_gain_operating_point_suppresses_compression(tmp_path) -> None:

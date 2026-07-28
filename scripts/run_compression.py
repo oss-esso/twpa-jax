@@ -89,6 +89,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--out-port", type=int)
     parser.add_argument("--diagnostic-port", type=int)
     parser.add_argument("--attenuation-db", type=float, default=None)
+    parser.add_argument("--z0-ohm", type=float, default=50.0)
     parser.add_argument("--signal-current-min-a", type=float, default=1e-12)
     parser.add_argument("--signal-current-max-a", type=float, default=1e-9)
     parser.add_argument("--recovery", choices=("plain", "ladder"), default="ladder")
@@ -174,6 +175,29 @@ def _build_multitone_basis(
             f"missing={missing_modes}"
         )
     return basis
+
+
+def _current_to_dbm(current_a: float, z0_ohm: float, attenuation_db: float) -> float:
+    power_w = current_a * current_a * z0_ohm / 2.0
+    return 10.0 * math.log10(power_w / 1.0e-3) + attenuation_db
+
+
+def _interpolate_p1db_current(points: list[dict[str, object]]) -> float | None:
+    valid = [
+        point
+        for point in points
+        if point["status"] == "VALID_SOLVED"
+        and np.isfinite(float(point["compression_db"]))
+    ]
+    for left, right in zip(valid, valid[1:]):
+        c_left = float(left["compression_db"])
+        c_right = float(right["compression_db"])
+        if c_left <= 1.0 <= c_right and c_right > c_left:
+            fraction = (1.0 - c_left) / (c_right - c_left)
+            log_left = math.log10(float(left["signal_current_a"]))
+            log_right = math.log10(float(right["signal_current_a"]))
+            return 10.0 ** (log_left + fraction * (log_right - log_left))
+    return None
 
 
 def _solve_compression(args: argparse.Namespace) -> tuple[list[dict[str, float]], dict[str, np.ndarray], dict[str, object]]:
@@ -317,6 +341,9 @@ def _solve_compression(args: argparse.Namespace) -> tuple[list[dict[str, float]]
             gain_db = float("nan")
         points.append({
             "signal_current_a": float(current),
+            "signal_power_dbm": _current_to_dbm(
+                float(current), args.z0_ohm, attenuation_db
+            ),
             "gain_db": gain_db,
             "gain_vs_off_db": gain_db - pump_off_gain_db,
             "compression_db": float(reference_gain - gain_db) if reference_gain is not None and np.isfinite(gain_db) else float("nan"),
@@ -331,6 +358,12 @@ def _solve_compression(args: argparse.Namespace) -> tuple[list[dict[str, float]]
     if no_gain:
         for point in points:
             point["compression_db"] = float("nan")
+    p1db_current_a = None if no_gain else _interpolate_p1db_current(points)
+    p1db_dbm = (
+        _current_to_dbm(p1db_current_a, args.z0_ohm, attenuation_db)
+        if p1db_current_a is not None
+        else None
+    )
     summary_status = (
         "NO_GAIN_AT_OPERATING_POINT"
         if no_gain
@@ -356,7 +389,9 @@ def _solve_compression(args: argparse.Namespace) -> tuple[list[dict[str, float]]
         "small_signal_gain_db": small_signal_gain_db,
         "small_signal_gain_vs_off_db": float(points[0]["gain_vs_off_db"]),
         "pump_off_gain_db": pump_off_gain_db,
-        "p1db": None,
+        "p1db": p1db_dbm,
+        "p1db_signal_current_a": p1db_current_a,
+        "p1db_input_dbm": p1db_dbm,
         "message": (
             f"Small-signal gain {small_signal_gain_db:.6g} dB is below the "
             "3 dB compression-study threshold; P1dB is not reported."
