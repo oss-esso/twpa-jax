@@ -20,7 +20,7 @@ from twpa_solver.multitone.basis import (
     build_three_tone_basis,
 )
 from twpa_solver.multitone.compression import solve_signal_power_point
-from twpa_solver.multitone.observables import tone_s21
+from twpa_solver.multitone.observables import spatial_profiles, tone_s21
 from twpa_solver.multitone.preconditioners import (
     MULTITONE_PRECONDITIONERS,
     resolve_multitone_preconditioner,
@@ -97,6 +97,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--signal-substep-min-db", type=float, default=0.01)
     parser.add_argument("--signal-continuation-deadline-s", type=float, default=0.0)
     parser.add_argument("--signal-arclength-recovery", action="store_true")
+    parser.add_argument(
+        "--spatial-profiles",
+        action="store_true",
+        help="Write branch profiles at small, mid, and near-P1dB signal powers.",
+    )
     parser.add_argument(
         "--multitone-preconditioner",
         choices=MULTITONE_PRECONDITIONERS,
@@ -200,7 +205,14 @@ def _interpolate_p1db_current(points: list[dict[str, object]]) -> float | None:
     return None
 
 
-def _solve_compression(args: argparse.Namespace) -> tuple[list[dict[str, float]], dict[str, np.ndarray], dict[str, object]]:
+def _solve_compression(
+    args: argparse.Namespace,
+) -> tuple[
+    list[dict[str, float]],
+    dict[str, np.ndarray],
+    dict[str, object],
+    list[dict[str, object]],
+]:
     circuit, metadata, circuit_source = _load_source(args)
     attenuation_db, attenuation_source = _resolve_attenuation(args)
     source_port = int(args.source_port or 1)
@@ -406,6 +418,17 @@ def _solve_compression(args: argparse.Namespace) -> tuple[list[dict[str, float]]
         })
         if index == len(currents) - 1:
             states["last"] = state
+        if solved.status == "VALID_SOLVED":
+            if index == 0:
+                states["zero_signal"] = state
+            if index == len(currents) // 2:
+                states["mid"] = state
+            if (
+                "p1db" not in states
+                and np.isfinite(points[-1]["compression_db"])
+                and points[-1]["compression_db"] >= 1.0
+            ):
+                states["p1db"] = state
     small_signal_gain_db = float(points[0]["gain_db"]) if points else float("nan")
     no_gain = not np.isfinite(small_signal_gain_db) or small_signal_gain_db < 3.0
     if no_gain:
@@ -457,12 +480,19 @@ def _solve_compression(args: argparse.Namespace) -> tuple[list[dict[str, float]]
         "recovery": args.recovery,
         "basis": basis.to_metadata(),
     }
-    return points, states, summary
+    spatial_rows: list[dict[str, object]] = []
+    if args.spatial_profiles:
+        for label in ("zero_signal", "mid", "p1db"):
+            if label not in states:
+                continue
+            for row in spatial_profiles(states[label], basis, circuit):
+                spatial_rows.append({"operating_point": label, **row})
+    return points, states, summary, spatial_rows
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    points, states, summary = _solve_compression(args)
+    points, states, summary, spatial_rows = _solve_compression(args)
     summary.update({
         "multitone_basis": args.multitone_basis,
         "n_signal_power": args.n_signal_power,
@@ -473,7 +503,14 @@ def main(argv: list[str] | None = None) -> int:
     })
     if args.summary_json:
         args.summary_json.write_text(json.dumps(summary, indent=2), encoding="utf-8")
-    write_compression_outputs(args.output_dir, points, summary=summary, states=states, save_states=args.save_states)
+    write_compression_outputs(
+        args.output_dir,
+        points,
+        summary=summary,
+        states=states,
+        save_states=args.save_states,
+        spatial_rows=spatial_rows if args.spatial_profiles else None,
+    )
     return 0
 
 

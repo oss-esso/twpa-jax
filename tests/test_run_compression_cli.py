@@ -149,3 +149,10 @@ def test_run_compression_smoke_writes_artifacts(tmp_path) -> None:
     assert "signal_s21_real" in points
     assert "pump_s21_real" in points
     assert "idler_s21_real" in points
+
+
+def test_spatial_profile_flag_is_explicit() -> None:
+    args = build_parser().parse_args(
+        ["--output-dir", "unused", "--signal-ghz", "4.5"]
+    )
+    assert args.spatial_profiles is False

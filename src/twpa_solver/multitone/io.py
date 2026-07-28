@@ -18,6 +18,7 @@ def write_compression_outputs(
     summary: dict[str, Any] | None = None,
     states: dict[str, np.ndarray] | None = None,
     save_states: str = "none",
+    spatial_rows: list[dict[str, Any]] | None = None,
 ) -> Path:
     """Write the stable compression artifact set and return its directory."""
     destination = Path(outdir)
@@ -39,7 +40,7 @@ def write_compression_outputs(
     if save_states not in {"none", "last", "selected", "all"}:
         raise ValueError(f"unknown save_states={save_states!r}")
     if states and save_states != "none":
-        selected = states if save_states == "all" else {key: value for key, value in states.items() if key in {"last", "zero_signal", "p1db"}}
+        selected = states if save_states == "all" else {key: value for key, value in states.items() if key in {"last", "zero_signal", "mid", "p1db"}}
         for name, state in selected.items():
             value = np.asarray(state)
             np.savez_compressed(
@@ -47,4 +48,12 @@ def write_compression_outputs(
                 X_real=np.asarray(value.real, dtype=np.float32),
                 X_imag=np.asarray(value.imag, dtype=np.float32),
             )
+    if spatial_rows is not None:
+        columns = sorted({key for row in spatial_rows for key in row})
+        with (destination / "spatial_profiles.csv").open(
+            "w", newline="", encoding="utf-8"
+        ) as handle:
+            writer = csv.DictWriter(handle, fieldnames=columns)
+            writer.writeheader()
+            writer.writerows(spatial_rows)
     return destination
