@@ -53,7 +53,11 @@ def build_parser() -> argparse.ArgumentParser:
     source.add_argument("--circuit-dir", type=Path)
     parser.add_argument("--pump-solution-dir", type=Path)
     parser.add_argument("--pump-freq-ghz", type=float, default=4.75001)
-    parser.add_argument("--signal-ghz", type=float, default=4.5)
+    parser.add_argument(
+        "--signal-ghz",
+        type=float,
+        help="Signal frequency in GHz (default: pump frequency).",
+    )
     parser.add_argument("--pump-current-a", type=float)
     parser.add_argument(
         "--pump-current-jc-scale",
@@ -172,6 +176,33 @@ def _solve_compression(args: argparse.Namespace) -> tuple[list[dict[str, float]]
         basis, circuit.node_count
     )
     currents = np.geomspace(args.signal_current_min_a, args.signal_current_max_a, max(args.n_signal_power, 1))
+    pump_off_path = AffineSourcePath.signal_turn_on(
+        np.zeros_like(pump_source),
+        signal_unit * float(currents[0]),
+    )
+    pump_off_problem = FullMultiToneProblem(
+        circuit,
+        basis,
+        pump_off_path,
+        preconditioner=selected_preconditioner,
+    )
+    pump_off_state, pump_off_report = HarmonicNewtonKrylovSolver(settings).solve_one(
+        pump_off_problem,
+        np.zeros_like(pump_seed),
+        1.0,
+    )
+    if not pump_off_report.converged:
+        raise RuntimeError("pump-off small-signal reference did not converge")
+    pump_off_s21 = tone_s21(
+        pump_off_state,
+        basis,
+        circuit,
+        signal_tone=basis.signal_tone,
+        source_port=source_port,
+        out_port=out_port,
+        source_current_a=float(currents[0]),
+    )
+    pump_off_gain_db = float(20.0 * np.log10(max(abs(pump_off_s21), 1e-300)))
     states: dict[str, np.ndarray] = {}
     points: list[dict[str, float]] = []
     previous = pump_seed
@@ -200,13 +231,26 @@ def _solve_compression(args: argparse.Namespace) -> tuple[list[dict[str, float]]
         points.append({
             "signal_current_a": float(current),
             "gain_db": gain_db,
+            "gain_vs_off_db": gain_db - pump_off_gain_db,
             "compression_db": float(reference_gain - gain_db) if reference_gain is not None and np.isfinite(gain_db) else float("nan"),
             "status": status,
         })
         if index == len(currents) - 1:
             states["last"] = state
+    small_signal_gain_db = float(points[0]["gain_db"]) if points else float("nan")
+    no_gain = not np.isfinite(small_signal_gain_db) or small_signal_gain_db < 3.0
+    if no_gain:
+        for point in points:
+            point["compression_db"] = float("nan")
+    summary_status = (
+        "NO_GAIN_AT_OPERATING_POINT"
+        if no_gain
+        else "VALID_SOLVED"
+        if all(point["status"] == "VALID_SOLVED" for point in points)
+        else "CHECK"
+    )
     summary = {
-        "status": "VALID_SOLVED" if points and all(point["status"] == "VALID_SOLVED" for point in points) else "CHECK",
+        "status": summary_status,
         "stability_status": "NOT_CHECKED",
         "circuit_source": circuit_source,
         "pump_freq_ghz": args.pump_freq_ghz,
@@ -223,6 +267,16 @@ def _solve_compression(args: argparse.Namespace) -> tuple[list[dict[str, float]]
             if args.attenuation_db is not None
             else float(default_loss_model().attenuation_db(args.pump_freq_ghz))
         ),
+        "small_signal_gain_db": small_signal_gain_db,
+        "small_signal_gain_vs_off_db": float(points[0]["gain_vs_off_db"]),
+        "pump_off_gain_db": pump_off_gain_db,
+        "p1db": None,
+        "message": (
+            f"Small-signal gain {small_signal_gain_db:.6g} dB is below the "
+            "3 dB compression-study threshold; P1dB is not reported."
+            if no_gain
+            else None
+        ),
         "multitone_preconditioner": selected_preconditioner,
         "basis": basis.to_metadata(),
     }
@@ -231,6 +285,8 @@ def _solve_compression(args: argparse.Namespace) -> tuple[list[dict[str, float]]
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if args.signal_ghz is None:
+        args.signal_ghz = args.pump_freq_ghz
     points, states, summary = _solve_compression(args)
     summary.update({
         "multitone_basis": args.multitone_basis,
