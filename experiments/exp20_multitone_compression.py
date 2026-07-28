@@ -17,6 +17,7 @@ class Case:
     pump_ghz: float
     pump_current_a: float
     signal_ghz: float
+    pump_port: int
     out_port: int
     signal_max_a: float
     selected_sidebands: int
@@ -25,9 +26,9 @@ class Case:
 
 
 CASES = (
-    Case("jpa", ("--fixture", "jpa"), "outputs/exp14_jpa_odd10_scale2/pump", 4.75001, 1.13e-8, 4.75, 1, 3e-8, 2, 13.305111, 13.302331),
-    Case("jtwpa", ("--fixture", "jtwpa"), "outputs/exp14_jtwpa_odd10_scale2/pump", 7.12, 3.7e-6, 6.6, 2, 3e-7, 10, 27.541036, 27.5402),
-    Case("fqjtwpa", ("--fixture", "fqjtwpa"), "outputs/exp14_fqjtwpa_odd10_scale2/pump", 7.9, 2.2e-6, 7.4, 2, 3e-7, 6, 28.534877, 28.5367),
+    Case("jpa", ("--fixture", "jpa"), "outputs/exp14_jpa_odd10_scale2/pump", 4.75001, 1.13e-8, 4.75, 1, 1, 3e-8, 2, 13.305111, 13.302331),
+    Case("jtwpa", ("--fixture", "jtwpa"), "outputs/exp14_jtwpa_odd10_scale2/pump", 7.12, 3.7e-6, 6.6, 1, 2, 3e-7, 10, 27.541036, 27.5402),
+    Case("fqjtwpa", ("--fixture", "fqjtwpa"), "outputs/exp14_fqjtwpa_odd10_scale2/pump", 7.9, 2.2e-6, 7.4, 1, 2, 3e-7, 6, 28.534877, 28.5367),
     Case(
         "2c",
         ("--circuit-dir", "outputs/ipm_python_design"),
@@ -35,6 +36,7 @@ CASES = (
         7.540816326531111,
         7.231074707853736e-6,
         7.440816326531111,
+        4,
         2,
         3e-7,
         10,
@@ -58,6 +60,7 @@ def command(case: Case, sidebands: int, outdir: Path, powers: int) -> list[str]:
         "--pump-nt", "40",
         "--signal-ghz", str(case.signal_ghz),
         "--source-port", "1",
+        "--pump-port", str(case.pump_port),
         "--out-port", str(case.out_port),
         "--n-signal-power", str(powers),
         "--signal-current-min-a", "1e-12",

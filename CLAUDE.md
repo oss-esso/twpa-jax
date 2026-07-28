@@ -45,26 +45,21 @@ branch rows; gain changed 30.71517 -> 30.58665 dB while pump depletion reached
 the multitone driver currently uses the established SciPy/SuperLU-backed
 preconditioner path, so campaign timing remains attributable to that path.
 
-The full 25-point JTWPA exp20 S=2/S=4 check took 1058 s and found
-`delta_P1dB = +4.2389 dB`, so S=2 is **not** a converged saturation basis for
-that device even though its small-signal gain is converged. The summary sets
-`basis_spotcheck_flag = true`. Consequently exp21 and exp22 use matched S=4 for
-distributed production evidence until a higher-basis check establishes a
-smaller device-specific minimum.
+Distributed sideband selection is reference-gated, not inferred from a two-point
+S=2/S=4 delta. JTWPA is non-monotone (30.7152, 24.2021, 26.5563, 27.5410 dB
+at S=2,4,6,10), so production uses S=10 against the 27.5402 dB JC reference.
+FQJTWPA uses S=6 (28.5349 dB), within 0.0019 dB of its 28.5367 dB JC reference.
+Every selected basis must independently pass same-S multitone/Floquet parity
+and the 0.2 dB JC-reference gate.
 
-FQJTWPA shows the same saturation-basis sensitivity: its full 25-point check
-took 665 s and measured `delta_P1dB(S4-S2) = -2.5792 dB`. exp20 summary keeps
-the S=2 diagnostic columns but selects S=4 into the `production_p1db_*` columns
-whenever the 0.2 dB basis flag trips.
-
-2c remains blocked on the full-node multitone reference path. Cold pump
-continuation at the earlier 7.376812 GHz point converged to lambda=0.25 and
-stalled at lambda=0.5. A retained converged Schur pump at 7.540816 GHz loads
-successfully, but adaptive full-node pump/reference correction did not finish
-one small-signal point inside a measured 604 s external bound. exp20 now pins
-that retained pump and an internal 600 s continuation deadline. Do not schedule
-the full 2c exp20-exp22 campaign until multitone Schur/reference reuse removes
-this measured per-reference blocker.
+The earlier 2c blocker was a settings/wiring mismatch, not a fold or intrinsic
+continuation wall. The gain-map pump is injected at port 4 while signal
+scattering is 1 -> 2; using port 1 for both gave a promoted-pump residual of
+sqrt(2). With `--pump-port 4`, the saved pump residual is 7.97e-12. The S=10
+Schur multitone point converged adaptively at lambda=0.25/0.625/1.0 in
+82.1/108.7/224.7 s with final coefficient residual 1.45e-14, producing
+15.9166 dB small-signal gain at 7.440816 GHz. Production circuit runs default
+to `--multitone-backend schur_cpu_mt`; fixtures retain the full backend.
 
 Running without `--run-slow` is not complete validation.
 

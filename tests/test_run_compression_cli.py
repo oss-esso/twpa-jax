@@ -29,6 +29,8 @@ def test_multitone_preconditioner_defaults_exact_and_accepts_sector() -> None:
     assert default.multitone_preconditioner == "real_coupled_fast"
     assert default.multitone_basis == "matched"
     assert default.multitone_sidebands == 2
+    assert default.multitone_backend == "auto"
+    assert default.pump_port is None
     assert sector.multitone_preconditioner == "floquet_sector"
     assert default.signal_ghz == 4.5
 
@@ -145,6 +147,8 @@ def test_run_compression_smoke_writes_artifacts(tmp_path) -> None:
     points = (tmp_path / "compression_points.csv").read_text()
     assert summary["stability_status"] == "NOT_CHECKED"
     assert summary["multitone_preconditioner"] == "real_coupled_fast"
+    assert summary["multitone_backend"] == "full"
+    assert summary["pump_port"] == 1
     assert "pump_depletion_db" in points
     assert "signal_s21_real" in points
     assert "pump_s21_real" in points

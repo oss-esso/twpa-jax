@@ -28,6 +28,10 @@ from twpa_solver.multitone.preconditioners import (
     resolve_multitone_preconditioner,
 )
 from twpa_solver.multitone.problem import FullMultiToneProblem
+from twpa_solver.multitone.schur import (
+    SchurMultiToneProblem,
+    build_multitone_schur_problem,
+)
 from twpa_solver.multitone.source import AffineSourcePath, MultiToneDrive
 from twpa_solver.multitone.io import write_compression_outputs
 from twpa_solver.pump import (
@@ -55,6 +59,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--multitone-sidebands", type=int, default=2)
     parser.add_argument("--resource-budget-gb", type=float, default=8.0)
+    parser.add_argument(
+        "--multitone-backend",
+        choices=("auto", "full", "schur_cpu_mt"),
+        default="auto",
+        help="auto selects Schur reduction for --circuit-dir and full for fixtures.",
+    )
     parser.add_argument("--save-states", choices=("none", "last", "selected", "all"), default="none")
     parser.add_argument("--signal-ghz-min", type=float)
     parser.add_argument("--signal-ghz-max", type=float)
@@ -87,6 +97,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--pump-harmonics", type=int, default=10)
     parser.add_argument("--pump-nt", type=int, default=40)
     parser.add_argument("--source-port", type=int)
+    parser.add_argument(
+        "--pump-port",
+        type=int,
+        help="Pump injection port; defaults to --source-port for fixture-style circuits.",
+    )
     parser.add_argument("--out-port", type=int)
     parser.add_argument("--diagnostic-port", type=int)
     parser.add_argument("--attenuation-db", type=float, default=None)
@@ -231,9 +246,10 @@ def _solve_compression(
     circuit, metadata, circuit_source = _load_source(args)
     attenuation_db, attenuation_source = _resolve_attenuation(args)
     source_port = int(args.source_port or 1)
+    pump_port = int(args.pump_port or source_port)
     out_port = int(args.out_port or (1 if circuit_source == "jpa" else 2))
     diagnostic_port = int(args.diagnostic_port or out_port)
-    for label, port in (("source", source_port), ("output", out_port), ("diagnostic", diagnostic_port)):
+    for label, port in (("pump", pump_port), ("source", source_port), ("output", out_port), ("diagnostic", diagnostic_port)):
         if port not in circuit.port_to_index:
             raise ValueError(f"{label} port {port} is absent from circuit ports {sorted(circuit.port_to_index)}")
     pump_sources = metadata.get("pump_sources", [])
@@ -277,7 +293,7 @@ def _solve_compression(
             C=circuit.C, G=circuit.G, K=circuit.K, Bphi=circuit.Bphi,
             branch=JosephsonBranchArray(circuit.Ic, circuit.phi0),
             grid=HarmonicGrid(np.asarray(pump_basis.modes), nt=args.pump_nt, omega=omega_p),
-            pump_node_index=circuit.port_to_index[source_port], pump_current_a=pump_current,
+            pump_node_index=circuit.port_to_index[pump_port], pump_current_a=pump_current,
         )
         pump_settings = replace(settings, preconditioner="real_coupled")
         pump_state, pump_reports = HarmonicNewtonKrylovSolver(
@@ -295,32 +311,72 @@ def _solve_compression(
     delta = omega_p - 2.0 * math.pi * args.signal_ghz * 1e9
     basis = _build_multitone_basis(args, pump_basis.modes, omega_p, delta)
     pump_seed = promote_pump_solution(pump_state, pump_basis, basis)
-    pump_source = MultiToneDrive(basis.pump_tone, circuit.port_to_index[source_port], pump_current).to_coeffs(
+    pump_source = MultiToneDrive(basis.pump_tone, circuit.port_to_index[pump_port], pump_current).to_coeffs(
         basis, circuit.node_count
     )
     signal_unit = MultiToneDrive(basis.signal_tone, circuit.port_to_index[source_port], 1.0).to_coeffs(
         basis, circuit.node_count
     )
+    selected_backend = (
+        "schur_cpu_mt"
+        if args.multitone_backend == "auto" and args.circuit_dir is not None
+        else "full"
+        if args.multitone_backend == "auto"
+        else args.multitone_backend
+    )
+    schur_partition = None
+
+    def make_problem(path: AffineSourcePath):
+        nonlocal schur_partition
+        full = FullMultiToneProblem(
+            circuit,
+            basis,
+            path,
+            preconditioner=selected_preconditioner,
+        )
+        if selected_backend == "full":
+            return full
+        if schur_partition is None:
+            reduced = build_multitone_schur_problem(
+                full,
+                list(circuit.port_to_index.values()),
+                preconditioner=selected_preconditioner,
+            )
+            schur_partition = reduced.partition
+            return reduced
+        return SchurMultiToneProblem(
+            full,
+            schur_partition,
+            preconditioner=selected_preconditioner,
+        )
+
+    def solve_seed(full_state: np.ndarray) -> np.ndarray:
+        if selected_backend == "full":
+            return full_state
+        if schur_partition is None:
+            raise RuntimeError("Schur partition has not been initialized")
+        return full_state[:, schur_partition.retained]
+
+    def observable_state(problem, state: np.ndarray) -> np.ndarray:
+        if isinstance(problem, SchurMultiToneProblem):
+            return problem.reconstruct_full(state)
+        return state
+
     currents = np.geomspace(args.signal_current_min_a, args.signal_current_max_a, max(args.n_signal_power, 1))
     pump_off_path = AffineSourcePath.signal_turn_on(
         np.zeros_like(pump_source),
         signal_unit * float(currents[0]),
     )
-    pump_off_problem = FullMultiToneProblem(
-        circuit,
-        basis,
-        pump_off_path,
-        preconditioner=selected_preconditioner,
-    )
+    pump_off_problem = make_problem(pump_off_path)
     pump_off_state, pump_off_report = HarmonicNewtonKrylovSolver(settings).solve_one(
         pump_off_problem,
-        np.zeros_like(pump_seed),
+        pump_off_problem.zeros(),
         1.0,
     )
     if not pump_off_report.converged:
         raise RuntimeError("pump-off small-signal reference did not converge")
     pump_off_s21 = tone_s21(
-        pump_off_state,
+        observable_state(pump_off_problem, pump_off_state),
         basis,
         circuit,
         signal_tone=basis.signal_tone,
@@ -329,15 +385,11 @@ def _solve_compression(
         source_current_a=float(currents[0]),
     )
     pump_off_gain_db = float(20.0 * np.log10(max(abs(pump_off_s21), 1e-300)))
-    pump_only_problem = FullMultiToneProblem(
-        circuit,
-        basis,
-        AffineSourcePath.pump_turn_on(pump_source),
-        preconditioner=selected_preconditioner,
-    )
+    pump_only_problem = make_problem(AffineSourcePath.pump_turn_on(pump_source))
+    pump_seed_solve = solve_seed(pump_seed)
     pump_only_state, pump_only_report = HarmonicNewtonKrylovSolver(settings).solve_one(
         pump_only_problem,
-        pump_seed,
+        pump_seed_solve,
         1.0,
     )
     if not pump_only_report.converged:
@@ -369,7 +421,7 @@ def _solve_compression(
                 f"{reason}"
             )
     pump_reference_s21 = tone_s21(
-        pump_only_state,
+        observable_state(pump_only_problem, pump_only_state),
         basis,
         circuit,
         signal_tone=basis.pump_tone,
@@ -379,18 +431,13 @@ def _solve_compression(
     )
     states: dict[str, np.ndarray] = {}
     points: list[dict[str, float]] = []
-    previous = pump_seed
+    previous = pump_seed_solve
     previous_previous = None
     previous_current = 0.0
     previous_previous_current = 0.0
     reference_gain = None
     for index, current in enumerate(currents):
-        base_problem = FullMultiToneProblem(
-            circuit,
-            basis,
-            AffineSourcePath.pump_turn_on(pump_source),
-            preconditioner=selected_preconditioner,
-        )
+        base_problem = make_problem(AffineSourcePath.pump_turn_on(pump_source))
         solved = solve_signal_power_point(
             base_problem,
             previous,
@@ -402,20 +449,21 @@ def _solve_compression(
             signal_current_prev_a=previous_current,
             signal_current_prevprev_a=previous_previous_current,
             recovery=args.recovery,
-            pump_seed=pump_seed,
+            pump_seed=pump_seed_solve,
             signal_substep_init_db=args.signal_substep_init_db,
             signal_substep_min_db=args.signal_substep_min_db,
             continuation_deadline_s=args.signal_continuation_deadline_s,
             arclength_recovery=args.signal_arclength_recovery,
         )
         state = solved.state
+        state_full = observable_state(base_problem, state)
         if solved.status == "VALID_SOLVED":
             signal_s21 = tone_s21(
-                state, basis, circuit, signal_tone=basis.signal_tone,
+                state_full, basis, circuit, signal_tone=basis.signal_tone,
                 source_port=source_port, out_port=out_port, source_current_a=float(current),
             )
             pump_s21 = tone_s21(
-                state,
+                state_full,
                 basis,
                 circuit,
                 signal_tone=basis.pump_tone,
@@ -424,7 +472,7 @@ def _solve_compression(
                 source_current_a=pump_current,
             )
             idler_s21 = tone_s21(
-                state,
+                state_full,
                 basis,
                 circuit,
                 signal_tone=basis.idler_tone,
@@ -466,18 +514,18 @@ def _solve_compression(
             "last_converged_signal_current_a": solved.last_converged_signal_current_a,
         })
         if index == len(currents) - 1:
-            states["last"] = state
+            states["last"] = state_full
         if solved.status == "VALID_SOLVED":
             if index == 0:
-                states["zero_signal"] = state
+                states["zero_signal"] = state_full
             if index == len(currents) // 2:
-                states["mid"] = state
+                states["mid"] = state_full
             if (
                 "p1db" not in states
                 and np.isfinite(points[-1]["compression_db"])
                 and points[-1]["compression_db"] >= 1.0
             ):
-                states["p1db"] = state
+                states["p1db"] = state_full
     small_signal_gain_db = float(points[0]["gain_db"]) if points else float("nan")
     no_gain = not np.isfinite(small_signal_gain_db) or small_signal_gain_db < 3.0
     if no_gain:
@@ -513,6 +561,7 @@ def _solve_compression(
         "pump_current_jc_scale": args.pump_current_jc_scale,
         "pump_solution_dir": str(args.pump_solution_dir) if args.pump_solution_dir else None,
         "source_port": source_port,
+        "pump_port": pump_port,
         "out_port": out_port,
         "diagnostic_port": diagnostic_port,
         "attenuation_db": attenuation_db,
@@ -538,6 +587,7 @@ def _solve_compression(
             else None
         ),
         "multitone_preconditioner": selected_preconditioner,
+        "multitone_backend": selected_backend,
         "recovery": args.recovery,
         "basis": basis.to_metadata(),
     }
