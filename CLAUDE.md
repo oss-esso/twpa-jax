@@ -5,6 +5,15 @@ is the pump/gain-map orchestrator. The solver was extracted from the `experiment
 research scripts (exp08 pump solve, exp09 gain, exp10 maps, exp14 parity), which
 now serve as validation provenance — most notes below apply to the solver modules.
 
+Run the complete test suite, including compression and distributed multitone
+physics gates, with a temporary directory outside the repository:
+
+```powershell
+python -m pytest -q -p no:cacheprovider --basetemp D:\tmp\twpa_full_slow --run-slow
+```
+
+Running without `--run-slow` is not complete validation.
+
 Module map: pump solve `twpa_solver.pump.hb` + `twpa_solver.pump`
 (`HarmonicNewtonKrylovSolver`, `NewtonKrylovSettings`, `FullPumpProblem`); pump
 basis `twpa_solver.pump.basis`; gain `twpa_solver.signal`; circuits
