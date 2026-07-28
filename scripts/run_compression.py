@@ -1,4 +1,4 @@
-"""Single-operating-point multitone compression CLI scaffold."""
+"""Run a finite-signal compression sweep at one pump operating point."""
 
 from __future__ import annotations
 
@@ -10,8 +10,9 @@ from pathlib import Path
 
 import numpy as np
 
-from twpa_solver.builders.jc_doc import build_jpa
-from twpa_solver.core import CircuitMatrices
+from twpa_solver import default_loss_model
+from twpa_solver.builders.jc_doc import build_fqjtwpa, build_jpa, build_jtwpa
+from twpa_solver.core import CircuitMatrices, load_circuit
 from twpa_solver.multitone.basis import build_three_tone_basis
 from twpa_solver.multitone.observables import tone_s21
 from twpa_solver.multitone.preconditioners import (
@@ -28,7 +29,10 @@ from twpa_solver.pump import (
     JosephsonBranchArray,
     NewtonKrylovSettings,
 )
-from twpa_solver.pump.basis import PumpBasis
+from twpa_solver.pump.basis import (
+    load_pump_basis_from_solution,
+    resolve_pump_basis,
+)
 from twpa_solver.multitone.seed import promote_pump_solution
 
 
@@ -44,10 +48,31 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--n-signal-freq", type=int, default=1)
     parser.add_argument("--signal-workers", type=int, default=1)
     parser.add_argument("--summary-json", type=Path)
-    parser.add_argument("--fixture", choices=("jpa",), default="jpa")
+    source = parser.add_mutually_exclusive_group()
+    source.add_argument("--fixture", choices=("jpa", "jtwpa", "fqjtwpa"))
+    source.add_argument("--circuit-dir", type=Path)
+    parser.add_argument("--pump-solution-dir", type=Path)
     parser.add_argument("--pump-freq-ghz", type=float, default=4.75001)
     parser.add_argument("--signal-ghz", type=float, default=4.5)
     parser.add_argument("--pump-current-a", type=float)
+    parser.add_argument(
+        "--pump-current-jc-scale",
+        type=float,
+        default=1.0,
+        help=(
+            "Multiplier applied to the pump current (default: 1.0, the "
+            "validated convention in docs/pump_current_conversions.tex)."
+        ),
+    )
+    parser.add_argument("--pump-mode-policy", default="positive_odd_jc")
+    parser.add_argument("--pump-mode-count", type=int, default=10)
+    parser.add_argument("--pump-modes")
+    parser.add_argument("--pump-harmonics", type=int, default=10)
+    parser.add_argument("--pump-nt", type=int, default=40)
+    parser.add_argument("--source-port", type=int)
+    parser.add_argument("--out-port", type=int)
+    parser.add_argument("--diagnostic-port", type=int)
+    parser.add_argument("--attenuation-db", type=float, default=None)
     parser.add_argument("--signal-current-min-a", type=float, default=1e-12)
     parser.add_argument("--signal-current-max-a", type=float, default=1e-9)
     parser.add_argument(
@@ -58,21 +83,44 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _solve_jpa(args: argparse.Namespace) -> tuple[list[dict[str, float]], dict[str, np.ndarray], dict[str, object]]:
-    builder, metadata = build_jpa()
+def _fixture_circuit(name: str) -> tuple[CircuitMatrices, dict[str, object]]:
+    builders = {"jpa": build_jpa, "jtwpa": build_jtwpa, "fqjtwpa": build_fqjtwpa}
+    builder, metadata = builders[name]()
     arrays = builder.assemble()
-    circuit = CircuitMatrices(
-        C=arrays["C"], G=arrays["G"], K=arrays["K"], Bphi=arrays["Bphi"],
-        Ic=arrays["Ic"], port_to_index=arrays["ports"],
-    )
-    pump_current = float(args.pump_current_a or metadata["pump_sources"][0]["current_a"])
+    return CircuitMatrices(
+        C=arrays["C"],
+        G=arrays["G"],
+        K=arrays["K"],
+        Bphi=arrays["Bphi"],
+        Ic=arrays["Ic"],
+        port_to_index=arrays["ports"],
+        metadata=metadata,
+    ), metadata
+
+
+def _load_source(args: argparse.Namespace) -> tuple[CircuitMatrices, dict[str, object], str]:
+    if args.circuit_dir is not None:
+        circuit = load_circuit(args.circuit_dir)
+        return circuit, circuit.metadata, str(args.circuit_dir)
+    fixture = args.fixture or "jpa"
+    circuit, metadata = _fixture_circuit(fixture)
+    return circuit, metadata, fixture
+
+
+def _solve_compression(args: argparse.Namespace) -> tuple[list[dict[str, float]], dict[str, np.ndarray], dict[str, object]]:
+    circuit, metadata, circuit_source = _load_source(args)
+    source_port = int(args.source_port or 1)
+    out_port = int(args.out_port or (1 if circuit_source == "jpa" else 2))
+    diagnostic_port = int(args.diagnostic_port or out_port)
+    for label, port in (("source", source_port), ("output", out_port), ("diagnostic", diagnostic_port)):
+        if port not in circuit.port_to_index:
+            raise ValueError(f"{label} port {port} is absent from circuit ports {sorted(circuit.port_to_index)}")
+    pump_sources = metadata.get("pump_sources", [])
+    default_current = pump_sources[0].get("current_a") if pump_sources else None
+    if args.pump_current_a is None and default_current is None:
+        raise ValueError("--pump-current-a is required when circuit metadata has no pump source")
+    pump_current = float(args.pump_current_a or default_current) * float(args.pump_current_jc_scale)
     omega_p = 2.0 * math.pi * args.pump_freq_ghz * 1e9
-    pump_problem = FullPumpProblem(
-        C=circuit.C, G=circuit.G, K=circuit.K, Bphi=circuit.Bphi,
-        branch=JosephsonBranchArray(circuit.Ic, circuit.phi0),
-        grid=HarmonicGrid(np.asarray([1]), nt=8, omega=omega_p),
-        pump_node_index=circuit.port_to_index[1], pump_current_a=pump_current,
-    )
     selected_preconditioner = resolve_multitone_preconditioner(
         args.multitone_preconditioner
     )
@@ -88,17 +136,39 @@ def _solve_jpa(args: argparse.Namespace) -> tuple[list[dict[str, float]], dict[s
         compute_time_residual=False, verbose=False,
         continuation_predictor="none", jvp_mode="aft",
     )
-    pump_settings = replace(settings, preconditioner="real_coupled")
-    pump_state, pump_reports = HarmonicNewtonKrylovSolver(
-        pump_settings
-    ).solve_continuation(pump_problem, continuation_steps=4)
+    if args.pump_solution_dir is not None:
+        pump_state, pump_basis = load_pump_basis_from_solution(
+            args.pump_solution_dir,
+            fallback_omega_p=omega_p,
+        )
+        pump_reports: list[object] = []
+        pump_converged = True
+    else:
+        pump_basis = resolve_pump_basis(
+            policy=args.pump_mode_policy,
+            omega_p=omega_p,
+            harmonics=args.pump_harmonics,
+            mode_count=args.pump_mode_count,
+            explicit_modes=args.pump_modes,
+            design_meta=metadata,
+        )
+        pump_problem = FullPumpProblem(
+            C=circuit.C, G=circuit.G, K=circuit.K, Bphi=circuit.Bphi,
+            branch=JosephsonBranchArray(circuit.Ic, circuit.phi0),
+            grid=HarmonicGrid(np.asarray(pump_basis.modes), nt=args.pump_nt, omega=omega_p),
+            pump_node_index=circuit.port_to_index[source_port], pump_current_a=pump_current,
+        )
+        pump_settings = replace(settings, preconditioner="real_coupled")
+        pump_state, pump_reports = HarmonicNewtonKrylovSolver(
+            pump_settings
+        ).solve_continuation(pump_problem, continuation_steps=4)
+        pump_converged = bool(pump_reports[-1].converged)
     basis = build_three_tone_basis(omega_p, omega_p - 2.0 * math.pi * args.signal_ghz * 1e9)
-    pump_basis = PumpBasis([1], "dense_real", omega_p)
     pump_seed = promote_pump_solution(pump_state, pump_basis, basis)
-    pump_source = MultiToneDrive(basis.pump_tone, circuit.port_to_index[1], pump_current).to_coeffs(
+    pump_source = MultiToneDrive(basis.pump_tone, circuit.port_to_index[source_port], pump_current).to_coeffs(
         basis, circuit.node_count
     )
-    signal_unit = MultiToneDrive(basis.signal_tone, circuit.port_to_index[1], 1.0).to_coeffs(
+    signal_unit = MultiToneDrive(basis.signal_tone, circuit.port_to_index[source_port], 1.0).to_coeffs(
         basis, circuit.node_count
     )
     currents = np.geomspace(args.signal_current_min_a, args.signal_current_max_a, max(args.n_signal_power, 1))
@@ -119,7 +189,7 @@ def _solve_jpa(args: argparse.Namespace) -> tuple[list[dict[str, float]], dict[s
         if report.converged:
             s21 = tone_s21(
                 state, basis, circuit, signal_tone=basis.signal_tone,
-                source_port=1, out_port=1, source_current_a=float(current),
+                source_port=source_port, out_port=out_port, source_current_a=float(current),
             )
             gain_db = float(20.0 * np.log10(max(abs(s21), 1e-300)))
             reference_gain = gain_db if reference_gain is None else reference_gain
@@ -138,11 +208,21 @@ def _solve_jpa(args: argparse.Namespace) -> tuple[list[dict[str, float]], dict[s
     summary = {
         "status": "VALID_SOLVED" if points and all(point["status"] == "VALID_SOLVED" for point in points) else "CHECK",
         "stability_status": "NOT_CHECKED",
-        "fixture": args.fixture,
+        "circuit_source": circuit_source,
         "pump_freq_ghz": args.pump_freq_ghz,
         "signal_ghz": args.signal_ghz,
         "pump_current_a": pump_current,
-        "pump_converged": bool(pump_reports[-1].converged),
+        "pump_converged": pump_converged,
+        "pump_current_jc_scale": args.pump_current_jc_scale,
+        "pump_solution_dir": str(args.pump_solution_dir) if args.pump_solution_dir else None,
+        "source_port": source_port,
+        "out_port": out_port,
+        "diagnostic_port": diagnostic_port,
+        "attenuation_db": (
+            float(args.attenuation_db)
+            if args.attenuation_db is not None
+            else float(default_loss_model().attenuation_db(args.pump_freq_ghz))
+        ),
         "multitone_preconditioner": selected_preconditioner,
         "basis": basis.to_metadata(),
     }
@@ -151,7 +231,7 @@ def _solve_jpa(args: argparse.Namespace) -> tuple[list[dict[str, float]], dict[s
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    points, states, summary = _solve_jpa(args)
+    points, states, summary = _solve_compression(args)
     summary.update({
         "multitone_basis": args.multitone_basis,
         "n_signal_power": args.n_signal_power,
