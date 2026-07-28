@@ -74,6 +74,11 @@ def test_sideband_matched_basis_rejects_frequency_clipping() -> None:
         build_sideband_matched_basis([1], 2, 10.0, 1.0, 10.5)
 
 
+def test_sideband_matched_basis_names_minimum_sideband_count() -> None:
+    with pytest.raises(ValueError, match=r"sidebands must be >= 2"):
+        build_sideband_matched_basis([1, 3], 1, 10.0, 1.0, 40.0)
+
+
 def test_basis_rejects_conjugate_pair_and_missing_required_tone() -> None:
     with pytest.raises(ValueError, match="conjugate"):
         MultiToneBasis(

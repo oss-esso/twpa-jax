@@ -263,8 +263,11 @@ def build_sideband_matched_basis(
         ValueError: If a requested sideband is clipped or two requests fold
             onto the same positive-frequency tone.
     """
-    if sidebands < 0:
-        raise ValueError("sidebands must be nonnegative")
+    if sidebands < 2:
+        raise ValueError(
+            "sidebands must be >= 2 so the required signal and idler tones "
+            "are both represented"
+        )
     if omega_max <= 0.0:
         raise ValueError("omega_max must be positive")
 
