@@ -4,9 +4,12 @@ from twpa_solver.multitone.basis import (
     MultiToneBasis,
     REAL_RECONSTRUCTION_FACTOR,
     ToneIndex,
+    build_sideband_matched_basis,
     build_lattice_basis,
     build_three_tone_basis,
     canonicalize,
+    covered_sidebands,
+    floquet_sideband_of,
 )
 from twpa_solver.multitone.resources import (
     ResourceEstimate,
@@ -51,6 +54,9 @@ __all__ = [
     "MultiToneBasis",
     "REAL_RECONSTRUCTION_FACTOR",
     "ToneIndex",
+    "floquet_sideband_of",
+    "covered_sidebands",
+    "build_sideband_matched_basis",
     "build_lattice_basis",
     "build_three_tone_basis",
     "canonicalize",

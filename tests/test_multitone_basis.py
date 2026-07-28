@@ -6,9 +6,12 @@ import pytest
 from twpa_solver.multitone.basis import (
     MultiToneBasis,
     ToneIndex,
+    build_sideband_matched_basis,
     build_lattice_basis,
     build_three_tone_basis,
     canonicalize,
+    covered_sidebands,
+    floquet_sideband_of,
 )
 
 
@@ -40,6 +43,35 @@ def test_canonicalize_rejects_zero_frequency() -> None:
         canonicalize(ToneIndex(0, 0), 10.0, 1.0)
 
     assert canonicalize(ToneIndex(-1, 0), 10.0, 1.0) == (ToneIndex(1, 0), True)
+
+
+def test_floquet_sideband_mapping_covers_both_signal_sectors() -> None:
+    assert floquet_sideband_of(ToneIndex(1, -1)) == 0
+    assert floquet_sideband_of(ToneIndex(3, -1)) == 2
+    assert floquet_sideband_of(ToneIndex(1, 1)) == -2
+    assert floquet_sideband_of(ToneIndex(0, 1)) == -1
+    assert floquet_sideband_of(ToneIndex(1, 0)) is None
+
+
+def test_sideband_matched_basis_folds_conjugates_without_extra_sidebands() -> None:
+    basis = build_sideband_matched_basis([1, 3, 5], 2, 10.0, 1.0, 60.0)
+
+    assert covered_sidebands(basis) == {-2, -1, 0, 1, 2}
+    assert ToneIndex(0, 1) in basis.tones
+    assert ToneIndex(1, 1) in basis.tones
+    assert ToneIndex(1, -1) in basis.tones
+
+
+def test_short_basis_does_not_claim_full_floquet_coverage() -> None:
+    basis = build_three_tone_basis(10.0, 1.0)
+
+    assert basis.covered_sidebands() == {-2, 0}
+    assert basis.covered_sidebands() != set(range(-2, 3))
+
+
+def test_sideband_matched_basis_rejects_frequency_clipping() -> None:
+    with pytest.raises(ValueError, match="clips Floquet sideband"):
+        build_sideband_matched_basis([1], 2, 10.0, 1.0, 10.5)
 
 
 def test_basis_rejects_conjugate_pair_and_missing_required_tone() -> None:

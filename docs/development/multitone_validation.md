@@ -27,6 +27,13 @@ The measured Floquet gain-vs-off is `15.59126731 dB`; the multitone result is
 `15.59126494 dB`, a `2.37e-06 dB` difference. The separate 4.5 GHz test is
 explicitly a weak/no-gain limit, not the gain validation point.
 
+The basis layer now exposes `floquet_sideband_of`, `covered_sidebands`, and
+`build_sideband_matched_basis`. The latter folds negative-frequency sidebands
+into positive `q=+1` tones and rejects pump/Floquet content clipped by
+`omega_max`. The JPA full-reference test covers exactly `m=-10..10`; its latest
+measurement is `15.59126498 dB` versus `15.59126673 dB`, for a gap of
+`1.74e-06 dB`.
+
 Run the focused gates with:
 
 ```powershell

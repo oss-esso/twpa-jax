@@ -7,7 +7,11 @@ import scipy.sparse as sp
 
 from twpa_solver.builders.jc_doc import build_jpa
 from twpa_solver.core import CircuitMatrices
-from twpa_solver.multitone.basis import MultiToneBasis, ToneIndex, build_lattice_basis
+from twpa_solver.multitone.basis import (
+    MultiToneBasis,
+    ToneIndex,
+    build_sideband_matched_basis,
+)
 from twpa_solver.multitone.observables import tone_s21
 from twpa_solver.multitone.problem import FullMultiToneProblem
 from twpa_solver.multitone.seed import promote_pump_solution
@@ -104,9 +108,11 @@ def _pump_off_khat(circuit: CircuitMatrices) -> sp.csr_matrix:
     ).tocsr()
 
 
-def _basis(signal_ghz: float) -> MultiToneBasis:
+def _basis(signal_ghz: float, sidebands: int = 2) -> MultiToneBasis:
     delta = OMEGA_P - 2.0 * math.pi * signal_ghz * 1e9
-    return build_lattice_basis(PUMP_MODES, 2, OMEGA_P, delta, OMEGA_P * 6.0)
+    return build_sideband_matched_basis(
+        PUMP_MODES, sidebands, OMEGA_P, delta, OMEGA_P * 6.0
+    )
 
 
 def _pump_source(
@@ -207,6 +213,38 @@ def test_small_signal_parity_at_real_gain_point() -> None:
         reference.gain_vs_off_db, 15.591267314309897, atol=0.05
     )
     assert abs(measured - reference.gain_vs_off_db) < 0.05
+
+
+def test_small_signal_parity_matches_full_sideband_reference() -> None:
+    """The JPA gate also uses the complete ``m=-10..10`` reference set."""
+    circuit, metadata = _jpa()
+    problem, pump_state, _solution, khat = _pump(circuit, metadata)
+    delta = OMEGA_P - 2.0 * math.pi * 4.8e9
+    basis = build_sideband_matched_basis(
+        PUMP_MODES, 10, OMEGA_P, delta, OMEGA_P * 12.0
+    )
+    assert basis.covered_sidebands() == set(range(-10, 11))
+    pump_source = _pump_source(problem, basis)
+    measured = _multitone_gain_vs_off(
+        circuit, basis, pump_state, pump_source, 4.8
+    )
+    reference = solve_gain_one(
+        circuit=circuit,
+        khat=khat,
+        khat_off_0=_pump_off_khat(circuit),
+        omega_p=OMEGA_P,
+        signal_ghz=4.8,
+        sidebands=10,
+        signal_m=0,
+        idler_m=-2,
+        source_index=circuit.port_to_index[1],
+        out_index=circuit.port_to_index[1],
+        source_current_a=SIGNAL_CURRENT_A,
+        source_port=1,
+        out_port=1,
+        z0_ohm=50.0,
+    )
+    assert abs(measured - reference.gain_vs_off_db) < 0.5
 
 
 def test_weak_point_is_explicitly_no_gain_limit() -> None:

@@ -37,6 +37,29 @@ class ToneIndex:
         return ToneIndex(self.h - other.h, self.q - other.q)
 
 
+def floquet_sideband_of(tone: ToneIndex) -> int | None:
+    """Return the Floquet sideband represented by a signal-sector tone.
+
+    The ``q=-1`` and ``q=+1`` sectors use the two conjugate frequency-folding
+    conventions of the Floquet conversion problem.  Pump-only tones do not
+    represent a signal sideband.
+    """
+    if tone.q == -1:
+        return tone.h - 1
+    if tone.q == 1:
+        return -(tone.h + 1)
+    return None
+
+
+def covered_sidebands(basis: "MultiToneBasis") -> set[int]:
+    """Return the Floquet sidebands represented by ``basis``."""
+    return {
+        sideband
+        for tone in basis.tones
+        if (sideband := floquet_sideband_of(tone)) is not None
+    }
+
+
 def canonicalize(
     tone: ToneIndex, omega_p: float, delta: float
 ) -> tuple[ToneIndex, bool]:
@@ -136,6 +159,10 @@ class MultiToneBasis:
     def signal_order(self, tone: ToneIndex) -> int:
         return abs(tone.q)
 
+    def covered_sidebands(self) -> set[int]:
+        """Return the Floquet sidebands represented by this basis."""
+        return covered_sidebands(self)
+
     def to_metadata(self) -> dict[str, object]:
         return {
             "tones": [{"h": t.h, "q": t.q} for t in self.tones],
@@ -216,3 +243,63 @@ def build_lattice_basis(
                 candidates.append(tone)
     ordered = list(dict.fromkeys(sorted(candidates, key=lambda t: (t.h, t.q))))
     return MultiToneBasis(ordered, omega_p, delta)
+
+
+def build_sideband_matched_basis(
+    pump_modes: Iterable[int],
+    sidebands: int,
+    omega_p: float,
+    delta: float,
+    omega_max: float,
+) -> MultiToneBasis:
+    """Build a positive-frequency basis covering exactly ``[-S, S]``.
+
+    Each signed Floquet sideband is first represented as ``(m + 1, -1)``.
+    Negative physical frequencies are canonicalized to their positive
+    conjugate, which naturally supplies the ``q=+1`` representatives.  Pump
+    harmonics are retained in the ``q=0`` sector.
+
+    Raises:
+        ValueError: If a requested sideband is clipped or two requests fold
+            onto the same positive-frequency tone.
+    """
+    if sidebands < 0:
+        raise ValueError("sidebands must be nonnegative")
+    if omega_max <= 0.0:
+        raise ValueError("omega_max must be positive")
+
+    candidates: list[tuple[ToneIndex, str]] = []
+    seen_sources: dict[ToneIndex, str] = {}
+    for mode in pump_modes:
+        tone = ToneIndex(int(mode), 0)
+        if tone.omega(omega_p, delta) <= 0.0:
+            raise ValueError(f"pump tone {tone} is not positive-frequency")
+        if tone.omega(omega_p, delta) > omega_max:
+            raise ValueError(f"omega_max clips pump tone {tone}")
+        candidates.append((tone, f"pump mode {mode}"))
+
+    for sideband in range(-sidebands, sidebands + 1):
+        signed = ToneIndex(sideband + 1, -1)
+        tone, _ = canonicalize(signed, omega_p, delta)
+        if tone.omega(omega_p, delta) > omega_max:
+            raise ValueError(
+                f"omega_max clips Floquet sideband {sideband}: {tone}"
+            )
+        source = f"Floquet sideband {sideband}"
+        previous = seen_sources.get(tone)
+        if previous is not None and previous != source:
+            raise ValueError(f"sideband collision at {tone}: {previous}, {source}")
+        seen_sources[tone] = source
+        candidates.append((tone, source))
+
+    ordered = list(dict.fromkeys(tone for tone, _ in candidates))
+    basis = MultiToneBasis(ordered, omega_p, delta)
+    expected = set(range(-sidebands, sidebands + 1))
+    covered = basis.covered_sidebands()
+    if covered != expected:
+        missing = sorted(expected - covered)
+        extra = sorted(covered - expected)
+        raise ValueError(
+            f"sideband coverage mismatch: missing={missing}, extra={extra}"
+        )
+    return basis
