@@ -35,7 +35,7 @@ def test_multitone_preconditioner_defaults_exact_and_accepts_sector() -> None:
 
 def test_signal_frequency_is_required() -> None:
     with pytest.raises(SystemExit):
-        build_parser().parse_args(["--output-dir", "unused"])
+        main(["--output-dir", "unused"])
 
 
 def test_p1db_interpolation_is_logarithmic_in_current() -> None:

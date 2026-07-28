@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import math
 from dataclasses import replace
+from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
 import numpy as np
@@ -67,8 +69,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--signal-ghz",
         type=float,
-        required=True,
-        help="Signal frequency in GHz.",
+        help="Signal frequency in GHz; optional for a frequency-range sweep.",
     )
     parser.add_argument("--pump-current-a", type=float)
     parser.add_argument(
@@ -203,6 +204,20 @@ def _interpolate_p1db_current(points: list[dict[str, object]]) -> float | None:
             log_right = math.log10(float(right["signal_current_a"]))
             return 10.0 ** (log_left + fraction * (log_right - log_left))
     return None
+
+
+def _p1db_nearest_point(
+    points: list[dict[str, object]], p1db_current_a: float | None
+) -> dict[str, object] | None:
+    if p1db_current_a is None:
+        return None
+    valid = [point for point in points if point["status"] == "VALID_SOLVED"]
+    return min(
+        valid,
+        key=lambda point: abs(
+            math.log(float(point["signal_current_a"]) / p1db_current_a)
+        ),
+    )
 
 
 def _solve_compression(
@@ -440,6 +455,12 @@ def _solve_compression(
         if p1db_current_a is not None
         else None
     )
+    p1db_point = _p1db_nearest_point(points, p1db_current_a)
+    p1db_output_dbm = (
+        p1db_dbm + small_signal_gain_db - 1.0
+        if p1db_dbm is not None
+        else None
+    )
     summary_status = (
         "NO_GAIN_AT_OPERATING_POINT"
         if no_gain
@@ -470,6 +491,12 @@ def _solve_compression(
         "p1db": p1db_dbm,
         "p1db_signal_current_a": p1db_current_a,
         "p1db_input_dbm": p1db_dbm,
+        "p1db_output_dbm": p1db_output_dbm,
+        "p1db_pump_depletion_db": (
+            float(p1db_point["pump_depletion_db"])
+            if p1db_point is not None
+            else None
+        ),
         "message": (
             f"Small-signal gain {small_signal_gain_db:.6g} dB is below the "
             "3 dB compression-study threshold; P1dB is not reported."
@@ -490,19 +517,14 @@ def _solve_compression(
     return points, states, summary, spatial_rows
 
 
-def main(argv: list[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
+def _write_one_result(args: argparse.Namespace) -> dict[str, object]:
     points, states, summary, spatial_rows = _solve_compression(args)
     summary.update({
         "multitone_basis": args.multitone_basis,
+        "multitone_sidebands": args.multitone_sidebands,
         "n_signal_power": args.n_signal_power,
         "resource_budget_gb": args.resource_budget_gb,
-        "signal_frequency_range_ghz": [args.signal_ghz_min, args.signal_ghz_max],
-        "n_signal_freq": args.n_signal_freq,
-        "signal_workers": args.signal_workers,
     })
-    if args.summary_json:
-        args.summary_json.write_text(json.dumps(summary, indent=2), encoding="utf-8")
     write_compression_outputs(
         args.output_dir,
         points,
@@ -510,6 +532,115 @@ def main(argv: list[str] | None = None) -> int:
         states=states,
         save_states=args.save_states,
         spatial_rows=spatial_rows if args.spatial_profiles else None,
+    )
+    return summary
+
+
+def _frequency_worker(payload: tuple[dict[str, object], float, str]) -> dict[str, object]:
+    values, frequency_ghz, output_dir = payload
+    args = argparse.Namespace(**values)
+    args.signal_ghz = frequency_ghz
+    args.output_dir = Path(output_dir)
+    args.summary_json = None
+    return _write_one_result(args)
+
+
+def _run_frequency_sweep(args: argparse.Namespace) -> dict[str, object]:
+    if args.signal_ghz_min is None or args.signal_ghz_max is None:
+        raise ValueError(
+            "--n-signal-freq > 1 requires --signal-ghz-min and --signal-ghz-max"
+        )
+    frequencies = np.linspace(
+        args.signal_ghz_min,
+        args.signal_ghz_max,
+        args.n_signal_freq,
+    )
+    args.output_dir.mkdir(parents=True, exist_ok=True)
+    payloads = []
+    values = vars(args).copy()
+    for index, frequency in enumerate(frequencies):
+        subdir = args.output_dir / f"frequency_{index:03d}_{frequency:.6f}ghz"
+        payloads.append((values, float(frequency), str(subdir)))
+    workers = max(1, min(int(args.signal_workers), len(payloads)))
+    if workers == 1:
+        summaries = [_frequency_worker(payload) for payload in payloads]
+    else:
+        with ProcessPoolExecutor(max_workers=workers) as executor:
+            summaries = list(executor.map(_frequency_worker, payloads))
+    rows = [
+        {
+            "signal_ghz": summary["signal_ghz"],
+            "status": summary["status"],
+            "small_signal_gain_db": summary["small_signal_gain_db"],
+            "small_signal_gain_vs_off_db": summary["small_signal_gain_vs_off_db"],
+            "p1db_input_dbm": summary["p1db_input_dbm"],
+            "p1db_output_dbm": summary["p1db_output_dbm"],
+            "p1db_pump_depletion_db": summary["p1db_pump_depletion_db"],
+        }
+        for summary in summaries
+    ]
+    with (args.output_dir / "p1db_vs_frequency.csv").open(
+        "w", newline="", encoding="utf-8"
+    ) as handle:
+        writer = csv.DictWriter(handle, fieldnames=list(rows[0]))
+        writer.writeheader()
+        writer.writerows(rows)
+    try:
+        import matplotlib.pyplot as plt
+
+        figure, axis_p1db = plt.subplots(figsize=(7.0, 4.2))
+        x = [float(row["signal_ghz"]) for row in rows]
+        p1db = [float(row["p1db_input_dbm"]) for row in rows]
+        gain = [float(row["small_signal_gain_vs_off_db"]) for row in rows]
+        axis_p1db.plot(x, p1db, "o-", color="tab:blue", label="P1dB input")
+        axis_p1db.set_xlabel("Signal frequency (GHz)")
+        axis_p1db.set_ylabel("P1dB input (dBm)", color="tab:blue")
+        axis_gain = axis_p1db.twinx()
+        axis_gain.plot(x, gain, "s--", color="tab:red", label="Small-signal gain")
+        axis_gain.set_ylabel("Gain vs pump-off (dB)", color="tab:red")
+        axis_p1db.grid(True, alpha=0.3)
+        figure.tight_layout()
+        figure.savefig(args.output_dir / "p1db_vs_frequency.png", dpi=180)
+        plt.close(figure)
+    except ImportError:
+        pass
+    summary = {
+        "status": (
+            "VALID_SOLVED"
+            if all(row["status"] == "VALID_SOLVED" for row in rows)
+            else "CHECK"
+        ),
+        "stability_status": "NOT_CHECKED",
+        "n_signal_freq": len(rows),
+        "signal_workers": workers,
+        "frequencies_ghz": [float(value) for value in frequencies],
+    }
+    (args.output_dir / "frequency_summary.json").write_text(
+        json.dumps(summary, indent=2), encoding="utf-8"
+    )
+    return summary
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if args.n_signal_freq == 1 and args.signal_ghz is None:
+        parser.error("--signal-ghz is required for a single-frequency run")
+    if args.n_signal_freq > 1:
+        summary = _run_frequency_sweep(args)
+        if args.summary_json:
+            args.summary_json.write_text(json.dumps(summary, indent=2), encoding="utf-8")
+        return 0
+    summary = _write_one_result(args)
+    summary.update({
+        "signal_frequency_range_ghz": [args.signal_ghz, args.signal_ghz],
+        "n_signal_freq": 1,
+        "signal_workers": 1,
+    })
+    if args.summary_json:
+        args.summary_json.write_text(json.dumps(summary, indent=2), encoding="utf-8")
+    (args.output_dir / "compression_summary.json").write_text(
+        json.dumps(summary, indent=2, default=str), encoding="utf-8"
     )
     return 0
 
