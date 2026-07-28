@@ -52,6 +52,11 @@ that device even though its small-signal gain is converged. The summary sets
 distributed production evidence until a higher-basis check establishes a
 smaller device-specific minimum.
 
+FQJTWPA shows the same saturation-basis sensitivity: its full 25-point check
+took 665 s and measured `delta_P1dB(S4-S2) = -2.5792 dB`. exp20 summary keeps
+the S=2 diagnostic columns but selects S=4 into the `production_p1db_*` columns
+whenever the 0.2 dB basis flag trips.
+
 Running without `--run-slow` is not complete validation.
 
 Module map: pump solve `twpa_solver.pump.hb` + `twpa_solver.pump`

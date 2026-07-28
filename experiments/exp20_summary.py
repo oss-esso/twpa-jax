@@ -23,6 +23,8 @@ def load_case(root: Path, name: str) -> dict[str, object]:
         if p2 is not None and p4 is not None
         else None
     )
+    basis_flag = delta is None or abs(delta) > 0.2
+    production = summaries[4] if basis_flag else summaries[2]
     rungs = Counter(point["recovery_rung"] for point in points)
     return {
         "device": name,
@@ -33,7 +35,11 @@ def load_case(root: Path, name: str) -> dict[str, object]:
         "p1db_output_dbm": summaries[2]["p1db_output_dbm"],
         "p1db_pump_depletion_db": summaries[2]["p1db_pump_depletion_db"],
         "delta_p1db_s4_minus_s2_db": delta,
-        "basis_spotcheck_flag": delta is None or abs(delta) > 0.2,
+        "basis_spotcheck_flag": basis_flag,
+        "recommended_sidebands": 4 if basis_flag else 2,
+        "production_p1db_input_dbm": production["p1db_input_dbm"],
+        "production_p1db_output_dbm": production["p1db_output_dbm"],
+        "production_p1db_pump_depletion_db": production["p1db_pump_depletion_db"],
         "max_abs_pump_depletion_db": max(abs(float(point["pump_depletion_db"])) for point in points if point["pump_depletion_db"] != "nan"),
         "recovery_rungs": json.dumps(rungs, sort_keys=True),
         "stability_status": "NOT_CHECKED",
