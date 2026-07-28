@@ -24,13 +24,16 @@ def command(case: Case, outdir: Path, frequencies: int, workers: int) -> list[st
         "--pump-mode-policy", "positive_odd_jc", "--pump-mode-count", "10", "--pump-nt", "40",
         "--signal-ghz-min", str(low), "--signal-ghz-max", str(high),
         "--n-signal-freq", str(frequencies), "--signal-workers", str(workers),
-        "--source-port", "1", "--out-port", str(case.out_port),
+        "--source-port", "1", "--pump-port", str(case.pump_port),
+        "--out-port", str(case.out_port),
         "--n-signal-power", "25", "--signal-current-min-a", "1e-12",
         "--signal-current-max-a", str(case.signal_max_a), "--attenuation-db", "0",
         "--multitone-basis", "matched", "--multitone-sidebands", str(case.selected_sidebands), "--recovery", "ladder",
     ]
     if case.pump_dir:
         cmd.extend(("--pump-solution-dir", case.pump_dir))
+    if case.name == "2c":
+        cmd.extend(("--signal-continuation-deadline-s", "600"))
     return cmd
 
 
