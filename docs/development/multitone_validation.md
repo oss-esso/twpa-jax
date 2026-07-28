@@ -34,6 +34,30 @@ into positive `q=+1` tones and rejects pump/Floquet content clipped by
 measurement is `15.59126498 dB` versus `15.59126673 dB`, for a gap of
 `1.74e-06 dB`.
 
+The distributed slow gate loads the validated odd-mode pump artifacts and
+solves the Schur-reduced nonlinear multitone residual.  The sideband study
+reports gain relative to pump-off; the multitone-to-Floquet gap stayed below
+`2.3e-8 dB` at every listed setting.
+
+| design | sidebands | gain vs off (dB) | runtime (s) |
+|---|---:|---:|---:|
+| JTWPA | 2 | 30.716690 | 11.04 |
+| JTWPA | 4 | 24.203645 | 11.74 |
+| JTWPA | 6 | 26.557860 | 14.19 |
+| JTWPA | 8 | 27.459927 | 33.11 |
+| JTWPA | 10 | 27.542560 | 34.35 |
+| JTWPA | 12 | 27.549489 | 38.13 |
+| FQJTWPA | 2 | 27.105433 | 8.82 |
+| FQJTWPA | 4 | 28.479654 | 13.14 |
+| FQJTWPA | 6 | 28.534882 | 16.35 |
+| FQJTWPA | 8 | 28.536842 | 22.77 |
+| FQJTWPA | 10 | 28.536894 | 28.70 |
+
+The committed gate uses ten sidebands. JTWPA changes by `0.006929 dB` from
+ten to twelve sidebands; FQJTWPA changes by `0.000052 dB` from eight to ten.
+A deliberate reconstruction-factor change from two to one made the gain-db
+parity assertion fail by `6.020600 dB` on both designs.
+
 Run the focused gates with:
 
 ```powershell
