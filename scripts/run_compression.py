@@ -294,6 +294,28 @@ def _solve_compression(args: argparse.Namespace) -> tuple[list[dict[str, float]]
         source_current_a=float(currents[0]),
     )
     pump_off_gain_db = float(20.0 * np.log10(max(abs(pump_off_s21), 1e-300)))
+    pump_only_problem = FullMultiToneProblem(
+        circuit,
+        basis,
+        AffineSourcePath.pump_turn_on(pump_source),
+        preconditioner=selected_preconditioner,
+    )
+    pump_only_state, pump_only_report = HarmonicNewtonKrylovSolver(settings).solve_one(
+        pump_only_problem,
+        pump_seed,
+        1.0,
+    )
+    if not pump_only_report.converged:
+        raise RuntimeError("pump-on signal-off reference did not converge")
+    pump_reference_s21 = tone_s21(
+        pump_only_state,
+        basis,
+        circuit,
+        signal_tone=basis.pump_tone,
+        source_port=source_port,
+        out_port=out_port,
+        source_current_a=pump_current,
+    )
     states: dict[str, np.ndarray] = {}
     points: list[dict[str, float]] = []
     previous = pump_seed
@@ -327,11 +349,33 @@ def _solve_compression(args: argparse.Namespace) -> tuple[list[dict[str, float]]
         )
         state = solved.state
         if solved.status == "VALID_SOLVED":
-            s21 = tone_s21(
+            signal_s21 = tone_s21(
                 state, basis, circuit, signal_tone=basis.signal_tone,
                 source_port=source_port, out_port=out_port, source_current_a=float(current),
             )
-            gain_db = float(20.0 * np.log10(max(abs(s21), 1e-300)))
+            pump_s21 = tone_s21(
+                state,
+                basis,
+                circuit,
+                signal_tone=basis.pump_tone,
+                source_port=source_port,
+                out_port=out_port,
+                source_current_a=pump_current,
+            )
+            idler_s21 = tone_s21(
+                state,
+                basis,
+                circuit,
+                signal_tone=basis.idler_tone,
+                source_port=source_port,
+                out_port=out_port,
+                source_current_a=float(current),
+            )
+            gain_db = float(20.0 * np.log10(max(abs(signal_s21), 1e-300)))
+            pump_depletion_db = float(
+                20.0 * np.log10(max(abs(pump_s21), 1e-300))
+                - 20.0 * np.log10(max(abs(pump_reference_s21), 1e-300))
+            )
             reference_gain = gain_db if reference_gain is None else reference_gain
             previous_previous = previous
             previous_previous_current = previous_current
@@ -339,6 +383,8 @@ def _solve_compression(args: argparse.Namespace) -> tuple[list[dict[str, float]]
             previous_current = float(current)
         else:
             gain_db = float("nan")
+            signal_s21 = pump_s21 = idler_s21 = complex(float("nan"), float("nan"))
+            pump_depletion_db = float("nan")
         points.append({
             "signal_current_a": float(current),
             "signal_power_dbm": _current_to_dbm(
@@ -346,6 +392,13 @@ def _solve_compression(args: argparse.Namespace) -> tuple[list[dict[str, float]]
             ),
             "gain_db": gain_db,
             "gain_vs_off_db": gain_db - pump_off_gain_db,
+            "pump_depletion_db": pump_depletion_db,
+            "signal_s21_real": float(np.real(signal_s21)),
+            "signal_s21_imag": float(np.imag(signal_s21)),
+            "pump_s21_real": float(np.real(pump_s21)),
+            "pump_s21_imag": float(np.imag(pump_s21)),
+            "idler_s21_real": float(np.real(idler_s21)),
+            "idler_s21_imag": float(np.imag(idler_s21)),
             "compression_db": float(reference_gain - gain_db) if reference_gain is not None and np.isfinite(gain_db) else float("nan"),
             "status": solved.status,
             "recovery_rung": solved.used_recovery,
@@ -389,6 +442,8 @@ def _solve_compression(args: argparse.Namespace) -> tuple[list[dict[str, float]]
         "small_signal_gain_db": small_signal_gain_db,
         "small_signal_gain_vs_off_db": float(points[0]["gain_vs_off_db"]),
         "pump_off_gain_db": pump_off_gain_db,
+        "pump_reference_s21_real": float(np.real(pump_reference_s21)),
+        "pump_reference_s21_imag": float(np.imag(pump_reference_s21)),
         "p1db": p1db_dbm,
         "p1db_signal_current_a": p1db_current_a,
         "p1db_input_dbm": p1db_dbm,

@@ -142,5 +142,10 @@ def test_run_compression_smoke_writes_artifacts(tmp_path) -> None:
     assert (tmp_path / "compression_points.csv").exists()
     assert (tmp_path / "compression_arrays.npz").exists()
     summary = json.loads((tmp_path / "compression_summary.json").read_text())
+    points = (tmp_path / "compression_points.csv").read_text()
     assert summary["stability_status"] == "NOT_CHECKED"
     assert summary["multitone_preconditioner"] == "real_coupled_fast"
+    assert "pump_depletion_db" in points
+    assert "signal_s21_real" in points
+    assert "pump_s21_real" in points
+    assert "idler_s21_real" in points

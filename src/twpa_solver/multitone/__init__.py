@@ -40,6 +40,8 @@ from twpa_solver.multitone.observables import (
     junction_diagnostics,
     power_balance,
     reference_states,
+    reference_normalization,
+    spatial_profiles,
     tone_s21,
 )
 from twpa_solver.multitone.compression_curve import (
@@ -78,6 +80,8 @@ __all__ = [
     "junction_diagnostics",
     "power_balance",
     "reference_states",
+    "reference_normalization",
+    "spatial_profiles",
     "tone_s21",
     "CompressionCurve",
     "CompressionPoint",
