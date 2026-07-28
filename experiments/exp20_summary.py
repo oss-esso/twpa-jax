@@ -44,8 +44,14 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--input-dir", type=Path, default=Path("outputs/exp20_multitone_compression"))
     parser.add_argument("--output-dir", type=Path, default=Path("outputs/exp20_summary"))
+    parser.add_argument(
+        "--only",
+        choices=("jpa", "jtwpa", "fqjtwpa", "2c"),
+        action="append",
+    )
     args = parser.parse_args()
-    rows = [load_case(args.input_dir, name) for name in ("jpa", "jtwpa", "fqjtwpa", "2c")]
+    names = args.only or ["jpa", "jtwpa", "fqjtwpa", "2c"]
+    rows = [load_case(args.input_dir, name) for name in names]
     args.output_dir.mkdir(parents=True, exist_ok=True)
     with (args.output_dir / "summary.csv").open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=list(rows[0]))
