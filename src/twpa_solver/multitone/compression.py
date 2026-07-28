@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+import math
 
 import numpy as np
 
@@ -23,6 +24,7 @@ class SignalPowerPoint:
     report: object
     status: str
     used_recovery: str = "previous"
+    last_converged_signal_current_a: float = 0.0
 
 
 def _problem_with_path(problem, path: AffineSourcePath):
@@ -43,22 +45,154 @@ def solve_signal_power_point(
     solver,
     signal_current_prev_a: float = 0.0,
     signal_current_prevprev_a: float = 0.0,
+    recovery: str = "plain",
+    pump_seed: np.ndarray | None = None,
+    signal_substep_init_db: float = 0.5,
+    signal_substep_min_db: float = 0.01,
+    continuation_deadline_s: float = 0.0,
+    arclength_recovery: bool = False,
 ) -> SignalPowerPoint:
-    """Solve one signal-power point, using a secant predictor when available."""
+    """Solve one signal-power point with the selected recovery ladder."""
+    if recovery not in {"plain", "ladder"}:
+        raise ValueError(f"unknown signal recovery mode {recovery!r}")
     path = AffineSourcePath.signal_turn_on(pump_source, signal_source * signal_current_a)
     candidate_problem = _problem_with_path(problem, path)
-    candidate = np.array(X_prev, copy=True)
-    recovery = "previous"
-    if X_prevprev is not None and signal_current_prev_a != signal_current_prevprev_a:
+    if recovery == "ladder" and signal_current_prev_a <= 0.0:
+        state, reports, trace = solver.solve_adaptive_continuation(
+            candidate_problem,
+            None,
+            initial_step=0.25,
+            min_step=0.01,
+            growth=1.5,
+            shrink=0.5,
+            fallback_fixed_steps=20,
+            max_wall_s=continuation_deadline_s,
+        )
+        report = reports[-1]
+        status = _failure_status(state, report, trace.failure_reason)
+        return SignalPowerPoint(
+            signal_current_a,
+            state,
+            report,
+            status,
+            "adaptive_first_point",
+            signal_current_a if status == "VALID_SOLVED" else 0.0,
+        )
+
+    state, report = solver.solve_one(
+        candidate_problem,
+        np.array(X_prev, copy=True),
+        1.0,
+    )
+    if report.converged:
+        return SignalPowerPoint(
+            signal_current_a,
+            state,
+            report,
+            "VALID_SOLVED",
+            "previous",
+            signal_current_a,
+        )
+
+    if recovery == "plain" and X_prevprev is not None and signal_current_prev_a != signal_current_prevprev_a:
         ratio = (signal_current_a - signal_current_prev_a) / (
             signal_current_prev_a - signal_current_prevprev_a
         )
         candidate = X_prev + ratio * (X_prev - X_prevprev)
-        recovery = "secant"
-    state, reports = solver.solve_one(candidate_problem, candidate, 1.0)
-    report = reports[-1] if isinstance(reports, list) else reports
-    status = "VALID_SOLVED" if report.converged else "SIGNAL_CONTINUATION_FAILED"
-    return SignalPowerPoint(signal_current_a, state, report, status, recovery)
+        state, report = solver.solve_one(candidate_problem, candidate, 1.0)
+        status = _failure_status(state, report, report.failure_reason)
+        return SignalPowerPoint(
+            signal_current_a,
+            state,
+            report,
+            status,
+            "secant",
+            signal_current_a if status == "VALID_SOLVED" else signal_current_prev_a,
+        )
+    if recovery == "plain":
+        status = _failure_status(state, report, report.failure_reason)
+        return SignalPowerPoint(
+            signal_current_a,
+            state,
+            report,
+            status,
+            "previous",
+            signal_current_prev_a,
+        )
+
+    seed = np.asarray(pump_seed if pump_seed is not None else X_prev)
+    if signal_current_prev_a > 0.0:
+        seed = seed + (signal_current_a / signal_current_prev_a) * (X_prev - seed)
+    state, report = solver.solve_one(candidate_problem, seed, 1.0)
+    if report.converged:
+        return SignalPowerPoint(
+            signal_current_a, state, report, "VALID_SOLVED", "rescaled_floquet", signal_current_a
+        )
+
+    substep_path = AffineSourcePath.signal_substep(
+        pump_source,
+        signal_source * signal_current_prev_a,
+        signal_source * signal_current_a,
+    )
+    substep_problem = _problem_with_path(problem, substep_path)
+    span_db = 20.0 * math.log10(signal_current_a / signal_current_prev_a)
+    initial_step = min(1.0, signal_substep_init_db / max(span_db, 1e-12))
+    min_step = min(initial_step, signal_substep_min_db / max(span_db, 1e-12))
+    state, reports, trace = solver.solve_adaptive_continuation(
+        substep_problem,
+        X_prev,
+        initial_step=initial_step,
+        min_step=min_step,
+        growth=1.5,
+        shrink=0.5,
+        fallback_fixed_steps=max(2, math.ceil(span_db / signal_substep_min_db)),
+        max_wall_s=continuation_deadline_s,
+    )
+    report = reports[-1]
+    if report.converged and trace.accepted_lambdas and trace.accepted_lambdas[-1] >= 1.0 - 1e-12:
+        return SignalPowerPoint(
+            signal_current_a, state, report, "VALID_SOLVED", "signal_substep", signal_current_a
+        )
+    last_lambda = trace.accepted_lambdas[-1] if trace.accepted_lambdas else 0.0
+    last_current = signal_current_prev_a + last_lambda * (
+        signal_current_a - signal_current_prev_a
+    )
+    if arclength_recovery:
+        state_arc, _lambda_arc, info = solver.solve_arclength(
+            substep_problem,
+            X_prev,
+            0.0,
+            target_lam=1.0,
+            max_wall_s=continuation_deadline_s,
+        )
+        if info["reached_target"] and np.all(np.isfinite(state_arc)):
+            return SignalPowerPoint(
+                signal_current_a,
+                state_arc,
+                report,
+                "VALID_SOLVED",
+                "arclength",
+                signal_current_a,
+            )
+        if info["terminal_reason"] == "deadline":
+            return SignalPowerPoint(
+                signal_current_a, state_arc, report, "DEADLINE", "arclength", last_current
+            )
+    status = _failure_status(state, report, trace.failure_reason)
+    if status == "SIGNAL_CONTINUATION_FAILED" and last_lambda > 0.0:
+        status = "SIGNAL_SUBSTEP_STALL"
+    return SignalPowerPoint(
+        signal_current_a, state, report, status, "signal_substep", last_current
+    )
+
+
+def _failure_status(state: np.ndarray, report: object, reason: str) -> str:
+    if not np.all(np.isfinite(state)):
+        return "NONFINITE_STATE"
+    text = f"{getattr(report, 'failure_reason', '')} {reason}".lower()
+    if "deadline" in text or "exceeded" in text:
+        return "DEADLINE"
+    return "VALID_SOLVED" if getattr(report, "converged", False) else "SIGNAL_CONTINUATION_FAILED"
 
 
 def run_compression_sweep(

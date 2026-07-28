@@ -14,6 +14,7 @@ from twpa_solver import default_loss_model
 from twpa_solver.builders.jc_doc import build_fqjtwpa, build_jpa, build_jtwpa
 from twpa_solver.core import CircuitMatrices, load_circuit
 from twpa_solver.multitone.basis import build_three_tone_basis
+from twpa_solver.multitone.compression import solve_signal_power_point
 from twpa_solver.multitone.observables import tone_s21
 from twpa_solver.multitone.preconditioners import (
     MULTITONE_PRECONDITIONERS,
@@ -79,6 +80,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--attenuation-db", type=float, default=None)
     parser.add_argument("--signal-current-min-a", type=float, default=1e-12)
     parser.add_argument("--signal-current-max-a", type=float, default=1e-9)
+    parser.add_argument("--recovery", choices=("plain", "ladder"), default="ladder")
+    parser.add_argument("--signal-substep-init-db", type=float, default=0.5)
+    parser.add_argument("--signal-substep-min-db", type=float, default=0.01)
+    parser.add_argument("--signal-continuation-deadline-s", type=float, default=0.0)
+    parser.add_argument("--signal-arclength-recovery", action="store_true")
     parser.add_argument(
         "--multitone-preconditioner",
         choices=MULTITONE_PRECONDITIONERS,
@@ -218,34 +224,56 @@ def _solve_compression(args: argparse.Namespace) -> tuple[list[dict[str, float]]
     states: dict[str, np.ndarray] = {}
     points: list[dict[str, float]] = []
     previous = pump_seed
+    previous_previous = None
+    previous_current = 0.0
+    previous_previous_current = 0.0
     reference_gain = None
     for index, current in enumerate(currents):
-        path = AffineSourcePath.signal_turn_on(pump_source, signal_unit * float(current))
-        problem = FullMultiToneProblem(
+        base_problem = FullMultiToneProblem(
             circuit,
             basis,
-            path,
+            AffineSourcePath.pump_turn_on(pump_source),
             preconditioner=selected_preconditioner,
         )
-        state, report = HarmonicNewtonKrylovSolver(settings).solve_one(problem, previous, 1.0)
-        previous = state
-        if report.converged:
+        solved = solve_signal_power_point(
+            base_problem,
+            previous,
+            previous_previous,
+            float(current),
+            pump_source=pump_source,
+            signal_source=signal_unit,
+            solver=HarmonicNewtonKrylovSolver(settings),
+            signal_current_prev_a=previous_current,
+            signal_current_prevprev_a=previous_previous_current,
+            recovery=args.recovery,
+            pump_seed=pump_seed,
+            signal_substep_init_db=args.signal_substep_init_db,
+            signal_substep_min_db=args.signal_substep_min_db,
+            continuation_deadline_s=args.signal_continuation_deadline_s,
+            arclength_recovery=args.signal_arclength_recovery,
+        )
+        state = solved.state
+        if solved.status == "VALID_SOLVED":
             s21 = tone_s21(
                 state, basis, circuit, signal_tone=basis.signal_tone,
                 source_port=source_port, out_port=out_port, source_current_a=float(current),
             )
             gain_db = float(20.0 * np.log10(max(abs(s21), 1e-300)))
             reference_gain = gain_db if reference_gain is None else reference_gain
-            status = "VALID_SOLVED"
+            previous_previous = previous
+            previous_previous_current = previous_current
+            previous = state
+            previous_current = float(current)
         else:
             gain_db = float("nan")
-            status = "SIGNAL_CONTINUATION_FAILED"
         points.append({
             "signal_current_a": float(current),
             "gain_db": gain_db,
             "gain_vs_off_db": gain_db - pump_off_gain_db,
             "compression_db": float(reference_gain - gain_db) if reference_gain is not None and np.isfinite(gain_db) else float("nan"),
-            "status": status,
+            "status": solved.status,
+            "recovery_rung": solved.used_recovery,
+            "last_converged_signal_current_a": solved.last_converged_signal_current_a,
         })
         if index == len(currents) - 1:
             states["last"] = state
@@ -287,6 +315,7 @@ def _solve_compression(args: argparse.Namespace) -> tuple[list[dict[str, float]]
             else None
         ),
         "multitone_preconditioner": selected_preconditioner,
+        "recovery": args.recovery,
         "basis": basis.to_metadata(),
     }
     return points, states, summary
