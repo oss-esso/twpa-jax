@@ -12,6 +12,39 @@ physics gates, with a temporary directory outside the repository:
 python -m pytest -q -p no:cacheprovider --basetemp D:\tmp\twpa_full_slow --run-slow
 ```
 
+## Production multitone compression campaigns (exp20-exp22)
+
+`scripts/run_compression.py` defaults to the pump-harmonic-retaining
+`--multitone-basis matched --multitone-sidebands 2`. A three-tone basis is only
+valid with a fundamental-only pump basis; the driver raises if any pump `(h,0)`
+mode would be silently dropped. Signal frequency is mandatory for a single run.
+Fixture runs default to zero line attenuation; loaded production circuits use
+the Themis loss model unless `--attenuation-db` is explicit.
+
+Reproduce the four-device compression curves and S=2/S=4 P1dB check:
+
+```powershell
+python experiments/exp20_multitone_compression.py
+python experiments/exp20_summary.py
+```
+
+Run frequency-resolved P1dB and spatial attribution campaigns:
+
+```powershell
+python experiments/exp21_p1db_vs_frequency.py --signal-workers 4
+python experiments/exp22_spatial_attribution.py
+```
+
+Every artifact keeps `stability_status = "NOT_CHECKED"`; deep-saturation
+solutions are not stability claims. The validated JPA S=2 result is
+13.305144 dB small-signal gain and -132.7323 dBm input P1dB. S=4 moves P1dB
+by only +0.00596 dB. Near P1dB the recorded pump depletion is -3.3681 dB.
+The real JTWPA spatial smoke (`outputs/exp22_jtwpa_spatial_smoke`) wrote 2x2047
+branch rows; gain changed 30.71517 -> 30.58665 dB while pump depletion reached
+-0.13898 dB at 1e-8 A. `pypardiso` is importable in the validated environment;
+the multitone driver currently uses the established SciPy/SuperLU-backed
+preconditioner path, so campaign timing remains attributable to that path.
+
 Running without `--run-slow` is not complete validation.
 
 Module map: pump solve `twpa_solver.pump.hb` + `twpa_solver.pump`
