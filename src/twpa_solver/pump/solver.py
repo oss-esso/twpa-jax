@@ -937,7 +937,7 @@ class HarmonicNewtonKrylovSolver:
         robust than the secant when the previous two points are far apart or the
         branch curves sharply (near the fold).
         """
-        S = problem.source_coeffs(1.0)
+        S = problem.source_coeffs(1.0) - problem.source_coeffs(0.0)
         if not _finite_state(X):
             return np.array(X, copy=True)
         try:

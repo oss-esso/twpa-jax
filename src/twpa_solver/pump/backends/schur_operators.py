@@ -101,6 +101,11 @@ class SchurReducedProblem:
             self.n, self.part.n, self.H, self.linear_apply_mode,
         )
 
+    @property
+    def mode_keys(self):
+        """Mode keys consumed by tuple-capable preconditioners."""
+        return [int(round(k)) for k in self.grid.k]
+
     # -------------------------------------------------------- linear operator
     def _lin_apply(self, h: int, vn: np.ndarray) -> np.ndarray:
         """Apply S_k (assembled sparse matvec or matrix-free eliminated solve)."""

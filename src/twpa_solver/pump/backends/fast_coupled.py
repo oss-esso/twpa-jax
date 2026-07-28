@@ -138,16 +138,12 @@ class FastCoupledPreconditioner:
         self.problem = problem
         self.H = problem.H
         self.m = problem.n
-        self.modes = [int(round(k)) for k in problem.grid.k]
+        self.modes = list(problem.mode_keys)
         self.use_pardiso = bool(use_pardiso and _HAVE_PARDISO)
         self._khat_map = _KhatDataMap(problem.Bphi_r, problem.BphiT_r)
         # Precompute batched exp(-i ell theta) projectors for gamma_hat_ell.
-        theta = problem.grid.omega * problem.grid.t
         self._ells = self._needed_ells()
-        self._phase_matrix = (
-            np.exp(-1j * np.asarray(self._ells)[:, None] * theta[None, :])
-            / float(theta.size)
-        )
+        self._phase_matrix = problem.grid.phase_rows(self._ells)
         self._build_scatter()
         self._pardiso = None
         self._lu = None

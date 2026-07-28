@@ -60,6 +60,12 @@ class HarmonicGrid:
     def project_positive(self, y_t: np.ndarray) -> np.ndarray:
         return self.E_conj_T_over_nt @ y_t
 
+    def phase_rows(self, ells: list[int] | np.ndarray) -> np.ndarray:
+        """Return normalized negative-exponent rows for spectral averaging."""
+        offsets = np.asarray(ells, dtype=float).reshape(-1)
+        theta = self.omega * self.t
+        return np.exp(-1j * offsets[:, None] * theta[None, :]) / self.nt
+
 
 @dataclass
 class JosephsonBranchArray:
