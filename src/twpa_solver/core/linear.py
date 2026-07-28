@@ -81,6 +81,16 @@ def port_s_from_unit_current_response(
     return complex(s)
 
 
+def port_waves(
+    voltage: complex, current: complex, z0_ohm: float = 50.0
+) -> tuple[complex, complex]:
+    """Return incident and outgoing power-wave amplitudes ``(a, b)``."""
+    if z0_ohm <= 0.0:
+        raise ValueError("z0_ohm must be positive")
+    scale = 2.0 * np.sqrt(z0_ohm)
+    return (voltage + z0_ohm * current) / scale, (voltage - z0_ohm * current) / scale
+
+
 @dataclass
 class LinearScatteringResult:
     frequency_hz: float
