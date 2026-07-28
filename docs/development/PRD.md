@@ -365,7 +365,6 @@ linear_sparams
 pump_hb
 small_signal_gain
 gain_map
-compression_sweep
 disorder_sweep
 defect_sweep
 calibration_point
