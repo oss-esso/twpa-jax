@@ -6,6 +6,7 @@ import pytest
 
 from scripts.run_compression import (
     _build_multitone_basis,
+    _frequency_worker_limit,
     _interpolate_p1db_current,
     _resolve_attenuation,
     build_parser,
@@ -38,6 +39,21 @@ def test_multitone_preconditioner_defaults_exact_and_accepts_sector() -> None:
 def test_signal_frequency_is_required() -> None:
     with pytest.raises(SystemExit):
         main(["--output-dir", "unused"])
+
+
+def test_frequency_workers_are_capped_by_sparse_lu_memory_budget() -> None:
+    parser = build_parser()
+    fixture = parser.parse_args(
+        ["--output-dir", "unused", "--signal-workers", "4", "--resource-budget-gb", "8"]
+    )
+    production = parser.parse_args(
+        [
+            "--output-dir", "unused", "--circuit-dir", "design",
+            "--signal-workers", "4", "--resource-budget-gb", "8",
+        ]
+    )
+    assert _frequency_worker_limit(fixture, 10) == 2
+    assert _frequency_worker_limit(production, 10) == 2
 
 
 def test_p1db_interpolation_is_logarithmic_in_current() -> None:

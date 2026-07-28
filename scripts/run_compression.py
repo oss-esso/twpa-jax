@@ -629,6 +629,13 @@ def _frequency_worker(payload: tuple[dict[str, object], float, str]) -> dict[str
     return _write_one_result(args)
 
 
+def _frequency_worker_limit(args: argparse.Namespace, task_count: int) -> int:
+    """Cap concurrent sparse-LU workers to the declared memory budget."""
+    estimated_gb = 4.0 if args.circuit_dir is not None else 3.0
+    memory_limited = max(1, int(float(args.resource_budget_gb) // estimated_gb))
+    return max(1, min(int(args.signal_workers), task_count, memory_limited))
+
+
 def _run_frequency_sweep(args: argparse.Namespace) -> dict[str, object]:
     if args.signal_ghz_min is None or args.signal_ghz_max is None:
         raise ValueError(
@@ -641,16 +648,24 @@ def _run_frequency_sweep(args: argparse.Namespace) -> dict[str, object]:
     )
     args.output_dir.mkdir(parents=True, exist_ok=True)
     payloads = []
+    summaries_by_index: dict[int, dict[str, object]] = {}
     values = vars(args).copy()
     for index, frequency in enumerate(frequencies):
         subdir = args.output_dir / f"frequency_{index:03d}_{frequency:.6f}ghz"
-        payloads.append((values, float(frequency), str(subdir)))
-    workers = max(1, min(int(args.signal_workers), len(payloads)))
+        summary_path = subdir / "compression_summary.json"
+        if summary_path.exists():
+            summaries_by_index[index] = json.loads(summary_path.read_text(encoding="utf-8"))
+        else:
+            payloads.append((index, (values, float(frequency), str(subdir))))
+    workers = _frequency_worker_limit(args, max(len(payloads), 1))
     if workers == 1:
-        summaries = [_frequency_worker(payload) for payload in payloads]
+        completed = [(index, _frequency_worker(payload)) for index, payload in payloads]
     else:
         with ProcessPoolExecutor(max_workers=workers) as executor:
-            summaries = list(executor.map(_frequency_worker, payloads))
+            results = executor.map(_frequency_worker, [payload for _, payload in payloads])
+            completed = [(index, result) for (index, _), result in zip(payloads, results)]
+    summaries_by_index.update(completed)
+    summaries = [summaries_by_index[index] for index in range(len(frequencies))]
     rows = [
         {
             "signal_ghz": summary["signal_ghz"],
@@ -674,7 +689,12 @@ def _run_frequency_sweep(args: argparse.Namespace) -> dict[str, object]:
 
         figure, axis_p1db = plt.subplots(figsize=(7.0, 4.2))
         x = [float(row["signal_ghz"]) for row in rows]
-        p1db = [float(row["p1db_input_dbm"]) for row in rows]
+        p1db = [
+            float(row["p1db_input_dbm"])
+            if row["p1db_input_dbm"] is not None
+            else float("nan")
+            for row in rows
+        ]
         gain = [float(row["small_signal_gain_vs_off_db"]) for row in rows]
         axis_p1db.plot(x, p1db, "o-", color="tab:blue", label="P1dB input")
         axis_p1db.set_xlabel("Signal frequency (GHz)")
@@ -697,6 +717,8 @@ def _run_frequency_sweep(args: argparse.Namespace) -> dict[str, object]:
         "stability_status": "NOT_CHECKED",
         "n_signal_freq": len(rows),
         "signal_workers": workers,
+        "signal_workers_requested": int(args.signal_workers),
+        "resource_budget_gb": float(args.resource_budget_gb),
         "frequencies_ghz": [float(value) for value in frequencies],
     }
     (args.output_dir / "frequency_summary.json").write_text(
