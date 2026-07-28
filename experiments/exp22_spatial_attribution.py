@@ -21,7 +21,7 @@ def run_command(case: Case, outdir: Path) -> list[str]:
         "--pump-mode-count", "10", "--pump-nt", "40", "--signal-ghz", str(case.signal_ghz),
         "--source-port", "1", "--out-port", str(case.out_port), "--n-signal-power", "25",
         "--signal-current-min-a", "1e-12", "--signal-current-max-a", str(case.signal_max_a),
-        "--attenuation-db", "0", "--multitone-basis", "matched", "--multitone-sidebands", "2",
+        "--attenuation-db", "0", "--multitone-basis", "matched", "--multitone-sidebands", "4",
         "--recovery", "ladder", "--spatial-profiles", "--save-states", "selected",
     ]
     if case.pump_dir:

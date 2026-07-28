@@ -45,6 +45,13 @@ branch rows; gain changed 30.71517 -> 30.58665 dB while pump depletion reached
 the multitone driver currently uses the established SciPy/SuperLU-backed
 preconditioner path, so campaign timing remains attributable to that path.
 
+The full 25-point JTWPA exp20 S=2/S=4 check took 1058 s and found
+`delta_P1dB = +4.2389 dB`, so S=2 is **not** a converged saturation basis for
+that device even though its small-signal gain is converged. The summary sets
+`basis_spotcheck_flag = true`. Consequently exp21 and exp22 use matched S=4 for
+distributed production evidence until a higher-basis check establishes a
+smaller device-specific minimum.
+
 Running without `--run-slow` is not complete validation.
 
 Module map: pump solve `twpa_solver.pump.hb` + `twpa_solver.pump`

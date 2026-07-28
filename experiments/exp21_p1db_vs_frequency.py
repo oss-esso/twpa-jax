@@ -27,7 +27,7 @@ def command(case: Case, outdir: Path, frequencies: int, workers: int) -> list[st
         "--source-port", "1", "--out-port", str(case.out_port),
         "--n-signal-power", "25", "--signal-current-min-a", "1e-12",
         "--signal-current-max-a", str(case.signal_max_a), "--attenuation-db", "0",
-        "--multitone-basis", "matched", "--multitone-sidebands", "2", "--recovery", "ladder",
+        "--multitone-basis", "matched", "--multitone-sidebands", "4", "--recovery", "ladder",
     ]
     if case.pump_dir:
         cmd.extend(("--pump-solution-dir", case.pump_dir))
