@@ -9,34 +9,50 @@ import math
 from collections import Counter
 from pathlib import Path
 
+from exp20_multitone_compression import CASES
+
 
 def load_case(root: Path, name: str) -> dict[str, object]:
-    summaries = {
-        sidebands: json.loads((root / name / f"s{sidebands}" / "compression_summary.json").read_text())
-        for sidebands in (2, 4)
-    }
-    points = list(csv.DictReader((root / name / "s2" / "compression_points.csv").open()))
-    p2 = summaries[2].get("p1db_signal_current_a")
-    p4 = summaries[4].get("p1db_signal_current_a")
-    delta = (
-        20.0 * math.log10(float(p4) / float(p2))
-        if p2 is not None and p4 is not None
-        else None
+    case = next(case for case in CASES if case.name == name)
+    sidebands = case.selected_sidebands
+    production = json.loads(
+        (root / name / f"s{sidebands}" / "compression_summary.json").read_text()
     )
-    basis_flag = delta is None or abs(delta) > 0.2
-    production = summaries[4] if basis_flag else summaries[2]
+    points = list(
+        csv.DictReader(
+            (root / name / f"s{sidebands}" / "compression_points.csv").open()
+        )
+    )
+    gain = float(production["small_signal_gain_db"])
+    floquet_gap = (
+        gain - case.floquet_gain_db if case.floquet_gain_db is not None else None
+    )
+    jc_gap = gain - case.jc_gain_db if case.jc_gain_db is not None else None
+    parity_pass = floquet_gap is not None and abs(floquet_gap) < 0.05
+    jc_pass = jc_gap is not None and abs(jc_gap) < 0.2
     rungs = Counter(point["recovery_rung"] for point in points)
     return {
         "device": name,
-        "status": summaries[2]["status"],
-        "small_signal_gain_db": summaries[2]["small_signal_gain_db"],
-        "small_signal_gain_vs_off_db": summaries[2]["small_signal_gain_vs_off_db"],
-        "p1db_input_dbm": summaries[2]["p1db_input_dbm"],
-        "p1db_output_dbm": summaries[2]["p1db_output_dbm"],
-        "p1db_pump_depletion_db": summaries[2]["p1db_pump_depletion_db"],
-        "delta_p1db_s4_minus_s2_db": delta,
-        "basis_spotcheck_flag": basis_flag,
-        "recommended_sidebands": 4 if basis_flag else 2,
+        "status": production["status"],
+        "selected_sidebands": sidebands,
+        "selection_reason": (
+            "same-S Floquet parity <0.05 dB and JC gap <0.2 dB"
+            if case.jc_gain_db is not None
+            else "NO_JC_REFERENCE; selected from the production map basis"
+        ),
+        "small_signal_gain_db": gain,
+        "floquet_reference_db": case.floquet_gain_db,
+        "multitone_minus_floquet_db": floquet_gap,
+        "multitone_floquet_parity_pass": parity_pass,
+        "jc_reference_db": case.jc_gain_db,
+        "small_signal_minus_jc_db": jc_gap,
+        "jc_reference_pass": jc_pass,
+        "basis_selection_pass": parity_pass and jc_pass,
+        "small_signal_gain_vs_off_db": production["small_signal_gain_vs_off_db"],
+        "p1db_input_dbm": production["p1db_input_dbm"],
+        "p1db_output_dbm": production["p1db_output_dbm"],
+        "p1db_pump_depletion_db": production["p1db_pump_depletion_db"],
+        "recommended_sidebands": sidebands,
         "production_p1db_input_dbm": production["p1db_input_dbm"],
         "production_p1db_output_dbm": production["p1db_output_dbm"],
         "production_p1db_pump_depletion_db": production["p1db_pump_depletion_db"],

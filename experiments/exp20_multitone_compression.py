@@ -19,12 +19,15 @@ class Case:
     signal_ghz: float
     out_port: int
     signal_max_a: float
+    selected_sidebands: int
+    floquet_gain_db: float | None
+    jc_gain_db: float | None
 
 
 CASES = (
-    Case("jpa", ("--fixture", "jpa"), "outputs/exp14_jpa_odd10_scale2/pump", 4.75001, 1.13e-8, 4.75, 1, 3e-8),
-    Case("jtwpa", ("--fixture", "jtwpa"), "outputs/exp14_jtwpa_odd10_scale2/pump", 7.12, 3.7e-6, 6.6, 2, 3e-7),
-    Case("fqjtwpa", ("--fixture", "fqjtwpa"), "outputs/exp14_fqjtwpa_odd10_scale2/pump", 7.9, 2.2e-6, 7.4, 2, 3e-7),
+    Case("jpa", ("--fixture", "jpa"), "outputs/exp14_jpa_odd10_scale2/pump", 4.75001, 1.13e-8, 4.75, 1, 3e-8, 2, 13.305111, 13.302331),
+    Case("jtwpa", ("--fixture", "jtwpa"), "outputs/exp14_jtwpa_odd10_scale2/pump", 7.12, 3.7e-6, 6.6, 2, 3e-7, 10, 27.541036, 27.5402),
+    Case("fqjtwpa", ("--fixture", "fqjtwpa"), "outputs/exp14_fqjtwpa_odd10_scale2/pump", 7.9, 2.2e-6, 7.4, 2, 3e-7, 6, 28.534877, 28.5367),
     Case(
         "2c",
         ("--circuit-dir", "outputs/ipm_python_design"),
@@ -34,6 +37,9 @@ CASES = (
         7.440816326531111,
         2,
         3e-7,
+        10,
+        None,
+        None,
     ),
 )
 
@@ -79,12 +85,16 @@ def main() -> int:
     args = parser.parse_args()
     selected = [case for case in CASES if not args.only or case.name in args.only]
     for case in selected:
-        for sidebands in (2, 4):
-            powers = args.n_signal_power if sidebands == 2 else max(15, args.n_signal_power)
-            cmd = command(case, sidebands, args.output_dir / case.name / f"s{sidebands}", powers)
-            print(subprocess.list2cmdline(cmd), flush=True)
-            if not args.dry_run:
-                subprocess.run(cmd, check=True)
+        sidebands = case.selected_sidebands
+        cmd = command(
+            case,
+            sidebands,
+            args.output_dir / case.name / f"s{sidebands}",
+            args.n_signal_power,
+        )
+        print(subprocess.list2cmdline(cmd), flush=True)
+        if not args.dry_run:
+            subprocess.run(cmd, check=True)
     return 0
 
 
