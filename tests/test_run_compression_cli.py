@@ -4,29 +4,37 @@ import json
 
 import pytest
 
-from scripts.run_compression import _resolve_attenuation, build_parser, main
+from scripts.run_compression import (
+    _build_multitone_basis,
+    _resolve_attenuation,
+    build_parser,
+    main,
+)
 
 
 def test_multitone_preconditioner_defaults_exact_and_accepts_sector() -> None:
     parser = build_parser()
-    default = parser.parse_args(["--output-dir", "unused"])
+    default = parser.parse_args(["--output-dir", "unused", "--signal-ghz", "4.5"])
     sector = parser.parse_args(
         [
             "--output-dir",
             "unused",
+            "--signal-ghz",
+            "4.5",
             "--multitone-preconditioner",
             "floquet_sector",
         ]
     )
     assert default.multitone_preconditioner == "real_coupled_fast"
+    assert default.multitone_basis == "matched"
+    assert default.multitone_sidebands == 2
     assert sector.multitone_preconditioner == "floquet_sector"
-    assert default.signal_ghz is None
+    assert default.signal_ghz == 4.5
 
 
-def test_signal_frequency_defaults_to_pump_frequency(tmp_path) -> None:
-    assert main(["--output-dir", str(tmp_path), "--n-signal-power", "1"]) == 0
-    summary = json.loads((tmp_path / "compression_summary.json").read_text())
-    assert summary["signal_ghz"] == summary["pump_freq_ghz"]
+def test_signal_frequency_is_required() -> None:
+    with pytest.raises(SystemExit):
+        build_parser().parse_args(["--output-dir", "unused"])
 
 
 def test_no_gain_operating_point_suppresses_compression(tmp_path) -> None:
@@ -53,20 +61,39 @@ def test_multitone_preconditioner_rejects_unknown_name() -> None:
             [
                 "--output-dir",
                 "unused",
+                "--signal-ghz",
+                "4.5",
                 "--multitone-preconditioner",
                 "unknown",
             ]
         )
 
 
+def test_three_tone_guard_names_missing_pump_modes() -> None:
+    args = build_parser().parse_args(
+        [
+            "--output-dir",
+            "unused",
+            "--signal-ghz",
+            "4.5",
+            "--multitone-basis",
+            "three_tone",
+        ]
+    )
+    with pytest.raises(ValueError, match=r"pump_modes=\[1, 3\].*missing=\[3\]"):
+        _build_multitone_basis(args, [1, 3], 10.0, 1.0)
+
+
 def test_fixture_and_circuit_attenuation_defaults_are_distinct() -> None:
     parser = build_parser()
-    fixture = parser.parse_args(["--output-dir", "unused", "--fixture", "jpa"])
+    fixture = parser.parse_args(
+        ["--output-dir", "unused", "--signal-ghz", "4.5", "--fixture", "jpa"]
+    )
     circuit = parser.parse_args(
-        ["--output-dir", "unused", "--circuit-dir", "design"]
+        ["--output-dir", "unused", "--signal-ghz", "4.5", "--circuit-dir", "design"]
     )
     explicit = parser.parse_args(
-        ["--output-dir", "unused", "--fixture", "jpa", "--attenuation-db", "7"]
+        ["--output-dir", "unused", "--signal-ghz", "4.5", "--fixture", "jpa", "--attenuation-db", "7"]
     )
     assert _resolve_attenuation(fixture) == (0.0, "fixture_default_zero")
     assert _resolve_attenuation(circuit)[1] == "themis_default_loss_model"
@@ -80,6 +107,8 @@ def test_run_compression_uses_sector_preconditioner(tmp_path) -> None:
             str(tmp_path),
             "--n-signal-power",
             "2",
+            "--signal-ghz",
+            "4.5",
             "--multitone-preconditioner",
             "floquet_sector",
         ]
@@ -91,7 +120,16 @@ def test_run_compression_uses_sector_preconditioner(tmp_path) -> None:
 
 
 def test_run_compression_smoke_writes_artifacts(tmp_path) -> None:
-    assert main(["--output-dir", str(tmp_path), "--n-signal-power", "5"]) == 0
+    assert main(
+        [
+            "--output-dir",
+            str(tmp_path),
+            "--signal-ghz",
+            "4.5",
+            "--n-signal-power",
+            "5",
+        ]
+    ) == 0
     assert (tmp_path / "compression_points.csv").exists()
     assert (tmp_path / "compression_arrays.npz").exists()
     summary = json.loads((tmp_path / "compression_summary.json").read_text())

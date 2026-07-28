@@ -13,7 +13,12 @@ import numpy as np
 from twpa_solver import default_loss_model
 from twpa_solver.builders.jc_doc import build_fqjtwpa, build_jpa, build_jtwpa
 from twpa_solver.core import CircuitMatrices, load_circuit
-from twpa_solver.multitone.basis import build_three_tone_basis
+from twpa_solver.multitone.basis import (
+    MultiToneBasis,
+    build_lattice_basis,
+    build_sideband_matched_basis,
+    build_three_tone_basis,
+)
 from twpa_solver.multitone.compression import solve_signal_power_point
 from twpa_solver.multitone.observables import tone_s21
 from twpa_solver.multitone.preconditioners import (
@@ -41,7 +46,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--n-signal-power", type=int, default=5)
-    parser.add_argument("--multitone-basis", choices=("three_tone", "lattice"), default="three_tone")
+    parser.add_argument(
+        "--multitone-basis",
+        choices=("matched", "three_tone", "lattice"),
+        default="matched",
+    )
+    parser.add_argument("--multitone-sidebands", type=int, default=2)
     parser.add_argument("--resource-budget-gb", type=float, default=8.0)
     parser.add_argument("--save-states", choices=("none", "last", "selected", "all"), default="none")
     parser.add_argument("--signal-ghz-min", type=float)
@@ -57,7 +67,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--signal-ghz",
         type=float,
-        help="Signal frequency in GHz (default: pump frequency).",
+        required=True,
+        help="Signal frequency in GHz.",
     )
     parser.add_argument("--pump-current-a", type=float)
     parser.add_argument(
@@ -128,6 +139,43 @@ def _resolve_attenuation(args: argparse.Namespace) -> tuple[float, str]:
     )
 
 
+def _build_multitone_basis(
+    args: argparse.Namespace,
+    pump_modes: list[int],
+    omega_p: float,
+    delta: float,
+) -> MultiToneBasis:
+    omega_max = omega_p * (max(pump_modes) + 1.0)
+    if args.multitone_basis == "matched":
+        basis = build_sideband_matched_basis(
+            pump_modes,
+            args.multitone_sidebands,
+            omega_p,
+            delta,
+            omega_max,
+        )
+    elif args.multitone_basis == "lattice":
+        basis = build_lattice_basis(
+            pump_modes,
+            args.multitone_sidebands,
+            omega_p,
+            delta,
+            omega_max,
+        )
+    else:
+        basis = build_three_tone_basis(omega_p, delta)
+    represented_modes = {tone.h for tone in basis.tones if tone.q == 0}
+    missing_modes = sorted(set(pump_modes) - represented_modes)
+    if missing_modes:
+        raise ValueError(
+            "multitone basis silently truncates pump harmonics: "
+            f"pump_modes={list(pump_modes)}, "
+            f"multitone_q0_modes={sorted(represented_modes)}, "
+            f"missing={missing_modes}"
+        )
+    return basis
+
+
 def _solve_compression(args: argparse.Namespace) -> tuple[list[dict[str, float]], dict[str, np.ndarray], dict[str, object]]:
     circuit, metadata, circuit_source = _load_source(args)
     attenuation_db, attenuation_source = _resolve_attenuation(args)
@@ -185,7 +233,8 @@ def _solve_compression(args: argparse.Namespace) -> tuple[list[dict[str, float]]
             pump_settings
         ).solve_continuation(pump_problem, continuation_steps=4)
         pump_converged = bool(pump_reports[-1].converged)
-    basis = build_three_tone_basis(omega_p, omega_p - 2.0 * math.pi * args.signal_ghz * 1e9)
+    delta = omega_p - 2.0 * math.pi * args.signal_ghz * 1e9
+    basis = _build_multitone_basis(args, pump_basis.modes, omega_p, delta)
     pump_seed = promote_pump_solution(pump_state, pump_basis, basis)
     pump_source = MultiToneDrive(basis.pump_tone, circuit.port_to_index[source_port], pump_current).to_coeffs(
         basis, circuit.node_count
@@ -323,8 +372,6 @@ def _solve_compression(args: argparse.Namespace) -> tuple[list[dict[str, float]]
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    if args.signal_ghz is None:
-        args.signal_ghz = args.pump_freq_ghz
     points, states, summary = _solve_compression(args)
     summary.update({
         "multitone_basis": args.multitone_basis,
