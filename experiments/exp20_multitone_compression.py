@@ -25,7 +25,16 @@ CASES = (
     Case("jpa", ("--fixture", "jpa"), "outputs/exp14_jpa_odd10_scale2/pump", 4.75001, 1.13e-8, 4.75, 1, 3e-8),
     Case("jtwpa", ("--fixture", "jtwpa"), "outputs/exp14_jtwpa_odd10_scale2/pump", 7.12, 3.7e-6, 6.6, 2, 3e-7),
     Case("fqjtwpa", ("--fixture", "fqjtwpa"), "outputs/exp14_fqjtwpa_odd10_scale2/pump", 7.9, 2.2e-6, 7.4, 2, 3e-7),
-    Case("2c", ("--circuit-dir", "outputs/ipm_python_design"), None, 7.376811594202222, 6.349059495192881e-6, 7.1768115942022215, 2, 3e-7),
+    Case(
+        "2c",
+        ("--circuit-dir", "outputs/ipm_python_design"),
+        "outputs/solver_spectrum_2c_recover_m35_m23_7p5_8p5_50x50_s20_sb10/chunks/chunk_000_cols_000_009/warm/points/point_0212_p_m29p8571dbm_fp_7p54082ghz/pump",
+        7.540816326531111,
+        7.231074707853736e-6,
+        7.440816326531111,
+        2,
+        3e-7,
+    ),
 )
 
 
@@ -56,6 +65,8 @@ def command(case: Case, sidebands: int, outdir: Path, powers: int) -> list[str]:
     ]
     if case.pump_dir:
         cmd.extend(("--pump-solution-dir", case.pump_dir))
+    if case.name == "2c":
+        cmd.extend(("--signal-continuation-deadline-s", "600"))
     return cmd
 
 

@@ -57,6 +57,15 @@ took 665 s and measured `delta_P1dB(S4-S2) = -2.5792 dB`. exp20 summary keeps
 the S=2 diagnostic columns but selects S=4 into the `production_p1db_*` columns
 whenever the 0.2 dB basis flag trips.
 
+2c remains blocked on the full-node multitone reference path. Cold pump
+continuation at the earlier 7.376812 GHz point converged to lambda=0.25 and
+stalled at lambda=0.5. A retained converged Schur pump at 7.540816 GHz loads
+successfully, but adaptive full-node pump/reference correction did not finish
+one small-signal point inside a measured 604 s external bound. exp20 now pins
+that retained pump and an internal 600 s continuation deadline. Do not schedule
+the full 2c exp20-exp22 campaign until multitone Schur/reference reuse removes
+this measured per-reference blocker.
+
 Running without `--run-slow` is not complete validation.
 
 Module map: pump solve `twpa_solver.pump.hb` + `twpa_solver.pump`

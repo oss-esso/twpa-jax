@@ -284,6 +284,14 @@ def _solve_compression(
             pump_settings
         ).solve_continuation(pump_problem, continuation_steps=4)
         pump_converged = bool(pump_reports[-1].converged)
+        if not pump_converged:
+            final = pump_reports[-1]
+            raise RuntimeError(
+                "pump continuation failed before the multitone solve: "
+                f"source_scale={final.source_scale}, "
+                f"coeff_rel={final.coeff_rel:.6g}, "
+                f"reason={final.failure_reason}"
+            )
     delta = omega_p - 2.0 * math.pi * args.signal_ghz * 1e9
     basis = _build_multitone_basis(args, pump_basis.modes, omega_p, delta)
     pump_seed = promote_pump_solution(pump_state, pump_basis, basis)
@@ -333,7 +341,33 @@ def _solve_compression(
         1.0,
     )
     if not pump_only_report.converged:
-        raise RuntimeError("pump-on signal-off reference did not converge")
+        pump_only_state, pump_only_reports, pump_only_trace = (
+            HarmonicNewtonKrylovSolver(settings).solve_adaptive_continuation(
+                pump_only_problem,
+                None,
+                initial_step=0.25,
+                min_step=0.01,
+                growth=1.5,
+                shrink=0.5,
+                fallback_fixed_steps=20,
+                max_wall_s=args.signal_continuation_deadline_s,
+            )
+        )
+        if (
+            not pump_only_reports
+            or not pump_only_reports[-1].converged
+            or not pump_only_trace.accepted_lambdas
+            or pump_only_trace.accepted_lambdas[-1] < 1.0 - 1e-12
+        ):
+            reason = (
+                pump_only_reports[-1].failure_reason
+                if pump_only_reports
+                else pump_only_trace.failure_reason
+            )
+            raise RuntimeError(
+                "pump-on signal-off adaptive reference did not converge: "
+                f"{reason}"
+            )
     pump_reference_s21 = tone_s21(
         pump_only_state,
         basis,
