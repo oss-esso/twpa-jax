@@ -14,6 +14,10 @@ from twpa_solver.builders.jc_doc import build_jpa
 from twpa_solver.core import CircuitMatrices
 from twpa_solver.multitone.basis import build_three_tone_basis
 from twpa_solver.multitone.observables import tone_s21
+from twpa_solver.multitone.preconditioners import (
+    MULTITONE_PRECONDITIONERS,
+    resolve_multitone_preconditioner,
+)
 from twpa_solver.multitone.problem import FullMultiToneProblem
 from twpa_solver.multitone.source import AffineSourcePath, MultiToneDrive
 from twpa_solver.multitone.io import write_compression_outputs
@@ -46,6 +50,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--pump-current-a", type=float)
     parser.add_argument("--signal-current-min-a", type=float, default=1e-12)
     parser.add_argument("--signal-current-max-a", type=float, default=1e-9)
+    parser.add_argument(
+        "--multitone-preconditioner",
+        choices=MULTITONE_PRECONDITIONERS,
+        default="real_coupled_fast",
+    )
     return parser
 
 
@@ -64,15 +73,25 @@ def _solve_jpa(args: argparse.Namespace) -> tuple[list[dict[str, float]], dict[s
         grid=HarmonicGrid(np.asarray([1]), nt=8, omega=omega_p),
         pump_node_index=circuit.port_to_index[1], pump_current_a=pump_current,
     )
+    selected_preconditioner = resolve_multitone_preconditioner(
+        args.multitone_preconditioner
+    )
+    solver_preconditioner = (
+        "real_coupled_fast"
+        if selected_preconditioner == "floquet_sector"
+        else selected_preconditioner
+    )
     settings = NewtonKrylovSettings(
         newton_tol=1e-10, max_newton=20, gmres_rtol=1e-8, gmres_atol=0.0,
         gmres_restart=20, gmres_maxiter=40, min_alpha=1.0 / 1024.0,
-        preconditioner="real_coupled", compute_time_residual=False, verbose=False,
+        preconditioner=solver_preconditioner,
+        compute_time_residual=False, verbose=False,
         continuation_predictor="none", jvp_mode="aft",
     )
-    pump_state, pump_reports = HarmonicNewtonKrylovSolver(settings).solve_continuation(
-        pump_problem, continuation_steps=4
-    )
+    pump_settings = replace(settings, preconditioner="real_coupled")
+    pump_state, pump_reports = HarmonicNewtonKrylovSolver(
+        pump_settings
+    ).solve_continuation(pump_problem, continuation_steps=4)
     basis = build_three_tone_basis(omega_p, omega_p - 2.0 * math.pi * args.signal_ghz * 1e9)
     pump_basis = PumpBasis([1], "dense_real", omega_p)
     pump_seed = promote_pump_solution(pump_state, pump_basis, basis)
@@ -89,7 +108,12 @@ def _solve_jpa(args: argparse.Namespace) -> tuple[list[dict[str, float]], dict[s
     reference_gain = None
     for index, current in enumerate(currents):
         path = AffineSourcePath.signal_turn_on(pump_source, signal_unit * float(current))
-        problem = FullMultiToneProblem(circuit, basis, path)
+        problem = FullMultiToneProblem(
+            circuit,
+            basis,
+            path,
+            preconditioner=selected_preconditioner,
+        )
         state, report = HarmonicNewtonKrylovSolver(settings).solve_one(problem, previous, 1.0)
         previous = state
         if report.converged:
@@ -119,6 +143,7 @@ def _solve_jpa(args: argparse.Namespace) -> tuple[list[dict[str, float]], dict[s
         "signal_ghz": args.signal_ghz,
         "pump_current_a": pump_current,
         "pump_converged": bool(pump_reports[-1].converged),
+        "multitone_preconditioner": selected_preconditioner,
         "basis": basis.to_metadata(),
     }
     return points, states, summary

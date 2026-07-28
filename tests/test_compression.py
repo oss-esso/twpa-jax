@@ -5,7 +5,7 @@ import math
 import numpy as np
 import pytest
 
-from tests.test_multitone_physics import _jpa, _pump
+from tests.test_multitone_physics import _jpa, _pump, _settings
 from twpa_solver.multitone.basis import build_three_tone_basis
 from twpa_solver.multitone.compression import solve_signal_power_point
 from twpa_solver.multitone.observables import tone_s21
@@ -52,7 +52,7 @@ def test_real_multitone_compression_sweep_warm_starts_nearest_state() -> None:
     )
     initial = np.zeros((basis.n_tones, circuit.C.shape[0]), dtype=np.complex128)
     initial[basis.index_of(basis.pump_tone)] = pump_state[0]
-    solver = HarmonicNewtonKrylovSolver(_pump.__globals__["_settings"]())
+    solver = HarmonicNewtonKrylovSolver(_settings())
     currents = np.geomspace(1e-12, 1e-10, 5)
     previous = initial
     previous_previous = None

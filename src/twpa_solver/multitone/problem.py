@@ -32,8 +32,16 @@ class FullMultiToneProblem:
     loss_model: str | object = "current_complex_c"
     input_power_dbm: float | None = None
     dc_branch_flux: np.ndarray | None = None
+    preconditioner: str | None = None
 
     def __post_init__(self) -> None:
+        from twpa_solver.multitone.preconditioners import (
+            resolve_multitone_preconditioner,
+        )
+
+        self.preconditioner = resolve_multitone_preconditioner(
+            self.preconditioner
+        )
         self.C = self.circuit.C.tocsr()
         self.G = self.circuit.G.tocsr()
         self.K = self.circuit.K.tocsr()
@@ -79,6 +87,14 @@ class FullMultiToneProblem:
         return list(self.basis.tones)
 
     def assemble_real_coupled_fast(self, tangent: TangentState):
+        if self.preconditioner == "floquet_sector":
+            from twpa_solver.multitone.preconditioners import (
+                FloquetSectorPreconditioner,
+            )
+
+            preconditioner = FloquetSectorPreconditioner(self)
+            preconditioner.refactor(tangent)
+            return preconditioner
         return self.assemble_real_coupled_preconditioner(
             self.spectral_tangent_state(tangent)
         )
