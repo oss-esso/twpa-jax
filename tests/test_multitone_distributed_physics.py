@@ -1,15 +1,17 @@
 from __future__ import annotations
 
+import dataclasses
 import math
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
-from pathlib import Path
 
 import numpy as np
 import pytest
 import scipy.sparse as sp
 
-from twpa_solver.core import CircuitMatrices, load_circuit
+from twpa_solver.builders.jc_doc import build_fqjtwpa, build_jtwpa
+from twpa_solver.core import CircuitMatrices
 from twpa_solver.multitone.basis import (
     MultiToneBasis,
     ToneIndex,
@@ -20,24 +22,32 @@ from twpa_solver.multitone.problem import FullMultiToneProblem
 from twpa_solver.multitone.schur import build_multitone_schur_problem
 from twpa_solver.multitone.seed import promote_pump_solution
 from twpa_solver.multitone.source import AffineSourcePath, MultiToneDrive
-from twpa_solver.pump import HarmonicNewtonKrylovSolver, NewtonKrylovSettings
+from twpa_solver.pump import (
+    FullPumpProblem,
+    HarmonicGrid,
+    HarmonicNewtonKrylovSolver,
+    JosephsonBranchArray,
+    NewtonKrylovSettings,
+)
+from twpa_solver.pump.basis import PumpBasis
 from twpa_solver.pump.backends.schur_partition import restrict
 from twpa_solver.signal.floquet import GainResult, solve_gain_one
 from twpa_solver.signal.gamma import build_khat, compute_gamma_hat
-from twpa_solver.signal.io import PumpSolution, load_pump
+from twpa_solver.signal.io import PumpSolution
 
 
-ROOT = Path(__file__).resolve().parents[1]
 SIGNAL_CURRENT_A = 1e-12
+PUMP_MODES = list(range(1, 20, 2))
 
 
 @dataclass(frozen=True)
 class DistributedCase:
     name: str
-    artifact: str
     pump_ghz: float
+    pump_current_a: float
     signal_ghz: float
     expected_gain_vs_off_db: float
+    expected_numerical_gap_db: float
 
 
 @dataclass(frozen=True)
@@ -55,17 +65,19 @@ class ParityMeasurement:
 CASES = (
     DistributedCase(
         "jtwpa",
-        "exp14_jtwpa_odd10_scale2",
         7.12,
+        3.7e-6,
         6.6,
         27.542559891831555,
+        1.95e-8,
     ),
     DistributedCase(
         "fqjtwpa",
-        "exp14_fqjtwpa_odd10_scale2",
         7.9,
+        2.2e-6,
         7.4,
         28.536893889606535,
+        1.28e-13,
     ),
 )
 
@@ -93,6 +105,52 @@ def _pump_off_khat(circuit: CircuitMatrices) -> sp.csr_matrix:
         @ sp.diags(circuit.Ic / circuit.phi0)
         @ circuit.Bphi.T
     ).tocsr()
+
+
+def _build_circuit(case: DistributedCase) -> CircuitMatrices:
+    builder, _ = build_jtwpa() if case.name == "jtwpa" else build_fqjtwpa()
+    arrays = builder.assemble()
+    return CircuitMatrices(
+        C=arrays["C"],
+        G=arrays["G"],
+        K=arrays["K"],
+        Bphi=arrays["Bphi"],
+        Ic=arrays["Ic"],
+        port_to_index=arrays["ports"],
+    )
+
+
+def _solve_pump(
+    case: DistributedCase, circuit: CircuitMatrices
+) -> PumpSolution:
+    omega_p = 2.0 * math.pi * case.pump_ghz * 1e9
+    basis = PumpBasis(PUMP_MODES, "positive_odd_jc", omega_p)
+    problem = FullPumpProblem(
+        C=circuit.C,
+        G=circuit.G,
+        K=circuit.K,
+        Bphi=circuit.Bphi,
+        branch=JosephsonBranchArray(circuit.Ic, circuit.phi0),
+        grid=HarmonicGrid(np.asarray(PUMP_MODES), nt=40, omega=omega_p),
+        pump_node_index=circuit.port_to_index[1],
+        pump_current_a=case.pump_current_a,
+    )
+    settings = dataclasses.replace(_settings(), preconditioner="mean_tangent")
+    state, reports = HarmonicNewtonKrylovSolver(settings).solve_continuation(
+        problem, continuation_steps=20
+    )
+    report = reports[-1]
+    assert report.converged, report.failure_reason
+    return PumpSolution(
+        X=state,
+        omega_p=omega_p,
+        pump_freq_ghz=case.pump_ghz,
+        harmonics=len(PUMP_MODES),
+        nt_original=40,
+        metadata={"pump_current_a": case.pump_current_a},
+        modes=PUMP_MODES,
+        basis=basis,
+    )
 
 
 def _pump_source(
@@ -145,9 +203,8 @@ def measure_distributed_parity(
     idler_m: int = -2,
 ) -> ParityMeasurement:
     started = time.perf_counter()
-    artifact = ROOT / "outputs" / case.artifact
-    pump = load_pump(artifact / "pump", case.pump_ghz)
-    circuit = load_circuit(ROOT / str(pump.metadata["ipm_dir"]))
+    circuit = _build_circuit(case)
+    pump = _solve_pump(case, circuit)
     delta = pump.omega_p - 2.0 * math.pi * case.signal_ghz * 1e9
     basis = build_sideband_matched_basis(
         pump.modes,
@@ -239,16 +296,29 @@ def measure_distributed_parity(
 
 @pytest.mark.slow
 @pytest.mark.parametrize("case", CASES, ids=lambda case: case.name)
-def test_distributed_small_signal_parity(case: DistributedCase) -> None:
+def test_distributed_small_signal_parity(
+    case: DistributedCase,
+    record_property: Callable[[str, object], None],
+) -> None:
     measurement = measure_distributed_parity(case, sidebands=10)
+    gain_vs_off_gap = abs(
+        measurement.multitone_gain_vs_off_db
+        - measurement.floquet_gain_vs_off_db
+    )
+    record_property("runtime_s", measurement.runtime_s)
+    record_property("gain_vs_off_gap_db", gain_vs_off_gap)
+    record_property(
+        "gain_db_gap_db",
+        abs(measurement.multitone_gain_db - measurement.floquet_gain_db),
+    )
     assert measurement.multitone_gain_vs_off_db > 3.0
     assert abs(
         measurement.multitone_gain_vs_off_db - case.expected_gain_vs_off_db
     ) < 0.05
+    assert gain_vs_off_gap < 0.05
     assert abs(
-        measurement.multitone_gain_vs_off_db
-        - measurement.floquet_gain_vs_off_db
-    ) < 0.05
+        gain_vs_off_gap - case.expected_numerical_gap_db
+    ) < 1e-7
     assert abs(
         measurement.multitone_gain_db - measurement.floquet_gain_db
     ) < 0.05
