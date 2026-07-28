@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from scripts.run_compression import build_parser, main
+from scripts.run_compression import _resolve_attenuation, build_parser, main
 
 
 def test_multitone_preconditioner_defaults_exact_and_accepts_sector() -> None:
@@ -57,6 +57,20 @@ def test_multitone_preconditioner_rejects_unknown_name() -> None:
                 "unknown",
             ]
         )
+
+
+def test_fixture_and_circuit_attenuation_defaults_are_distinct() -> None:
+    parser = build_parser()
+    fixture = parser.parse_args(["--output-dir", "unused", "--fixture", "jpa"])
+    circuit = parser.parse_args(
+        ["--output-dir", "unused", "--circuit-dir", "design"]
+    )
+    explicit = parser.parse_args(
+        ["--output-dir", "unused", "--fixture", "jpa", "--attenuation-db", "7"]
+    )
+    assert _resolve_attenuation(fixture) == (0.0, "fixture_default_zero")
+    assert _resolve_attenuation(circuit)[1] == "themis_default_loss_model"
+    assert _resolve_attenuation(explicit) == (7.0, "explicit")
 
 
 def test_run_compression_uses_sector_preconditioner(tmp_path) -> None:

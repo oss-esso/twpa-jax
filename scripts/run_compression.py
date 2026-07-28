@@ -111,8 +111,20 @@ def _load_source(args: argparse.Namespace) -> tuple[CircuitMatrices, dict[str, o
     return circuit, metadata, fixture
 
 
+def _resolve_attenuation(args: argparse.Namespace) -> tuple[float, str]:
+    if args.attenuation_db is not None:
+        return float(args.attenuation_db), "explicit"
+    if args.circuit_dir is None:
+        return 0.0, "fixture_default_zero"
+    return (
+        float(default_loss_model().attenuation_db(args.pump_freq_ghz)),
+        "themis_default_loss_model",
+    )
+
+
 def _solve_compression(args: argparse.Namespace) -> tuple[list[dict[str, float]], dict[str, np.ndarray], dict[str, object]]:
     circuit, metadata, circuit_source = _load_source(args)
+    attenuation_db, attenuation_source = _resolve_attenuation(args)
     source_port = int(args.source_port or 1)
     out_port = int(args.out_port or (1 if circuit_source == "jpa" else 2))
     diagnostic_port = int(args.diagnostic_port or out_port)
@@ -262,11 +274,8 @@ def _solve_compression(args: argparse.Namespace) -> tuple[list[dict[str, float]]
         "source_port": source_port,
         "out_port": out_port,
         "diagnostic_port": diagnostic_port,
-        "attenuation_db": (
-            float(args.attenuation_db)
-            if args.attenuation_db is not None
-            else float(default_loss_model().attenuation_db(args.pump_freq_ghz))
-        ),
+        "attenuation_db": attenuation_db,
+        "attenuation_source": attenuation_source,
         "small_signal_gain_db": small_signal_gain_db,
         "small_signal_gain_vs_off_db": float(points[0]["gain_vs_off_db"]),
         "pump_off_gain_db": pump_off_gain_db,
