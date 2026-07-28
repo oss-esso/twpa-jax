@@ -144,9 +144,11 @@ def power_balance(
     dissipation = float(
         np.mean(np.sum(derivative * (circuit.G @ derivative.T).T, axis=1))
     )
-    reactive_scale = float(np.mean(np.sum(np.abs(derivative * internal), axis=1)))
-    relative = abs(supplied_power - dissipation) / max(
-        reactive_scale, abs(dissipation), 1e-30
+    real_power_scale = max(abs(supplied_power), abs(dissipation))
+    relative = (
+        0.0
+        if real_power_scale == 0.0
+        else abs(supplied_power - dissipation) / real_power_scale
     )
     nonlinear_coeffs = basis.project(nonlinear.T)
     photon_terms = []

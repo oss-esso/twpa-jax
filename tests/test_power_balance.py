@@ -56,12 +56,13 @@ def _state(loss: float):
 def test_power_balance_lossless_nonzero_state_and_manley_rowe() -> None:
     state, basis, circuit = _state(0.0)
     result = power_balance(state, basis, circuit)
-    assert result["power_balance_rel_err"] < 1e-6
-    assert result["manley_rowe_rel_err"] < 1e-6
+    assert abs(result["supplied_power"]) < 1e-30
+    assert result["dissipated_power"] == 0.0
+    assert result["manley_rowe_rel_err"] < 1e-12
 
 
 def test_power_balance_lossy_closes_with_dissipation() -> None:
     state, basis, circuit = _state(1e-3)
     result = power_balance(state, basis, circuit)
     assert result["dissipated_power"] > 0.0
-    assert result["power_balance_rel_err"] < 1e-6
+    assert result["power_balance_rel_err"] < 1e-12

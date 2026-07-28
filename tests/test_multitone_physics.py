@@ -244,7 +244,7 @@ def test_small_signal_parity_matches_full_sideband_reference() -> None:
         out_port=1,
         z0_ohm=50.0,
     )
-    assert abs(measured - reference.gain_vs_off_db) < 0.5
+    assert abs(measured - reference.gain_vs_off_db) < 1e-4
 
 
 def test_weak_point_is_explicitly_no_gain_limit() -> None:
