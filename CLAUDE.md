@@ -24,26 +24,86 @@ the Themis loss model unless `--attenuation-db` is explicit.
 Reproduce the four-device compression curves and S=2/S=4 P1dB check:
 
 ```powershell
-python experiments/exp20_multitone_compression.py
-python experiments/exp20_summary.py
+python experiments/exp20_multitone_compression.py --output-dir outputs/exp20_multitone_compression_converged
+python experiments/exp20_summary.py --input-dir outputs/exp20_multitone_compression_converged --output-dir outputs/exp20_summary_converged
 ```
 
 Run frequency-resolved P1dB and spatial attribution campaigns:
 
 ```powershell
-python experiments/exp21_p1db_vs_frequency.py --signal-workers 4
-python experiments/exp22_spatial_attribution.py
+python experiments/exp21_p1db_vs_frequency.py --output-dir outputs/exp21_p1db_vs_frequency_converged --signal-workers 4
+python experiments/exp22_spatial_attribution.py --output-dir outputs/exp22_spatial_attribution_converged
 ```
 
 Every artifact keeps `stability_status = "NOT_CHECKED"`; deep-saturation
-solutions are not stability claims. The validated JPA S=2 result is
-13.305144 dB small-signal gain and -132.7323 dBm input P1dB. S=4 moves P1dB
-by only +0.00596 dB. Near P1dB the recorded pump depletion is -3.3681 dB.
-The real JTWPA spatial smoke (`outputs/exp22_jtwpa_spatial_smoke`) wrote 2x2047
-branch rows; gain changed 30.71517 -> 30.58665 dB while pump depletion reached
--0.13898 dB at 1e-8 A. `pypardiso` is importable in the validated environment;
-the multitone driver currently uses the established SciPy/SuperLU-backed
-preconditioner path, so campaign timing remains attributable to that path.
+solutions are not stability claims. Final exp20 evidence (2026-07-29):
+
+| device | S | gain dB | gain - JC dB | input P1dB dBm | depletion at P1dB dB | recovery rungs |
+| --- | ---: | ---: | ---: | ---: | ---: | --- |
+| jpa | 2 | 13.305144 | +0.002813 | -132.732343 | -3.368085 | adaptive 1, previous 24 |
+| jtwpa | 10 | 27.541036 | +0.000836 | -111.458017 | -0.351776 | adaptive 1, previous 20, rescaled 2, substep 2 |
+| fqjtwpa | 6 | 28.534877 | -0.001823 | -107.386000 | -0.598642 | adaptive 1, previous 23, substep 1 |
+| 2c | 10 | 15.916611 | no JC reference | -95.083826 | -0.622737 | adaptive 1, previous 24 |
+
+Final exp21 directories are under
+`outputs/exp21_p1db_vs_frequency_converged/{jtwpa,fqjtwpa,2c}`. JTWPA reached
+P1dB at 8/10 frequencies (minimum -112.280936 dBm at 6.888889 GHz), FQJTWPA at
+8/10 (minimum -107.881062 dBm at 7.533333 GHz), and 2c at 10/10 (minimum
+-94.011690 dBm at 7.422222 GHz). `NO_GAIN_AT_OPERATING_POINT` is retained at
+the dead-band frequencies rather than reporting a P1dB.
+
+Final exp22 spatial artifacts are under
+`outputs/exp22_spatial_attribution_converged`: JTWPA contains 6,141 rows
+(2,047 branches x three operating points) and 2c contains 7,524 rows (2,508 x
+three). The 2c nonlinear branches are monotone but segmented by five intentional
+node-number gaps; spatial mapping validates order, not literal node adjacency.
+
+### Multitone preconditioner backend (measured 2026-07-28)
+
+`--multitone-preconditioner real_coupled_fast` (the default) now really is fast:
+it routes to `pump.backends.fast_coupled.FastCoupledPreconditioner`, which caches
+the scatter map + symbolic factorization and reruns only the numeric factor per
+Newton step. It previously forwarded to the plain
+`assemble_real_coupled_preconditioner`, i.e. a fresh `spla.splu` every step.
+Both the Schur backend (`multitone/schur.py`, cached on the partition) and the
+full backend (`multitone/problem.py`, cached on the `cache` field that survives
+`dataclasses.replace`) use it. Identical matrix, verified to 1.0e-11 relative.
+
+jtwpa S=10, per Newton step, single process:
+
+| path | before | after |
+| --- | --- | --- |
+| full backend (`--fixture`) | 6.148 s | 0.93 s (6.6x) |
+| schur backend (`--circuit-dir`) | 5.004 s | 1.00 s (5.0x) |
+
+`pypardiso` is present (0.4.7) and is the default factor backend. SuperLU still
+works via the automatic fallback but is a bad trade at this size — measured on
+jtwpa S=10: refactor 3.94 s vs 0.92 s (4.3x slower, because `spla.splu` has no
+symbolic-reuse API and this problem refactors every Newton step) for only 7% less
+peak RSS (2.81 vs 3.01 GB). Since peak sets the worker count and both give the
+same count, PARDISO wins ~3.8x at equal concurrency. Set `TWPA_REQUIRE_PARDISO=1`
+to make a silent fallback a hard error during timed campaigns.
+
+**Memory scales as (n_pump_modes + 2S + 1)^2**, not as the packed dimension: the
+coupled Jacobian is block-dense in tone index. Same jtwpa circuit, same n=2048,
+gain-map pump (H=10) vs multitone S=10 (H=31): M.nnz 2.46M -> 23.6M, exactly the
+9.6x H^2 ratio, while the dimension grew only 3.1x. The gain map is cheap because
+`signal/floquet.py::solve_gain_one` treats the sidebands as a separate *linear*
+factor-once system; saturation cannot, since the sidebands act back on the pump.
+Per-worker peak: 2.80 GB at S=10, ~1.6 GB at S=6, ~0.9 GB at S=2.
+
+`scripts/run_compression.py --signal-workers` is capped by
+`multitone.resources.fast_coupled_footprint` against BOTH `--resource-budget-gb`
+and actual free RAM. The old cap was a hardcoded 3.0 GB/worker independent of
+basis size, which underestimated S=10 by 38% and OOMed a 15.3 GB machine at
+2 workers. Tests: `tests/test_multitone_resources.py` pins the estimate to the
+measurement and asserts it never reads below it.
+
+`--precond-reuse N` / `--precond-reuse-refresh-gmres` expose modified-Newton
+preconditioning (reuse one factor across N Newton steps; the update is always
+taken against the true Jacobian, so the converged solution cannot change).
+Default 1 = refactor every step. **The speedup from N>1 is not yet measured.**
+The pump solve is pinned to `precond_reuse=1` so its iterate path is unchanged.
 
 Distributed sideband selection is reference-gated, not inferred from a two-point
 S=2/S=4 delta. JTWPA is non-monotone (30.7152, 24.2021, 26.5563, 27.5410 dB

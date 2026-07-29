@@ -30,6 +30,107 @@ class ResourceLimitExceeded(MemoryError):
     """Raised when a requested solve exceeds its configured memory budget."""
 
 
+# Calibration for the ``real_coupled_fast`` path, measured on jtwpa S=10
+# (n_tones=31, n=2560, n_branches=2559, packed dim 158720) with pypardiso:
+#   M.nnz            23,705,080   ->  284 MB   (12 B/nnz: float64 + int32)
+#   W.nnz            47,219,696   ->  567 MB   (W.nnz == 2 * M.nnz)
+#   PARDISO factors                ~ 1.85 GB   (~6.5x M.nnz)
+#   steady RSS                       2.80 GB
+#   peak RSS                         3.01 GB   (transient COO build of W)
+# Identical to 2 decimals for the Schur backend (n=2048, dim 126976), because
+# the footprint is dominated by the tone-coupled matrix, not the node count.
+# The khat block for a chain circuit carries ~2.4 nnz per retained node, and
+# M has 4 real quadrants over an H x H tone grid, so M.nnz ~ 4 H^2 (2.4 n).
+_KHAT_NNZ_PER_NODE = 2.4
+_BYTES_PER_NNZ = 12.0  # float64 data + int32 index
+# Rounded UP from the measured ~6.5: an underestimate overcommits workers and
+# drives the machine into swap, while an overestimate only leaves a core idle.
+_FACTOR_FILL_RATIO = 7.0
+# W is built from preallocated int32 row/col plus float64 value triplets and
+# then compressed to CSR, so the build transiently costs a fraction of the
+# final array on top of it. Rounded up from the measured (3.01-2.80)/0.567.
+_SCATTER_BUILD_OVERHEAD = 1.5
+
+
+@dataclass(frozen=True)
+class FastCoupledFootprint:
+    """Measured-calibrated peak memory for one ``real_coupled_fast`` solve."""
+
+    matrix_bytes: int
+    scatter_bytes: int
+    factor_bytes: int
+    steady_bytes: int
+    peak_bytes: int
+    matrix_nnz: int
+    matrix_dimension: int
+
+    @property
+    def steady_gb(self) -> float:
+        return self.steady_bytes / 1024**3
+
+    @property
+    def peak_gb(self) -> float:
+        return self.peak_bytes / 1024**3
+
+
+def fast_coupled_footprint(
+    n_tones: int, n_retained: int, *, base_bytes: int = 200 * 1024**2
+) -> FastCoupledFootprint:
+    """Estimate peak RSS of one ``real_coupled_fast`` multitone solve.
+
+    ``base_bytes`` covers the interpreter, numpy/scipy, and the circuit itself.
+    The transient peak is what matters for deciding worker counts: the scatter
+    map is built from int64 COO triplets before being compressed to CSR, so a
+    worker briefly needs well above its steady footprint.
+    """
+    if n_tones <= 0 or n_retained <= 0:
+        raise ValueError("n_tones and n_retained must be positive")
+    matrix_nnz = int(4 * n_tones**2 * _KHAT_NNZ_PER_NODE * n_retained)
+    matrix_bytes = int(matrix_nnz * _BYTES_PER_NNZ)
+    scatter_bytes = 2 * matrix_bytes
+    factor_bytes = int(matrix_nnz * _FACTOR_FILL_RATIO * _BYTES_PER_NNZ)
+    steady = base_bytes + matrix_bytes + scatter_bytes + factor_bytes
+    # The W build transiently holds int64 COO triplets for the same nnz count.
+    peak = steady + int(scatter_bytes * (_SCATTER_BUILD_OVERHEAD - 1.0))
+    return FastCoupledFootprint(
+        matrix_bytes=matrix_bytes,
+        scatter_bytes=scatter_bytes,
+        factor_bytes=factor_bytes,
+        steady_bytes=steady,
+        peak_bytes=peak,
+        matrix_nnz=matrix_nnz,
+        matrix_dimension=2 * n_tones * n_retained,
+    )
+
+
+def available_memory_gb() -> float | None:
+    """Return free physical memory in GiB, or ``None`` if it cannot be read."""
+    try:
+        import ctypes
+        import ctypes.wintypes as wintypes
+
+        class _MemoryStatus(ctypes.Structure):
+            _fields_ = [
+                ("dwLength", wintypes.DWORD),
+                ("dwMemoryLoad", wintypes.DWORD),
+                ("ullTotalPhys", ctypes.c_ulonglong),
+                ("ullAvailPhys", ctypes.c_ulonglong),
+                ("ullTotalPageFile", ctypes.c_ulonglong),
+                ("ullAvailPageFile", ctypes.c_ulonglong),
+                ("ullTotalVirtual", ctypes.c_ulonglong),
+                ("ullAvailVirtual", ctypes.c_ulonglong),
+                ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
+            ]
+
+        status = _MemoryStatus()
+        status.dwLength = ctypes.sizeof(_MemoryStatus)
+        if not ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status)):
+            return None
+        return status.ullAvailPhys / 1024**3
+    except (OSError, AttributeError, ValueError):
+        return None
+
+
 def estimate(
     basis: object,
     grid: object,

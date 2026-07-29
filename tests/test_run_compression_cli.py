@@ -4,6 +4,9 @@ import json
 
 import pytest
 
+from twpa_solver.multitone.resources import ResourceLimitExceeded
+
+from scripts import run_compression
 from scripts.run_compression import (
     _build_multitone_basis,
     _frequency_worker_limit,
@@ -41,19 +44,161 @@ def test_signal_frequency_is_required() -> None:
         main(["--output-dir", "unused"])
 
 
-def test_frequency_workers_are_capped_by_sparse_lu_memory_budget() -> None:
-    parser = build_parser()
-    fixture = parser.parse_args(
-        ["--output-dir", "unused", "--signal-workers", "4", "--resource-budget-gb", "8"]
-    )
-    production = parser.parse_args(
+def _worker_args(*extra: str) -> object:
+    return build_parser().parse_args(
         [
-            "--output-dir", "unused", "--circuit-dir", "design",
-            "--signal-workers", "4", "--resource-budget-gb", "8",
+            "--output-dir", "unused", "--fixture", "jtwpa",
+            "--signal-ghz", "6.6", "--pump-freq-ghz", "7.12",
+            "--pump-current-a", "3.7e-06", "--signal-workers", "4",
+            *extra,
         ]
     )
-    assert _frequency_worker_limit(fixture, 10) == 2
-    assert _frequency_worker_limit(production, 10) == 2
+
+
+def test_frequency_workers_scale_down_as_the_tone_basis_grows(monkeypatch) -> None:
+    """Worker count follows the real per-worker footprint, not a constant.
+
+    A fixed per-worker estimate either idles cores on a small basis or
+    overcommits on a large one; jtwpa at S=10 peaks near 4.14 GB per worker,
+    which a 3.0 GB constant underestimates into swap.
+    """
+    monkeypatch.setattr(run_compression, "available_memory_gb", lambda: 1024.0)
+    # Request far more workers than memory allows, so the footprint is what
+    # binds rather than the request itself.
+    budget = ("--signal-workers", "64", "--resource-budget-gb", "64")
+
+    small = _worker_args("--multitone-sidebands", "2", *budget)
+    large = _worker_args("--multitone-sidebands", "10", *budget)
+
+    assert _frequency_worker_limit(small, 64) > _frequency_worker_limit(large, 64)
+
+
+def test_frequency_workers_never_exceed_request_or_task_count(monkeypatch) -> None:
+    monkeypatch.setattr(run_compression, "available_memory_gb", lambda: 1024.0)
+    args = _worker_args("--multitone-sidebands", "2", "--resource-budget-gb", "1024")
+
+    assert _frequency_worker_limit(args, 10) <= 4
+    assert _frequency_worker_limit(args, 2) <= 2
+
+
+def test_frequency_workers_are_capped_by_free_memory_not_just_budget(
+    monkeypatch,
+) -> None:
+    """A generous budget must not override what the machine actually has free."""
+    args = _worker_args("--multitone-sidebands", "10", "--resource-budget-gb", "1024")
+    peak_gb = run_compression._estimate_worker_footprint(args).peak_gb
+    headroom_gb = max(run_compression._MEMORY_HEADROOM_GB, 0.5 * peak_gb)
+
+    monkeypatch.setattr(run_compression, "available_memory_gb", lambda: 1024.0)
+    plentiful = _frequency_worker_limit(args, 10)
+    # Enough for exactly one worker plus the reserve, and no more.
+    monkeypatch.setattr(
+        run_compression,
+        "available_memory_gb",
+        lambda: peak_gb + headroom_gb + 0.1,
+    )
+    scarce = _frequency_worker_limit(args, 10)
+
+    assert scarce == 1
+    assert plentiful > scarce
+
+
+def test_frequency_workers_reserve_headroom_below_free_memory(monkeypatch) -> None:
+    """Worker count must not consume every free byte at launch.
+
+    Free memory is sampled once, but the sweep runs for hours against whatever
+    else the machine is doing, so a count that exactly fits at launch ends up
+    swapping later.
+    """
+    args = _worker_args("--multitone-sidebands", "10", "--resource-budget-gb", "1024")
+    footprint = run_compression._estimate_worker_footprint(args)
+    peak_gb = footprint.peak_gb
+    # Enough free memory for exactly 3 workers with nothing to spare.
+    monkeypatch.setattr(
+        run_compression, "available_memory_gb", lambda: 3.0 * peak_gb
+    )
+
+    assert _frequency_worker_limit(args, 10) < 3
+
+
+def test_driver_builds_one_preconditioner_for_the_whole_run(
+    tmp_path, monkeypatch
+) -> None:
+    """All problems in a run share one cached preconditioner.
+
+    The driver builds several problems that differ only in source path. The
+    coupled matrix, its scatter map, and its factors depend on neither the
+    source nor the signal power, so giving each problem its own cache keeps one
+    full preconditioner alive per problem -- at S=10 that is ~2.6 GB apiece and
+    exhausts memory before any worker starts.
+    """
+    from twpa_solver.pump.backends import fast_coupled
+
+    built = []
+    original = fast_coupled.FastCoupledPreconditioner
+
+    class _Counted(original):  # type: ignore[misc,valid-type]
+        def __init__(self, problem, **kwargs: object) -> None:
+            built.append(problem)
+            super().__init__(problem, **kwargs)
+
+    monkeypatch.setattr(fast_coupled, "FastCoupledPreconditioner", _Counted)
+
+    assert main(
+        [
+            "--output-dir", str(tmp_path),
+            "--signal-ghz", "4.75",
+            "--n-signal-power", "2",
+            "--multitone-sidebands", "2",
+        ]
+    ) == 0
+    assert len(built) == 1, f"expected one preconditioner, built {len(built)}"
+
+
+def test_sweep_refuses_to_start_when_one_worker_cannot_fit(monkeypatch) -> None:
+    """Refuse rather than swap when even a single worker exceeds free memory.
+
+    Flooring the count at one worker is not a safeguard when one worker is
+    itself too big: the solve does not degrade gracefully under memory
+    pressure, it takes the machine down.
+    """
+    args = _worker_args("--multitone-sidebands", "10", "--resource-budget-gb", "1024")
+    peak_gb = run_compression._estimate_worker_footprint(args).peak_gb
+    monkeypatch.setattr(
+        run_compression, "available_memory_gb", lambda: 0.5 * peak_gb
+    )
+
+    with pytest.raises(ResourceLimitExceeded, match="a single worker needs"):
+        _frequency_worker_limit(args, 10)
+
+
+def test_memory_overcommit_flag_permits_a_run_that_does_not_fit(
+    monkeypatch,
+) -> None:
+    args = _worker_args(
+        "--multitone-sidebands", "10",
+        "--resource-budget-gb", "1024",
+        "--allow-memory-overcommit",
+    )
+    peak_gb = run_compression._estimate_worker_footprint(args).peak_gb
+    monkeypatch.setattr(
+        run_compression, "available_memory_gb", lambda: 0.5 * peak_gb
+    )
+
+    assert _frequency_worker_limit(args, 10) == 1
+
+
+def test_frequency_workers_fall_back_to_one_when_footprint_is_unknown(
+    monkeypatch,
+) -> None:
+    """An unreadable circuit must not silently license full concurrency."""
+    def _boom(_args: object) -> None:
+        raise ValueError("circuit metadata unavailable")
+
+    monkeypatch.setattr(run_compression, "_estimate_worker_footprint", _boom)
+    args = _worker_args("--resource-budget-gb", "1024")
+
+    assert _frequency_worker_limit(args, 10) == 1
 
 
 def test_p1db_interpolation_is_logarithmic_in_current() -> None:

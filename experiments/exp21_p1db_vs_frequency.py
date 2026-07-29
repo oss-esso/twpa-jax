@@ -13,10 +13,17 @@ from exp20_multitone_compression import CASES, Case
 BANDS = {"jtwpa": (5.8, 7.2), "fqjtwpa": (6.6, 8.0), "2c": (6.8, 7.5)}
 
 
-def command(case: Case, outdir: Path, frequencies: int, workers: int) -> list[str]:
+def command(
+    case: Case,
+    outdir: Path,
+    frequencies: int,
+    workers: int,
+    resource_budget_gb: float,
+) -> list[str]:
     low, high = BANDS[case.name]
     cmd = [
         sys.executable, "scripts/run_compression.py",
+        "--resource-budget-gb", str(resource_budget_gb),
         "--output-dir", str(outdir), *case.source,
         "--pump-freq-ghz", str(case.pump_ghz),
         "--pump-current-a", str(case.pump_current_a),
@@ -43,12 +50,29 @@ def main() -> int:
     parser.add_argument("--only", choices=sorted(BANDS), action="append")
     parser.add_argument("--n-signal-freq", type=int, default=10)
     parser.add_argument("--signal-workers", type=int, default=4)
+    parser.add_argument(
+        "--resource-budget-gb",
+        type=float,
+        default=8.0,
+        help=(
+            "Memory budget the driver divides by the measured per-worker peak "
+            "to cap concurrency. At S=10 a worker peaks near 3.1 GB, so the "
+            "8.0 default allows 2; raise it only alongside actually-free RAM, "
+            "which is capped against independently."
+        ),
+    )
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
     for case in CASES:
         if case.name not in BANDS or (args.only and case.name not in args.only):
             continue
-        cmd = command(case, args.output_dir / case.name, args.n_signal_freq, args.signal_workers)
+        cmd = command(
+            case,
+            args.output_dir / case.name,
+            args.n_signal_freq,
+            args.signal_workers,
+            args.resource_budget_gb,
+        )
         print(subprocess.list2cmdline(cmd), flush=True)
         if not args.dry_run:
             subprocess.run(cmd, check=True)

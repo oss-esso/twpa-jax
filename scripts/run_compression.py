@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import logging
 import math
 from dataclasses import replace
 from concurrent.futures import ProcessPoolExecutor
@@ -45,7 +46,18 @@ from twpa_solver.pump.basis import (
     load_pump_basis_from_solution,
     resolve_pump_basis,
 )
+from twpa_solver.multitone.resources import (
+    FastCoupledFootprint,
+    ResourceLimitExceeded,
+    available_memory_gb,
+    fast_coupled_footprint,
+)
 from twpa_solver.multitone.seed import promote_pump_solution
+
+logger = logging.getLogger(__name__)
+
+# Physical memory deliberately left unallocated when sizing worker concurrency.
+_MEMORY_HEADROOM_GB = 2.0
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -122,6 +134,36 @@ def build_parser() -> argparse.ArgumentParser:
         "--multitone-preconditioner",
         choices=MULTITONE_PRECONDITIONERS,
         default="real_coupled_fast",
+    )
+    parser.add_argument(
+        "--allow-memory-overcommit",
+        action="store_true",
+        help=(
+            "Start the sweep even when a single worker does not fit in free "
+            "physical memory. Off by default: overcommitting this solve swaps "
+            "rather than degrading, and typically takes the machine down."
+        ),
+    )
+    parser.add_argument(
+        "--precond-reuse",
+        type=int,
+        default=1,
+        help=(
+            "Reuse one preconditioner factor for up to N consecutive Newton "
+            "steps (modified-Newton preconditioning). The Newton update is "
+            "always taken against the true Jacobian via the matvec, so this "
+            "cannot change the converged solution -- it trades extra GMRES "
+            "iterations for skipped factorizations. 1 = refactor every step."
+        ),
+    )
+    parser.add_argument(
+        "--precond-reuse-refresh-gmres",
+        type=int,
+        default=0,
+        help=(
+            "Force an early refactor whenever the previous step needed at "
+            "least this many GMRES iterations (staleness guard). 0 disables."
+        ),
     )
     return parser
 
@@ -272,6 +314,8 @@ def _solve_compression(
         preconditioner=solver_preconditioner,
         compute_time_residual=False, verbose=False,
         continuation_predictor="none", jvp_mode="aft",
+        precond_reuse=max(1, int(args.precond_reuse)),
+        precond_reuse_refresh_gmres=max(0, int(args.precond_reuse_refresh_gmres)),
     )
     if args.pump_solution_dir is not None:
         pump_state, pump_basis = load_pump_basis_from_solution(
@@ -295,7 +339,15 @@ def _solve_compression(
             grid=HarmonicGrid(np.asarray(pump_basis.modes), nt=args.pump_nt, omega=omega_p),
             pump_node_index=circuit.port_to_index[pump_port], pump_current_a=pump_current,
         )
-        pump_settings = replace(settings, preconditioner="real_coupled")
+        # The pump solve keeps precond_reuse=1 so its Newton/GMRES iterate path
+        # -- and therefore the pump state other artifacts are pinned against --
+        # is unchanged by the multitone reuse setting.
+        pump_settings = replace(
+            settings,
+            preconditioner="real_coupled",
+            precond_reuse=1,
+            precond_reuse_refresh_gmres=0,
+        )
         pump_state, pump_reports = HarmonicNewtonKrylovSolver(
             pump_settings
         ).solve_continuation(pump_problem, continuation_steps=4)
@@ -325,6 +377,13 @@ def _solve_compression(
         else args.multitone_backend
     )
     schur_partition = None
+    # One cache for the whole run. Every problem built here shares the same
+    # circuit and basis and differs only in source path, while the dynamic
+    # blocks and the fast preconditioner (matrix, scatter map, factors) depend
+    # on neither -- so they must be built once. Giving each problem its own
+    # cache keeps one full preconditioner alive per problem, which at S=10 is
+    # ~2.6 GB apiece and exhausts memory before the solve starts.
+    problem_cache: dict[object, object] = {}
 
     def make_problem(path: AffineSourcePath):
         nonlocal schur_partition
@@ -333,6 +392,7 @@ def _solve_compression(
             basis,
             path,
             preconditioner=selected_preconditioner,
+            cache=problem_cache,
         )
         if selected_backend == "full":
             return full
@@ -630,10 +690,95 @@ def _frequency_worker(payload: tuple[dict[str, object], float, str]) -> dict[str
 
 
 def _frequency_worker_limit(args: argparse.Namespace, task_count: int) -> int:
-    """Cap concurrent sparse-LU workers to the declared memory budget."""
-    estimated_gb = 4.0 if args.circuit_dir is not None else 3.0
-    memory_limited = max(1, int(float(args.resource_budget_gb) // estimated_gb))
-    return max(1, min(int(args.signal_workers), task_count, memory_limited))
+    """Cap concurrent sparse-LU workers to measured per-worker peak memory.
+
+    Each worker holds an independent ``real_coupled_fast`` preconditioner: the
+    coupled matrix, its scatter map, and the PARDISO factors. That footprint
+    scales as ``n_tones^2 * n_retained``, so a fixed per-worker constant either
+    wastes cores on small bases or overcommits and thrashes on large ones. The
+    cap is taken against BOTH the declared budget and the memory actually free,
+    since the budget alone cannot know what else is running.
+    """
+    requested = max(1, int(args.signal_workers))
+    try:
+        footprint = _estimate_worker_footprint(args)
+    except (ValueError, KeyError, OSError, RuntimeError) as exc:
+        logger.warning(
+            "worker_footprint_estimate_failed error=%s falling_back_to=1", exc
+        )
+        return 1
+
+    peak_gb = footprint.peak_gb
+    budget_limited = max(1, int(float(args.resource_budget_gb) // peak_gb))
+    free_gb = available_memory_gb()
+    if free_gb is None:
+        free_limited = requested
+    else:
+        # Free memory is sampled once, at launch, but a long sweep competes with
+        # whatever else the machine does for hours afterwards. Hold back a fixed
+        # reserve (or half a worker, whichever is larger) so that drift does not
+        # turn a just-fitting worker count into swap.
+        headroom_gb = max(_MEMORY_HEADROOM_GB, 0.5 * peak_gb)
+        if peak_gb > free_gb - headroom_gb and not args.allow_memory_overcommit:
+            needed_gb = peak_gb + headroom_gb - free_gb
+            raise ResourceLimitExceeded(
+                f"a single worker needs ~{peak_gb:.2f} GB (plus {headroom_gb:.2f} GB "
+                f"reserved headroom) but only {free_gb:.2f} GB is free. Free about "
+                f"{needed_gb:.1f} GB more, reduce --multitone-sidebands "
+                f"(memory scales as the square of the tone count), or pass "
+                f"--allow-memory-overcommit to run anyway and risk swapping."
+            )
+        free_limited = max(1, int((free_gb - headroom_gb) // peak_gb))
+    workers = max(1, min(requested, task_count, budget_limited, free_limited))
+    logger.info(
+        "worker_limit requested=%d task_count=%d peak_gb_per_worker=%.2f "
+        "steady_gb=%.2f budget_gb=%.1f budget_limited=%d free_gb=%s "
+        "free_limited=%d selected=%d",
+        requested, task_count, peak_gb, footprint.steady_gb,
+        float(args.resource_budget_gb), budget_limited,
+        "unknown" if free_gb is None else f"{free_gb:.2f}",
+        free_limited, workers,
+    )
+    if workers < requested:
+        print(
+            f"[run_compression] limiting --signal-workers {requested} -> {workers}: "
+            f"each worker peaks at ~{peak_gb:.2f} GB "
+            f"(budget {float(args.resource_budget_gb):.1f} GB, "
+            f"free {'unknown' if free_gb is None else f'{free_gb:.2f} GB'})",
+            flush=True,
+        )
+    return workers
+
+
+def _estimate_worker_footprint(
+    args: argparse.Namespace,
+) -> FastCoupledFootprint:
+    """Estimate one worker's peak memory from the real circuit and basis."""
+    circuit, metadata, _ = _load_source(args)
+    omega_p = 2.0 * math.pi * args.pump_freq_ghz * 1e9
+    if args.pump_solution_dir is not None:
+        _, pump_basis = load_pump_basis_from_solution(
+            args.pump_solution_dir, fallback_omega_p=omega_p
+        )
+    else:
+        pump_basis = resolve_pump_basis(
+            policy=args.pump_mode_policy,
+            omega_p=omega_p,
+            harmonics=args.pump_harmonics,
+            mode_count=args.pump_mode_count,
+            explicit_modes=args.pump_modes,
+            design_meta=metadata,
+        )
+    # The tone count is frequency-independent; any in-band signal frequency
+    # gives the same basis size, so the sweep midpoint is representative.
+    signal_ghz = args.signal_ghz
+    if signal_ghz is None:
+        signal_ghz = 0.5 * (float(args.signal_ghz_min) + float(args.signal_ghz_max))
+    delta = omega_p - 2.0 * math.pi * float(signal_ghz) * 1e9
+    basis = _build_multitone_basis(args, pump_basis.modes, omega_p, delta)
+    # The Schur backend retains the nonlinear nodes and ports; the full backend
+    # keeps every node. Use the full node count, the conservative bound.
+    return fast_coupled_footprint(basis.n_tones, circuit.node_count)
 
 
 def _run_frequency_sweep(args: argparse.Namespace) -> dict[str, object]:
