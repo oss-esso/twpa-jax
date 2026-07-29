@@ -37,6 +37,7 @@ def test_multitone_preconditioner_defaults_exact_and_accepts_sector() -> None:
     assert default.pump_port is None
     assert sector.multitone_preconditioner == "floquet_sector"
     assert default.signal_ghz == 4.5
+    assert default.p1db_power_tol_db == pytest.approx(0.1)
 
 
 def test_signal_frequency_is_required() -> None:
@@ -270,6 +271,21 @@ def test_frequency_workers_fall_back_to_one_when_footprint_is_unknown(
 
 
 def test_p1db_interpolation_is_logarithmic_in_current() -> None:
+    points = [
+        {"signal_current_a": 1.0e-9, "compression_db": 0.5, "status": "VALID_SOLVED"},
+        {"signal_current_a": 1.0e-8, "compression_db": 1.5, "status": "VALID_SOLVED"},
+    ]
+    assert _interpolate_p1db_current(points) == pytest.approx(10.0 ** -8.5)
+
+
+def test_p1db_refinement_can_be_disabled_to_reach_interpolation_fallback() -> None:
+    args = build_parser().parse_args(
+        [
+            "--output-dir", "unused", "--signal-ghz", "4.5",
+            "--p1db-power-tol-db", "0",
+        ]
+    )
+    assert args.p1db_power_tol_db == 0.0
     points = [
         {"signal_current_a": 1.0e-9, "compression_db": 0.5, "status": "VALID_SOLVED"},
         {"signal_current_a": 1.0e-8, "compression_db": 1.5, "status": "VALID_SOLVED"},

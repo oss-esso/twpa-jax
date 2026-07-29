@@ -81,6 +81,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--n-signal-power", type=int, default=5)
     parser.add_argument(
+        "--p1db-power-tol-db",
+        type=float,
+        default=0.1,
+        help="Power bracket tolerance for real-solve P1dB refinement; 0 disables it.",
+    )
+    parser.add_argument(
         "--multitone-basis",
         choices=("matched", "three_tone", "lattice"),
         default="matched",
@@ -588,7 +594,7 @@ def _solve_compression(
             previous_previous_current = previous_current
             previous = state
             previous_current = float(current)
-            state_by_current[float(current)] = state_full
+            state_by_current[float(current)] = state
         else:
             gain_db = float("nan")
             signal_s21 = pump_s21 = idler_s21 = complex(float("nan"), float("nan"))
@@ -640,7 +646,84 @@ def _solve_compression(
     if no_gain:
         for point in points:
             point["compression_db"] = float("nan")
+    curve = build_compression_curve(
+        [float(point["signal_power_dbm"]) for point in points],
+        [float(point["gain_db"]) for point in points],
+        small_signal_gain_db,
+    )
     p1db_current_a = None if no_gain else _interpolate_p1db_current(points)
+    p1db_method = "interpolated"
+    valid_points = [
+        point for point in points
+        if point["status"] == "VALID_SOLVED"
+        and np.isfinite(float(point["compression_db"]))
+    ]
+    for left, right in zip(valid_points, valid_points[1:]):
+        if (
+            float(left["compression_db"]) < 1.0
+            <= float(right["compression_db"])
+        ):
+            if not no_gain and args.p1db_power_tol_db > 0.0:
+                bracket = (
+                    float(left["signal_power_dbm"]),
+                    float(right["signal_power_dbm"]),
+                )
+
+                def evaluate(power_dbm: float) -> float:
+                    current_trial = math.sqrt(
+                        2.0 * 1.0e-3
+                        * 10.0 ** ((power_dbm - attenuation_db) / 10.0)
+                        / args.z0_ohm
+                    )
+                    nearest = min(
+                        state_by_current,
+                        key=lambda value: abs(math.log(value / current_trial)),
+                    )
+                    candidate = solve_signal_power_point(
+                        make_problem(AffineSourcePath.pump_turn_on(pump_source)),
+                        state_by_current[nearest],
+                        None,
+                        current_trial,
+                        pump_source=pump_source,
+                        signal_source=signal_unit,
+                        solver=HarmonicNewtonKrylovSolver(settings),
+                        signal_current_prev_a=nearest,
+                        recovery="ladder",
+                        pump_seed=pump_seed_solve,
+                    )
+                    if candidate.status != "VALID_SOLVED":
+                        raise RuntimeError(
+                            "P1dB refinement solve failed: "
+                            f"{candidate.status}"
+                        )
+                    trial_state = observable_state(
+                        make_problem(AffineSourcePath.pump_turn_on(pump_source)),
+                        candidate.state,
+                    )
+                    trial_s21 = tone_s21(
+                        trial_state, basis, circuit,
+                        signal_tone=basis.signal_tone,
+                        source_port=source_port,
+                        out_port=out_port,
+                        source_current_a=current_trial,
+                    )
+                    return float(
+                        reference_gain
+                        - 20.0 * np.log10(max(abs(trial_s21), 1e-300))
+                    )
+
+                p1db_dbm_refined = refine_p1db(
+                    evaluate,
+                    bracket,
+                    tolerance_db=args.p1db_power_tol_db,
+                )
+                p1db_current_a = math.sqrt(
+                    2.0 * 1.0e-3
+                    * 10.0 ** ((p1db_dbm_refined - attenuation_db) / 10.0)
+                    / args.z0_ohm
+                )
+                p1db_method = "refined"
+            break
     p1db_dbm = (
         _current_to_dbm(p1db_current_a, args.z0_ohm, attenuation_db)
         if p1db_current_a is not None
@@ -681,6 +764,18 @@ def _solve_compression(
         "pump_reference_s21_real": float(np.real(pump_reference_s21)),
         "pump_reference_s21_imag": float(np.imag(pump_reference_s21)),
         "p1db": p1db_dbm,
+        "p1db_method": "none" if no_gain else p1db_method,
+        "first_1db_crossing_dbm": curve.first_1db_crossing_dbm,
+        "number_of_crossings": curve.number_of_crossings,
+        "nonmonotonic_compression": curve.nonmonotonic_compression,
+        "compression_model_depletion_only_description": (
+            "linear-gain trend baseline; not an acceptance oracle"
+        ),
+        "max_power_balance_rel_err": max(
+            (float(point["power_balance_rel_err"]) for point in points
+             if np.isfinite(float(point["power_balance_rel_err"]))),
+            default=None,
+        ),
         "p1db_signal_current_a": p1db_current_a,
         "p1db_input_dbm": p1db_dbm,
         "p1db_output_dbm": p1db_output_dbm,
