@@ -52,6 +52,10 @@ from twpa_solver.multitone.compression_curve import (
     depletion_only_model,
     refine_p1db,
 )
+from twpa_solver.multitone.stability import (
+    MultitoneStabilityResult,
+    assess_multitone_stability,
+)
 
 __all__ = [
     "MultiToneBasis",
@@ -90,6 +94,8 @@ __all__ = [
     "build_compression_curve",
     "depletion_only_model",
     "refine_p1db",
+    "MultitoneStabilityResult",
+    "assess_multitone_stability",
     "ResourceEstimate",
     "ResourceLimitExceeded",
     "estimate",

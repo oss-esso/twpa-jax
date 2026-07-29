@@ -412,3 +412,13 @@ def test_spatial_profile_flag_is_explicit() -> None:
         ["--output-dir", "unused", "--signal-ghz", "4.5"]
     )
     assert args.spatial_profiles is False
+
+
+def test_stability_check_is_default_off() -> None:
+    args = build_parser().parse_args(
+        ["--output-dir", "unused", "--signal-ghz", "4.5"]
+    )
+    assert args.check_stability is False
+    assert build_parser().parse_args(
+        ["--output-dir", "unused", "--signal-ghz", "4.5", "--check-stability"]
+    ).check_stability is True

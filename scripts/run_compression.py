@@ -39,6 +39,7 @@ from twpa_solver.multitone.schur import (
     SchurMultiToneProblem,
     build_multitone_schur_problem,
 )
+from twpa_solver.multitone.stability import assess_multitone_stability
 from twpa_solver.multitone.source import AffineSourcePath, MultiToneDrive
 from twpa_solver.multitone.io import write_compression_outputs
 from twpa_solver.pump import (
@@ -147,6 +148,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--signal-substep-min-db", type=float, default=0.01)
     parser.add_argument("--signal-continuation-deadline-s", type=float, default=0.0)
     parser.add_argument("--signal-arclength-recovery", action="store_true")
+    parser.add_argument(
+        "--check-stability",
+        action="store_true",
+        help="Measure the finite-signal q=0 Floquet slice at selected states.",
+    )
     parser.add_argument(
         "--spatial-profiles",
         action="store_true",
@@ -742,9 +748,41 @@ def _solve_compression(
         if all(point["status"] == "VALID_SOLVED" for point in points)
         else "CHECK"
     )
+    stability_points = {}
+    stability_status = "NOT_CHECKED"
+    if args.check_stability:
+        stability_problem = FullMultiToneProblem(
+            circuit,
+            basis,
+            AffineSourcePath.pump_turn_on(pump_source),
+            loss_model=getattr(circuit, "loss_model", "current_complex_c"),
+        )
+        for label in ("zero_signal", "p1db", "last"):
+            candidate_state = states.get(label)
+            if candidate_state is None:
+                continue
+            result = assess_multitone_stability(
+                stability_problem,
+                candidate_state,
+                signal_ghz=args.signal_ghz,
+            )
+            stability_points[label] = {
+                "status": result.status,
+                "dominant_exponent_per_s": result.dominant_exponent_per_s,
+                "sigma_min": result.sigma_min,
+                "matrix_size": result.matrix_size,
+                "torus_resolution": list(result.torus_resolution),
+            }
+        statuses = [item["status"] for item in stability_points.values()]
+        stability_status = (
+            "STABLE" if statuses and all(status == "STABLE" for status in statuses)
+            else "UNSTABLE" if "UNSTABLE" in statuses
+            else "INCONCLUSIVE"
+        )
     summary = {
         "status": summary_status,
-        "stability_status": "NOT_CHECKED",
+        "stability_status": stability_status,
+        "stability_points": stability_points,
         "circuit_source": circuit_source,
         "pump_freq_ghz": args.pump_freq_ghz,
         "signal_ghz": args.signal_ghz,
