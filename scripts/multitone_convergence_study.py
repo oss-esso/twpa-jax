@@ -11,7 +11,7 @@ from pathlib import Path
 
 import numpy as np
 
-from twpa_solver.builders.jc_doc import build_jpa
+from twpa_solver.builders.jc_doc import build_fqjtwpa, build_jpa, build_jtwpa
 from twpa_solver.core import CircuitMatrices
 from twpa_solver.multitone.basis import (
     MultiToneBasis,
@@ -19,6 +19,8 @@ from twpa_solver.multitone.basis import (
     build_three_tone_basis,
 )
 from twpa_solver.multitone.problem import FullMultiToneProblem
+from twpa_solver.multitone.compression_curve import refine_p1db
+from twpa_solver.multitone.compression import solve_signal_power_point
 from twpa_solver.multitone.seed import promote_pump_solution
 from twpa_solver.multitone.source import AffineSourcePath, MultiToneDrive
 from twpa_solver.pump import (
@@ -53,6 +55,7 @@ class ConvergenceResult:
     n_delta: int
     even_pump_fraction: float
     runtime_s: float
+    p1db_method: str
 
 
 def _settings() -> NewtonKrylovSettings:
@@ -72,8 +75,9 @@ def _settings() -> NewtonKrylovSettings:
     )
 
 
-def _circuit() -> tuple[CircuitMatrices, float]:
-    builder, metadata = build_jpa()
+def _circuit(device: str = "jpa") -> tuple[CircuitMatrices, float, dict[str, object]]:
+    builders = {"jpa": build_jpa, "jtwpa": build_jtwpa, "fqjtwpa": build_fqjtwpa}
+    builder, metadata = builders[device]()
     arrays = builder.assemble()
     circuit = CircuitMatrices(
         C=arrays["C"],
@@ -83,7 +87,7 @@ def _circuit() -> tuple[CircuitMatrices, float]:
         Ic=arrays["Ic"],
         port_to_index=arrays["ports"],
     )
-    return circuit, float(metadata["pump_sources"][0]["current_a"])
+    return circuit, float(metadata["pump_sources"][0]["current_a"]), metadata
 
 
 def _pump_modes(policy: str, order: int) -> list[int]:
@@ -152,17 +156,21 @@ def _first_p1db(
 def solve_jpa_p1db(
     setting: ConvergenceSetting,
     *,
-    pump_scale: float = 2.2,
+    device: str = "jpa",
+    pump_scale: float | None = None,
     n_signal_power: int = 41,
     signal_current_min_a: float = 1e-12,
     signal_current_max_a: float = 2e-7,
 ) -> ConvergenceResult:
     """Solve one real nonlinear P1dB point for a convergence setting."""
     started = time.perf_counter()
-    circuit, fixture_pump_current = _circuit()
+    circuit, fixture_pump_current, metadata = _circuit(device)
+    if pump_scale is None:
+        pump_scale = {"jpa": 2.2, "jtwpa": 2.0, "fqjtwpa": 1.0}[device]
     pump_current = pump_scale * fixture_pump_current
-    omega_p = 2.0 * math.pi * 4.75001e9
-    omega_s = 2.0 * math.pi * 4.8e9
+    omega_p = 2.0 * math.pi * float(metadata["pump_freqs_ghz"][0]) * 1e9
+    signal_ghz = 4.8 if device == "jpa" else 6.6
+    omega_s = 2.0 * math.pi * signal_ghz * 1e9
     delta = omega_p - omega_s
     pump_modes = _pump_modes(setting.pump_policy, setting.pump_order)
     grid_nt = max(16, 2 * max(pump_modes) + 2)
@@ -216,7 +224,11 @@ def solve_jpa_p1db(
 
     solved_currents: list[float] = []
     gains: list[float] = []
+    state_by_current: dict[float, np.ndarray] = {}
     previous = initial
+    previous_previous = None
+    previous_current = 0.0
+    previous_previous_current = 0.0
     for current in currents:
         problem = FullMultiToneProblem(
             circuit,
@@ -225,13 +237,27 @@ def solve_jpa_p1db(
                 pump_source, signal_unit * float(current)
             ),
         )
-        state, report = solver.solve_one(problem, previous, 1.0)
-        if not report.converged:
-            raise RuntimeError(
-                f"signal solve failed at {current:.6e} A: "
-                f"{report.failure_reason}"
-            )
+        solved = solve_signal_power_point(
+            problem,
+            previous,
+            previous_previous,
+            float(current),
+            pump_source=pump_source,
+            signal_source=signal_unit,
+            solver=solver,
+            signal_current_prev_a=previous_current,
+            signal_current_prevprev_a=previous_previous_current,
+            recovery="ladder",
+            pump_seed=initial,
+        )
+        if solved.status != "VALID_SOLVED":
+            break
+        state = solved.state
+        previous_previous = previous
+        previous_previous_current = previous_current
         previous = state
+        previous_current = float(current)
+        state_by_current[float(current)] = state
         gain_ratio = abs(
             state[signal_row, out_node]
             / (off_flux_per_amp * float(current))
@@ -240,6 +266,55 @@ def solve_jpa_p1db(
         gains.append(20.0 * math.log10(gain_ratio))
         if gains[-1] <= gains[0] - 1.1:
             break
+    bracket = None
+    target = gains[0] - 1.0
+    for left, right in zip(range(len(gains) - 1), range(1, len(gains))):
+        if gains[left] > target >= gains[right]:
+            bracket = (left, right)
+            break
+    if bracket is None:
+        raise RuntimeError("signal sweep did not produce a P1dB bracket")
+
+    def evaluate(power_dbm: float) -> float:
+        current = math.sqrt(2.0 * 1e-3 * 10.0 ** (power_dbm / 10.0) / Z0_OHM)
+        nearest = min(
+            state_by_current,
+            key=lambda value: abs(math.log(value / current)),
+        )
+        problem = FullMultiToneProblem(
+            circuit,
+            basis,
+            AffineSourcePath.signal_turn_on(
+                pump_source, signal_unit * float(current)
+            ),
+        )
+        solved = solve_signal_power_point(
+            problem,
+            state_by_current[nearest],
+            None,
+            float(current),
+            pump_source=pump_source,
+            signal_source=signal_unit,
+            solver=solver,
+            signal_current_prev_a=nearest,
+            recovery="ladder",
+            pump_seed=initial,
+        )
+        if solved.status != "VALID_SOLVED":
+            raise RuntimeError(f"refined P1dB solve failed at {power_dbm:.6f} dBm")
+        state_by_current[float(current)] = solved.state
+        gain_ratio = abs(solved.state[signal_row, out_node] / (off_flux_per_amp * current))
+        gain = 20.0 * math.log10(gain_ratio)
+        return target - gain
+
+    p0 = _current_to_dbm(solved_currents[bracket[0]])
+    p1 = _current_to_dbm(solved_currents[bracket[1]])
+    refined_p1db = refine_p1db(
+        evaluate,
+        (p0, p1),
+        tolerance_db=0.1,
+        target_db=0.0,
+    )
     pump_norm = float(np.linalg.norm(pump_state))
     even_rows = [
         row for row, mode in enumerate(pump_modes) if mode % 2 == 0
@@ -251,13 +326,14 @@ def solve_jpa_p1db(
     )
     return ConvergenceResult(
         setting=setting,
-        p1db_dbm=_first_p1db(solved_currents, gains),
+        p1db_dbm=refined_p1db,
         small_signal_gain_db=gains[0],
         n_tones=basis.n_tones,
         n_p=int(basis.n_p),
         n_delta=int(basis.n_delta),
         even_pump_fraction=even_fraction,
         runtime_s=time.perf_counter() - started,
+        p1db_method="refined",
     )
 
 
@@ -301,6 +377,7 @@ def _row(result: ConvergenceResult) -> dict[str, object]:
         "small_signal_gain_db": result.small_signal_gain_db,
         "even_pump_fraction": result.even_pump_fraction,
         "runtime_s": result.runtime_s,
+        "p1db_method": result.p1db_method,
     }
 
 
@@ -308,9 +385,12 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--n-signal-power", type=int, default=41)
+    parser.add_argument("--device", choices=("jtwpa", "fqjtwpa"), required=True)
     args = parser.parse_args(argv)
     results = [
-        solve_jpa_p1db(setting, n_signal_power=args.n_signal_power)
+        solve_jpa_p1db(
+            setting, device=args.device, n_signal_power=args.n_signal_power
+        )
         for setting in convergence_settings()
     ]
     rows = [_row(result) for result in results]

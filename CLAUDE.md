@@ -14,6 +14,20 @@ python -m pytest -q -p no:cacheprovider --basetemp D:\tmp\twpa_full_slow --run-s
 
 ## Production multitone compression campaigns (exp20-exp22)
 
+### Phase 5 basis-convergence status (2026-07-29)
+
+`scripts/multitone_convergence_study.py` now accepts `--device jtwpa|fqjtwpa` and
+uses the Phase 3 bracketed nonlinear P1dB refinement for every setting. The
+required matrix includes Q=1/2/3, pump-order, torus-scale, three-tone versus
+lattice, and odd-only versus dense pump modes.
+
+The real-device matrix did not complete in the available run budget. A jtwpa
+Q=1, odd, order-3, lattice point completed at refined P1dB `-103.0455 dBm`;
+the Q=3 runs entered repeated adaptive substeps and exceeded 10 minutes before
+the CSV was written. Therefore no top-two `|ΔP1dB|` acceptance numbers are
+reported, and the production basis remains unevaluated by this phase. The
+existing exp20/21 basis must not be described as having passed the 0.2 dB gate.
+
 `scripts/run_compression.py` defaults to the pump-harmonic-retaining
 `--multitone-basis matched --multitone-sidebands 2`. A three-tone basis is only
 valid with a fundamental-only pump basis; the driver raises if any pump `(h,0)`
