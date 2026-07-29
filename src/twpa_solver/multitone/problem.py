@@ -268,7 +268,14 @@ class FullMultiToneProblem:
             rows.append(row)
         return spla.splu(sp.bmat(rows, format="csc"))
 
-    def assemble_real_coupled_preconditioner(self, spectral: SpectralTangentState) -> spla.SuperLU:
+    def real_coupled_matrix(self, spectral: SpectralTangentState) -> sp.spmatrix:
+        """Assemble the exact real-packed coupled Jacobian.
+
+        Split out of :meth:`assemble_real_coupled_preconditioner` so the matrix
+        itself is testable: the ``real_coupled_fast`` backend reproduces this
+        assembly from a cached scatter map, and that equivalence is the gate on
+        the fast path.
+        """
         zero = sp.csr_matrix((self.n, self.n), dtype=np.complex128)
         blocks = [[], [], [], []]
         for i, k in enumerate(self.basis.tones):
@@ -284,4 +291,7 @@ class FullMultiToneProblem:
                 blocks[3].append((lr - pr).tocsr())
         ntones = self.H
         groups = [sp.bmat([blocks[i][r * ntones:(r + 1) * ntones] for r in range(ntones)]) for i in range(4)]
-        return spla.splu(sp.bmat([[groups[0], groups[1]], [groups[2], groups[3]]], format="csc"))
+        return sp.bmat([[groups[0], groups[1]], [groups[2], groups[3]]], format="csc")
+
+    def assemble_real_coupled_preconditioner(self, spectral: SpectralTangentState) -> spla.SuperLU:
+        return spla.splu(self.real_coupled_matrix(spectral))

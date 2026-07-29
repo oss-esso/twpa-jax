@@ -87,7 +87,7 @@ def test_frequency_workers_are_capped_by_free_memory_not_just_budget(
     """A generous budget must not override what the machine actually has free."""
     args = _worker_args("--multitone-sidebands", "10", "--resource-budget-gb", "1024")
     peak_gb = run_compression._estimate_worker_footprint(args).peak_gb
-    headroom_gb = max(run_compression._MEMORY_HEADROOM_GB, 0.5 * peak_gb)
+    headroom_gb = run_compression._memory_headroom_gb(peak_gb)
 
     monkeypatch.setattr(run_compression, "available_memory_gb", lambda: 1024.0)
     plentiful = _frequency_worker_limit(args, 10)
@@ -153,6 +153,61 @@ def test_driver_builds_one_preconditioner_for_the_whole_run(
         ]
     ) == 0
     assert len(built) == 1, f"expected one preconditioner, built {len(built)}"
+
+
+def test_factor_backend_flag_reaches_the_preconditioner(tmp_path) -> None:
+    """The flag must actually select the backend, not just parse.
+
+    The preconditioner is built several call layers below the driver and, for a
+    frequency sweep, in a different process; the setting travels by environment
+    variable, so a plain argument-passing test would not catch it being dropped.
+    """
+    from twpa_solver.pump.backends import fast_coupled
+
+    backends = []
+    original = fast_coupled.FastCoupledPreconditioner
+
+    class _Recorded(original):  # type: ignore[misc,valid-type]
+        def refactor(self, tangent) -> None:
+            super().refactor(tangent)
+            backends.append(self.last_factor_backend)
+
+    monkeypatch_target = fast_coupled.FastCoupledPreconditioner
+    fast_coupled.FastCoupledPreconditioner = _Recorded
+    try:
+        assert main(
+            [
+                "--output-dir", str(tmp_path),
+                "--signal-ghz", "4.75",
+                "--n-signal-power", "2",
+                "--multitone-sidebands", "2",
+                "--factor-backend", "banded",
+            ]
+        ) == 0
+    finally:
+        fast_coupled.FastCoupledPreconditioner = monkeypatch_target
+
+    assert backends, "preconditioner was never refactored"
+    assert set(backends) == {"banded"}, f"backends used: {set(backends)}"
+
+
+def test_factor_backend_defaults_to_the_sparse_solver() -> None:
+    args = build_parser().parse_args(
+        ["--output-dir", "unused", "--signal-ghz", "4.5"]
+    )
+    assert args.factor_backend == "pardiso"
+
+
+def test_banded_backend_raises_the_worker_cap(monkeypatch) -> None:
+    """A smaller per-worker peak must translate into more workers."""
+    monkeypatch.setattr(run_compression, "available_memory_gb", lambda: 7.0)
+    sparse = _worker_args("--multitone-sidebands", "10", "--resource-budget-gb", "1024")
+    banded = _worker_args(
+        "--multitone-sidebands", "10", "--resource-budget-gb", "1024",
+        "--factor-backend", "banded",
+    )
+
+    assert _frequency_worker_limit(banded, 8) > _frequency_worker_limit(sparse, 8)
 
 
 def test_sweep_refuses_to_start_when_one_worker_cannot_fit(monkeypatch) -> None:

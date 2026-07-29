@@ -32,6 +32,13 @@ from contextlib import nullcontext
 import numpy as np
 import scipy.sparse as sp
 import scipy.sparse.linalg as spla
+from scipy.linalg.lapack import get_lapack_funcs
+
+# A band this wide is not worth storing densely; refuse rather than allocate.
+_BAND_BYTES_LIMIT = 4 * 1024**3
+# Nonzeros per slice when building the band index, chosen so the working set
+# stays a few MB regardless of matrix size.
+_BAND_BUILD_CHUNK = 1 << 20
 
 try:
     from threadpoolctl import threadpool_limits
@@ -134,12 +141,20 @@ class FastCoupledPreconditioner:
     the current spectral tangent, then :meth:`solve` per GMRES iteration.
     """
 
-    def __init__(self, problem, *, use_pardiso: bool = True) -> None:
+    def __init__(
+        self, problem, *, use_pardiso: bool = True, use_banded: bool | None = None
+    ) -> None:
         self.problem = problem
         self.H = problem.H
         self.m = problem.n
         self.modes = list(problem.mode_keys)
-        self.use_pardiso = bool(use_pardiso and _HAVE_PARDISO)
+        if use_banded is None:
+            use_banded = _env_true("TWPA_BANDED_PRECOND")
+        self.use_banded = bool(use_banded)
+        self.use_pardiso = bool(use_pardiso and _HAVE_PARDISO and not self.use_banded)
+        self._band_flat = None
+        self._band_lu = None
+        self._band_ipiv = None
         self._khat_map = _KhatDataMap(problem.Bphi_r, problem.BphiT_r)
         # Precompute batched exp(-i ell theta) projectors for gamma_hat_ell.
         self._ells = self._needed_ells()
@@ -232,67 +247,50 @@ class FastCoupledPreconditioner:
         return np.searchsorted(self._M_keys, keys)
 
     def _index_contributions(self, kr, kc, Sc):
-        """Build M.data = M_const + W @ khat_source as one precomputed sparse map.
+        """Precompute, per (mode, mode) block, the M.data slots each khat entry
+        feeds. The constant Sc blocks fold into M_const.
 
-        khat_source concatenates [Re(khat_ell), Im(khat_ell)] for each ell; W
-        scatters them (with +-1 coeffs) into M.data. The constant Sc blocks fold
-        into M_const. One sparse matvec per Newton step instead of ~24M scatter
-        adds."""
+        The scatter used to be materialised as a sparse matrix ``W`` of shape
+        ``(M.nnz, 2 * n_ells * nnzk)`` so assembly was one spmv. That matrix
+        carried no information beyond these target indices: every stored value
+        is +-1, and the source indices are contiguous per-ell ranges. At a
+        31-tone multitone basis it cost ~630 MB -- the single largest term in a
+        worker's footprint after the factors -- to hold 94 MB of indices. Here
+        only the four target-index arrays per block are kept and assembly does
+        four fancy-indexed adds per block instead. Within a block the khat
+        pattern has unique (row, col) pairs and distinct blocks land in
+        disjoint super-blocks of M, so no target index repeats and ``+=`` is
+        exact rather than an unordered scatter.
+        """
         H, modes, M = self.H, self.modes, self.M
         kr = np.asarray(kr); kc = np.asarray(kc); nnzk = kr.size
         self._nnzk = nnzk
         self._ell_index = {ell: i for i, ell in enumerate(self._ells)}
-        nsrc = 2 * len(self._ells) * nnzk
+        self._nsrc = 2 * len(self._ells) * nnzk
 
-        # W has 8 entries per (mode, mode) block per khat nonzero. Preallocate
-        # the COO triplets at exactly that size and fill them by slice: the
-        # earlier list-of-arrays + np.concatenate held three int64/float64
-        # copies of the whole thing at once, which on a 31-tone multitone basis
-        # (47M nonzeros) transiently cost ~2.9 GB on top of the final matrix.
-        # int32 indices suffice -- both M.nnz and nsrc are far below 2^31.
-        entries_per_block = 8
-        total_entries = len(modes) * len(modes) * entries_per_block * nnzk
-        if max(M.nnz, nsrc) > np.iinfo(np.int32).max:
-            raise ValueError(
-                f"scatter map indices exceed int32: M.nnz={M.nnz}, nsrc={nsrc}"
-            )
-        W_rows = np.empty(total_entries, dtype=np.int32)
-        W_cols = np.empty(total_entries, dtype=np.int32)
-        W_val = np.empty(total_entries, dtype=np.float64)
-        offsets = np.arange(nnzk, dtype=np.int32)
-        cursor = 0
+        if M.nnz > np.iinfo(np.int32).max:
+            raise ValueError(f"scatter map indices exceed int32: M.nnz={M.nnz}")
 
-        def src_seg(ell, part):  # part: 0=real, 1=imag
-            base = (2 * self._ell_index[ell] + part) * nnzk
-            return base + offsets
-
-        def add(tgt, src, coeff):
-            nonlocal cursor
-            end = cursor + nnzk
-            W_rows[cursor:end] = tgt
-            W_cols[cursor:end] = src
-            W_val[cursor:end] = coeff
-            cursor = end
+        n_modes = len(modes)
+        # (block, quadrant, khat entry) -> index into M.data. Quadrant order is
+        # (rr, ri, ir, ii), matching the real-packing of the reference assembly.
+        targets = np.empty((n_modes, n_modes, 4, nnzk), dtype=np.int32)
+        # Per block, which ell feeds the difference (k-q) and sum (k+q) terms.
+        ell_diff = np.empty((n_modes, n_modes), dtype=np.int32)
+        ell_sum = np.empty((n_modes, n_modes), dtype=np.int32)
 
         for ki, k in enumerate(modes):
             for qi, q in enumerate(modes):
-                ed, es = k - q, k + q
-                t_rr = self._block_target(M, ki, qi, kr, kc)
-                t_ri = self._block_target(M, ki, qi + H, kr, kc)
-                t_ir = self._block_target(M, ki + H, qi, kr, kc)
-                t_ii = self._block_target(M, ki + H, qi + H, kr, kc)
-                # L = khat_ed: Lr->(+rr,+ii), Li->(-ri,+ir)
-                add(t_rr, src_seg(ed, 0), 1.0); add(t_ii, src_seg(ed, 0), 1.0)
-                add(t_ri, src_seg(ed, 1), -1.0); add(t_ir, src_seg(ed, 1), 1.0)
-                # P = khat_es: Pr->(+rr,-ii), Pi->(+ri,+ir)
-                add(t_rr, src_seg(es, 0), 1.0); add(t_ii, src_seg(es, 0), -1.0)
-                add(t_ri, src_seg(es, 1), 1.0); add(t_ir, src_seg(es, 1), 1.0)
-        assert cursor == total_entries
-        W = sp.coo_matrix(
-            (W_val, (W_rows, W_cols)), shape=(M.nnz, nsrc)
-        ).tocsr()
-        del W_rows, W_cols, W_val
-        self._W = W
+                targets[ki, qi, 0] = self._block_target(M, ki, qi, kr, kc)
+                targets[ki, qi, 1] = self._block_target(M, ki, qi + H, kr, kc)
+                targets[ki, qi, 2] = self._block_target(M, ki + H, qi, kr, kc)
+                targets[ki, qi, 3] = self._block_target(M, ki + H, qi + H, kr, kc)
+                ell_diff[ki, qi] = self._ell_index[k - q]
+                ell_sum[ki, qi] = self._ell_index[k + q]
+        self._targets = targets
+        self._ell_diff = ell_diff
+        self._ell_sum = ell_sum
+        self._value_buffer = np.empty(4 * nnzk, dtype=np.float64)
 
         # Constant Sc contribution into M_const.
         Mconst = np.zeros(M.nnz)
@@ -317,20 +315,159 @@ class FastCoupledPreconditioner:
         """
         t0 = time.perf_counter()
         gh = self._gamma_hat_array(tangent.gamma_t)
+        n_ells = len(self._ells)
+        khat = np.empty((n_ells, self._nnzk), dtype=np.complex128)
+        for i in range(n_ells):
+            khat[i] = self._khat_map.data(gh[i])
+
+        data = self._Mconst.copy()
+        targets = self._targets
+        real, imag = khat.real, khat.imag
         nnzk = self._nnzk
-        src = np.empty(2 * len(self._ells) * nnzk)
-        for i in range(len(self._ells)):
-            d = self._khat_map.data(gh[i])
-            src[2 * i * nnzk:(2 * i + 1) * nnzk] = d.real
-            src[(2 * i + 1) * nnzk:(2 * i + 2) * nnzk] = d.imag
-        data = self._W @ src
-        data += self._Mconst
+        # One fancy-indexed add per block rather than one per quadrant: the four
+        # quadrant target arrays are already contiguous in `targets`, so the
+        # values can be staged into a single buffer and scattered together.
+        buf = self._value_buffer
+        q0, q1, q2, q3 = (slice(i * nnzk, (i + 1) * nnzk) for i in range(4))
+        for ki in range(len(self.modes)):
+            for qi in range(len(self.modes)):
+                ed = self._ell_diff[ki, qi]
+                es = self._ell_sum[ki, qi]
+                # L = khat[k-q], P = khat[k+q]; the real packing sends
+                # rr <- Lr + Pr, ri <- Pi - Li, ir <- Li + Pi, ii <- Lr - Pr.
+                lr, li = real[ed], imag[ed]
+                pr, pi = real[es], imag[es]
+                np.add(lr, pr, out=buf[q0])
+                np.subtract(pi, li, out=buf[q1])
+                np.add(li, pi, out=buf[q2])
+                np.subtract(lr, pr, out=buf[q3])
+                data[targets[ki, qi].ravel()] += buf
         self.M.data = data
         self.last_assembly_runtime_s = time.perf_counter() - t0
         self._factor()
 
+    # ------------------------------------------------------------------ band
+    def _build_band(self) -> None:
+        """Map M's nonzeros into LAPACK general-band storage.
+
+        Packed tone-major, M is dense in tone index and spans the whole matrix.
+        Reordered node-major -- index ``node * (2 * n_tones) + tone`` -- it
+        collapses onto a band roughly three tone-blocks wide, because the device
+        is a 1-D chain and only neighbouring nodes couple. That is a property of
+        the circuit, not of the ordering search: reverse Cuthill-McKee finds
+        nothing better (max bandwidth 147 against 89 on jtwpa S=2).
+
+        Storing the factors in band form rather than as a general sparse LU
+        removes the fill-in bookkeeping and the pivot search over the whole
+        matrix, at the cost of holding the zeros inside the band. On jtwpa S=10
+        that trades ~1.9 GB of sparse factors for ~0.7 GB of band.
+
+        The bandwidth is measured from the assembled pattern rather than assumed
+        to be ``3 * 2 * n_tones``: a circuit whose node numbering is not
+        monotone along the chain would silently widen it, and a too-small band
+        would drop entries and quietly degrade the preconditioner.
+        """
+        dim = self.M.shape[0]
+        block = 2 * self.H
+        # Packed index is ``super_block * m + node``; node-major is
+        # ``node * (2 * n_tones) + super_block``. permutation[packed] = node_major.
+        super_block, node = np.divmod(np.arange(dim), self.m)
+        permutation = (node.astype(np.int64) * block + super_block).astype(np.int32)
+
+        # Walk the CSR structure in chunks rather than materialising a COO view.
+        # Permuted row and column copies plus the offset arithmetic would hold
+        # several int64 arrays of M.nnz simultaneously, and on jtwpa S=10 that
+        # transient is larger than the band it is building -- it set the peak
+        # RSS, defeating the point of the backend.
+        indptr, indices = self.M.indptr, self.M.indices
+        row_of = np.repeat(np.arange(dim, dtype=np.int32), np.diff(indptr))
+
+        kl = 0
+        for start in range(0, self.M.nnz, _BAND_BUILD_CHUNK):
+            stop = min(start + _BAND_BUILD_CHUNK, self.M.nnz)
+            spread = (
+                permutation[row_of[start:stop]].astype(np.int64)
+                - permutation[indices[start:stop]]
+            )
+            kl = max(kl, int(np.abs(spread).max()))
+        ku = kl
+        leading = 2 * kl + ku + 1
+        if leading * dim * 8 > _BAND_BYTES_LIMIT:
+            raise ValueError(
+                f"banded storage would need {leading * dim * 8 / 1024**3:.1f} GB "
+                f"(bandwidth {kl} over dimension {dim}); this circuit is not "
+                "banded enough for the banded backend"
+            )
+
+        # A[i, j] lives at ab[kl + ku + i - j, j]; ab is Fortran-ordered for
+        # LAPACK, so the flat offset is column-major. M.data is in CSR order and
+        # so is row_of, hence the mapping applies straight to the assembled data.
+        if leading * dim > np.iinfo(np.int32).max:
+            raise ValueError(
+                f"band offsets exceed int32: leading={leading} dim={dim}"
+            )
+        flat = np.empty(self.M.nnz, dtype=np.int32)
+        for start in range(0, self.M.nnz, _BAND_BUILD_CHUNK):
+            stop = min(start + _BAND_BUILD_CHUNK, self.M.nnz)
+            new_rows = permutation[row_of[start:stop]]
+            new_cols = permutation[indices[start:stop]]
+            flat[start:stop] = new_cols * leading + (kl + ku + new_rows - new_cols)
+
+        # The band is the dominant allocation, so exactly one copy is kept and
+        # reused: zeroed and refilled per step, then factored in place. Holding
+        # a pristine template plus a working copy plus LAPACK's output would
+        # cost three times the band and lose to the sparse backend outright.
+        self._band_flat = flat
+        self._band_permutation = permutation
+        self._band_kl = kl
+        self._band_ku = ku
+        self._band_leading = leading
+        self._band_dim = dim
+        self._band_buffer = np.zeros(leading * dim, dtype=np.float64)
+        self._gbtrf, self._gbtrs = get_lapack_funcs(("gbtrf", "gbtrs"),
+                                                    (self._band_buffer,))
+
+    def _factor_banded(self) -> None:
+        if self._band_flat is None:
+            self._build_band()
+        buffer = self._band_buffer
+        buffer.fill(0.0)
+        buffer[self._band_flat] = self.M.data
+        ab = buffer.reshape((self._band_leading, self._band_dim), order="F")
+        lu, ipiv, info = self._gbtrf(
+            ab, self._band_kl, self._band_ku, overwrite_ab=True
+        )
+        if info != 0:
+            raise RuntimeError(
+                f"banded factorization failed: dgbtrf info={info} "
+                f"(info>0 means a zero pivot at that column)"
+            )
+        self._band_lu = lu
+        self._band_ipiv = ipiv
+        self.last_factor_backend = "banded"
+        _log_factor_backend_once("banded", f"kl=ku={self._band_kl}")
+
+    def _solve_banded(self, b_real: np.ndarray) -> np.ndarray:
+        # permutation[packed] = node_major, so moving *into* node-major order is
+        # a scatter and coming back out is a gather. Reversing the two silently
+        # solves a differently-permuted system and still returns a finite vector.
+        permutation = self._band_permutation
+        permuted = np.empty_like(b_real)
+        permuted[permutation] = b_real
+        x, info = self._gbtrs(
+            self._band_lu, self._band_kl, self._band_ku, permuted, self._band_ipiv
+        )
+        if info != 0:
+            raise RuntimeError(f"banded solve failed: dgbtrs info={info}")
+        return x[permutation]
+
     def _factor(self) -> None:
         t0 = time.perf_counter()
+
+        if self.use_banded:
+            self._factor_banded()
+            self.last_factor_runtime_s = time.perf_counter() - t0
+            return
 
         if self.use_pardiso:
             A = self.M.tocsr()
@@ -385,6 +522,8 @@ class FastCoupledPreconditioner:
         self.last_factor_runtime_s = time.perf_counter() - t0
 
     def solve(self, b_real: np.ndarray) -> np.ndarray:
+        if self.use_banded:
+            return self._solve_banded(b_real)
         if self.use_pardiso and self._pardiso is not None:
             try:
                 self._pardiso.set_phase(33)

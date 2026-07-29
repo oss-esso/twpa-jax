@@ -7,6 +7,7 @@ import csv
 import json
 import logging
 import math
+import os
 from dataclasses import replace
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
@@ -57,7 +58,17 @@ from twpa_solver.multitone.seed import promote_pump_solution
 logger = logging.getLogger(__name__)
 
 # Physical memory deliberately left unallocated when sizing worker concurrency.
-_MEMORY_HEADROOM_GB = 2.0
+# Sized as a fraction of one worker rather than a flat figure: a flat 2.0 GB was
+# calibrated when a worker peaked at 3.04 GB and machines had ~15 GB free, and
+# it silently costs a whole worker once the per-worker peak drops or the machine
+# has only ~7 GB to give. The floor still keeps a real reserve on tiny bases.
+_MEMORY_HEADROOM_FLOOR_GB = 0.75
+_MEMORY_HEADROOM_FRACTION = 0.30
+
+
+def _memory_headroom_gb(peak_gb: float) -> float:
+    """Physical memory left unallocated when sizing worker concurrency."""
+    return max(_MEMORY_HEADROOM_FLOOR_GB, _MEMORY_HEADROOM_FRACTION * peak_gb)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -134,6 +145,20 @@ def build_parser() -> argparse.ArgumentParser:
         "--multitone-preconditioner",
         choices=MULTITONE_PRECONDITIONERS,
         default="real_coupled_fast",
+    )
+    parser.add_argument(
+        "--factor-backend",
+        choices=("pardiso", "banded"),
+        default="pardiso",
+        help=(
+            "Sparse factorization for the real_coupled_fast preconditioner. "
+            "'banded' reorders node-major and stores the factors as a LAPACK "
+            "general band: measured on jtwpa S=10 it peaks at 1.84 GB against "
+            "2.51 GB, at 1.18x the wall time. That trade is worth taking only "
+            "when the smaller footprint buys another worker -- on a ~7 GB "
+            "budget it turns 2 workers into 3, which more than repays the "
+            "slower factor. For a single-frequency run it is a pure loss."
+        ),
     )
     parser.add_argument(
         "--allow-memory-overcommit",
@@ -715,10 +740,10 @@ def _frequency_worker_limit(args: argparse.Namespace, task_count: int) -> int:
         free_limited = requested
     else:
         # Free memory is sampled once, at launch, but a long sweep competes with
-        # whatever else the machine does for hours afterwards. Hold back a fixed
-        # reserve (or half a worker, whichever is larger) so that drift does not
-        # turn a just-fitting worker count into swap.
-        headroom_gb = max(_MEMORY_HEADROOM_GB, 0.5 * peak_gb)
+        # whatever else the machine does for hours afterwards. Hold back a
+        # reserve proportional to one worker so that drift does not turn a
+        # just-fitting worker count into swap.
+        headroom_gb = _memory_headroom_gb(peak_gb)
         if peak_gb > free_gb - headroom_gb and not args.allow_memory_overcommit:
             needed_gb = peak_gb + headroom_gb - free_gb
             raise ResourceLimitExceeded(
@@ -778,7 +803,11 @@ def _estimate_worker_footprint(
     basis = _build_multitone_basis(args, pump_basis.modes, omega_p, delta)
     # The Schur backend retains the nonlinear nodes and ports; the full backend
     # keeps every node. Use the full node count, the conservative bound.
-    return fast_coupled_footprint(basis.n_tones, circuit.node_count)
+    return fast_coupled_footprint(
+        basis.n_tones,
+        circuit.node_count,
+        factor_backend=getattr(args, "factor_backend", "pardiso"),
+    )
 
 
 def _run_frequency_sweep(args: argparse.Namespace) -> dict[str, object]:
@@ -877,6 +906,12 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.n_signal_freq == 1 and args.signal_ghz is None:
         parser.error("--signal-ghz is required for a single-frequency run")
+    # The preconditioner is constructed deep inside the problem, and frequency
+    # workers are separate processes, so the choice travels as an environment
+    # variable the way the other factor-backend switches already do.
+    os.environ["TWPA_BANDED_PRECOND"] = (
+        "1" if args.factor_backend == "banded" else "0"
+    )
     if args.n_signal_freq > 1:
         summary = _run_frequency_sweep(args)
         if args.summary_json:

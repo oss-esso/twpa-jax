@@ -24,6 +24,11 @@ def command(
     cmd = [
         sys.executable, "scripts/run_compression.py",
         "--resource-budget-gb", str(resource_budget_gb),
+        # Frequency points are independent, so campaign wall time is set by how
+        # many fit in memory at once. The banded factorization costs 1.18x per
+        # solve but peaks at 1.84 GB against 2.51 GB, which is the difference
+        # between two and three workers on a ~7 GB budget -- a net ~1.26x.
+        "--factor-backend", "banded",
         "--output-dir", str(outdir), *case.source,
         "--pump-freq-ghz", str(case.pump_ghz),
         "--pump-current-a", str(case.pump_current_a),

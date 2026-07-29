@@ -84,6 +84,17 @@ peak RSS (2.81 vs 3.01 GB). Since peak sets the worker count and both give the
 same count, PARDISO wins ~3.8x at equal concurrency. Set `TWPA_REQUIRE_PARDISO=1`
 to make a silent fallback a hard error during timed campaigns.
 
+The assembly scatter used to be a sparse matrix `W` of shape `(M.nnz, 2*n_ells*
+nnzk)` so assembly was one spmv. It carried no information beyond target
+indices -- every stored value is +-1 and the source indices are contiguous
+per-ell ranges -- and cost ~630 MB at S=10 to hold 94 MB of indices. It is now
+four int32 target arrays per (mode, mode) block (`_index_contributions`), which
+cut peak RSS 3.04 -> 2.51 GB for +87 ms of assembly (scattered writes replace a
+sequential-write spmv). Gate: `tests/test_fast_coupled_assembly.py` compares the
+assembled matrix against `problem.real_coupled_matrix`, per quadrant, since a
+dropped sign would only show as a slower preconditioner and no physics gate
+would catch it.
+
 **Memory scales as (n_pump_modes + 2S + 1)^2**, not as the packed dimension: the
 coupled Jacobian is block-dense in tone index. Same jtwpa circuit, same n=2048,
 gain-map pump (H=10) vs multitone S=10 (H=31): M.nnz 2.46M -> 23.6M, exactly the
@@ -102,8 +113,47 @@ measurement and asserts it never reads below it.
 `--precond-reuse N` / `--precond-reuse-refresh-gmres` expose modified-Newton
 preconditioning (reuse one factor across N Newton steps; the update is always
 taken against the true Jacobian, so the converged solution cannot change).
-Default 1 = refactor every step. **The speedup from N>1 is not yet measured.**
+Default 1 = refactor every step. **Measured 2026-07-29: N>1 is a large net
+loss, leave it at 1.** On the jpa compression fixture, N=2 saved 26 of 59
+factorizations but cost 841 extra GMRES iterations (243 -> 1084); N=3 saved 29
+and cost 986. The exact preconditioner converges GMRES in ~3 iterations, and one
+GMRES iteration (jvp + triangular solve, 303 ms at S=6) costs about as much as
+one factorization (346 ms) -- so there is no cheap-preconditioner regime to
+amortize, and a stale exact factor is far worse than a fresh one. Wall time on
+jpa: 3313 ms (N=1) vs 3574 (N=2) vs 3545 (N=3); gain identical to all digits.
 The pump solve is pinned to `precond_reuse=1` so its iterate path is unchanged.
+
+### Factor backends and worker count (measured 2026-07-29)
+
+`--factor-backend {pardiso,banded}` (default `pardiso`). `banded` reorders the
+coupled Jacobian **node-major** (`node * 2*n_tones + super_block`) and stores the
+factors as a LAPACK general band instead of a general sparse LU. Packed
+tone-major the matrix spans everything; node-major it collapses onto a band
+~3 tone-blocks wide, because the device is a 1-D chain. That is a property of
+the circuit, not of an ordering search -- RCM does worse (max bandwidth 147 vs
+89 on jtwpa S=2). Bandwidth is measured from the assembled pattern, never
+assumed. jtwpa S=10, 3 power points, single process:
+
+| backend | peak RSS | wall | workers in 7 GB | net throughput |
+| --- | ---: | ---: | ---: | ---: |
+| pardiso | 2.51 GB | 147.7 s | 2 | 1.55x |
+| banded | 1.84 GB | 173.7 s | 3 | **1.95x** |
+
+Converged gain agrees to 4.4e-10 dB (27.541036124719 vs 27.541036124280), as it
+must -- this only changes the preconditioner. `banded` is worth it only when the
+smaller footprint buys another worker; for a single-frequency run (exp22) it is
+a pure 1.18x loss, so the default stays `pardiso` and exp21 passes it
+explicitly. Worker throughput does not scale linearly -- measured on jtwpa S=2,
+1/2/3/4/6 workers give 1.00/1.55/2.30/2.00/2.41x (+-15% run-to-run), so it is
+bandwidth-bound and plateaus around 3 workers on this 6-core part.
+
+**PARDISO is pinned to one thread** (`TWPA_PARDISO_THREADS`, default 1) because
+MKL intermittently fails reordering with error -3. That pin costs single-run
+latency: at S=6 the factor is 340 ms at 1 thread, 228 ms at 2 (1.49x), and
+**1374 ms at 6** -- MKL PARDISO at high thread counts on this AMD part is 4x
+slower than serial. Raising it only helps when running one worker; with several
+workers, extra threads lose to extra workers (3 workers x 1 thread = 5.00 cyc/s
+vs 3 x 2 threads = 3.66).
 
 Distributed sideband selection is reference-gated, not inferred from a two-point
 S=2/S=4 delta. JTWPA is non-monotone (30.7152, 24.2021, 26.5563, 27.5410 dB
