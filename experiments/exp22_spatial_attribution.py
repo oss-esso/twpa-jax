@@ -4,13 +4,17 @@ from __future__ import annotations
 
 import argparse
 import csv
+import math
 import subprocess
 import sys
 from pathlib import Path
 
 import matplotlib.pyplot as plt
 
-from exp20_multitone_compression import CASES, Case
+try:
+    from exp20_multitone_compression import CASES, Case
+except ModuleNotFoundError:
+    from experiments.exp20_multitone_compression import CASES, Case
 
 
 def run_command(case: Case, outdir: Path) -> list[str]:
@@ -46,8 +50,18 @@ def plot(outdir: Path) -> None:
         axes[1, 0].plot(x, [float(row["signal_flux_abs"]) for row in rows], label=label)
     power = [float(row["signal_power_dbm"]) for row in points]
     gain = [float(row["gain_db"]) for row in points]
-    depletion = [float(row["pump_depletion_db"]) for row in points]
-    depletion_only = [gain[0] + 2.0 * value for value in depletion]
+    try:
+        depletion_only = [
+            10.0 * math.log10(
+                float(row["compression_model_depletion_only"])
+            )
+            for row in points
+        ]
+    except KeyError as exc:
+        raise ValueError(
+            "compression_points.csv lacks the plan-specified "
+            "compression_model_depletion_only column; regenerate the artifact"
+        ) from exc
     axes[1, 1].plot(power, gain, "o-", label="multitone")
     axes[1, 1].plot(power, depletion_only, "--", label="depletion-only")
     axes[0, 0].set_ylabel("Theta (rad)")

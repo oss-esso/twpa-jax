@@ -12,6 +12,7 @@ from twpa_solver.multitone.basis import build_three_tone_basis
 from twpa_solver.multitone.compression import solve_signal_power_point
 from twpa_solver.multitone.observables import (
     reference_states,
+    spatial_depletion_null,
     spatial_profiles,
     tone_s21,
 )
@@ -26,10 +27,52 @@ from twpa_solver.multitone.compression_curve import (
 from twpa_solver.core import CircuitMatrices
 
 
+def test_exp22_plot_rejects_legacy_compression_artifact(tmp_path) -> None:
+    from experiments.exp22_spatial_attribution import plot
+
+    (tmp_path / "spatial_profiles.csv").write_text(
+        "operating_point,branch_index,theta_rad,delta_k_eff_rad_per_cell,"
+        "signal_flux_abs\n"
+    )
+    (tmp_path / "compression_points.csv").write_text(
+        "signal_power_dbm,gain_db,pump_depletion_db\n-100,20,-1\n"
+    )
+
+    with pytest.raises(ValueError, match="compression_model_depletion_only"):
+        plot(tmp_path)
+
+
 def test_refine_p1db_and_depletion_model() -> None:
     crossing = refine_p1db(lambda power: power + 40.0, (-40.0, -30.0))
     assert crossing == pytest.approx(-39.0, abs=0.01)
     assert depletion_only_model(10.0, 1.0, 100.0) == pytest.approx(10.0 / 1.2)
+
+
+def test_spatial_depletion_null_matches_small_signal_profile() -> None:
+    rows = [
+        {
+            "branch_index": 0,
+            "pump_flux_abs": 2.0,
+            "signal_flux_abs": 1.0,
+            "delta_k_eff_rad_per_cell": 0.7,
+        },
+        {
+            "branch_index": 1,
+            "pump_flux_abs": 2.0,
+            "signal_flux_abs": 1.5,
+            "delta_k_eff_rad_per_cell": 0.7,
+        },
+        {
+            "branch_index": 2,
+            "pump_flux_abs": 2.0,
+            "signal_flux_abs": 2.0,
+            "delta_k_eff_rad_per_cell": 0.7,
+        },
+    ]
+
+    assert spatial_depletion_null(rows, rows) == pytest.approx(
+        20.0 * math.log10(2.0), abs=0.05
+    )
 
 
 def test_curve_reports_nonmonotonic_compression() -> None:

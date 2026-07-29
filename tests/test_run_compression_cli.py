@@ -379,6 +379,10 @@ def test_run_compression_smoke_writes_artifacts(tmp_path) -> None:
     assert summary["multitone_backend"] == "full"
     assert summary["pump_port"] == 1
     assert "pump_depletion_db" in points
+    assert "compression_model_depletion_only" in points
+    assert "power_balance_rel_err" in points
+    assert "max_power_balance_rel_err" in summary
+    assert "p1db_method" in summary
     assert "signal_s21_real" in points
     assert "pump_s21_real" in points
     assert "idler_s21_real" in points

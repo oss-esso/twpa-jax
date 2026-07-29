@@ -171,6 +171,65 @@ def power_balance(
     }
 
 
+def spatial_depletion_null(
+    spatial_rows: list[dict[str, Any]],
+    small_signal_rows: list[dict[str, Any]],
+) -> float:
+    """Return a distributed depletion-only gain estimate in dB.
+
+    The small-signal rows provide the local signal-growth increments and phase
+    mismatch.  The operating-point pump amplitudes scale those increments,
+    while the mismatch is deliberately kept at its small-signal value.  This
+    is a diagnostic null, not a replacement for the nonlinear solve.
+
+    Args:
+        spatial_rows: Branch rows at the operating point.
+        small_signal_rows: Branch rows at the zero-signal operating point.
+
+    Raises:
+        ValueError: If rows are empty, mismatched, or contain invalid fluxes.
+    """
+    if not spatial_rows or not small_signal_rows:
+        raise ValueError("spatial depletion null requires non-empty profiles")
+    if len(spatial_rows) != len(small_signal_rows):
+        raise ValueError("operating and small-signal profiles must have equal length")
+    ordered = sorted(spatial_rows, key=lambda row: int(row["branch_index"]))
+    reference = sorted(
+        small_signal_rows, key=lambda row: int(row["branch_index"])
+    )
+    signal_reference = np.asarray(
+        [float(row["signal_flux_abs"]) for row in reference]
+    )
+    if np.any(signal_reference <= 0.0):
+        raise ValueError("small-signal signal fluxes must be positive")
+    local_growth = np.zeros(len(reference), dtype=float)
+    local_growth[1:] = math.log(
+        signal_reference[-1] / signal_reference[0]
+    ) / max(len(reference) - 1, 1)
+    reference_pump = np.asarray(
+        [float(row["pump_flux_abs"]) for row in reference]
+    )
+    operating_pump = np.asarray(
+        [float(row["pump_flux_abs"]) for row in ordered]
+    )
+    if np.any(reference_pump <= 0.0) or np.any(operating_pump < 0.0):
+        raise ValueError("pump fluxes must be non-negative and nonzero at reference")
+    reference_gain_db = float(
+        20.0 * math.log10(signal_reference[-1] / signal_reference[0])
+    )
+    if np.allclose(operating_pump, reference_pump, rtol=1e-12, atol=0.0):
+        return reference_gain_db
+    delta_k = np.asarray(
+        [float(row["delta_k_eff_rad_per_cell"]) for row in reference]
+    )
+    pump_scale = operating_pump / reference_pump
+    phase_factor = np.cos(delta_k)
+    log_amplitude_gain = float(
+        np.sum(local_growth * pump_scale * phase_factor)
+    )
+    return float(20.0 * log_amplitude_gain / math.log(10.0))
+
+
 def _chain_branch_nodes(circuit: CircuitMatrices) -> tuple[np.ndarray, np.ndarray]:
     incidence = circuit.Bphi.tocsc()
     starts: list[int] = []

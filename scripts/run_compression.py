@@ -24,7 +24,12 @@ from twpa_solver.multitone.basis import (
     build_three_tone_basis,
 )
 from twpa_solver.multitone.compression import solve_signal_power_point
-from twpa_solver.multitone.observables import spatial_profiles, tone_s21
+from twpa_solver.multitone.compression_curve import (
+    build_compression_curve,
+    depletion_only_model,
+    refine_p1db,
+)
+from twpa_solver.multitone.observables import power_balance, spatial_profiles, tone_s21
 from twpa_solver.multitone.preconditioners import (
     MULTITONE_PRECONDITIONERS,
     resolve_multitone_preconditioner,
@@ -515,6 +520,7 @@ def _solve_compression(
         source_current_a=pump_current,
     )
     states: dict[str, np.ndarray] = {}
+    state_by_current: dict[float, np.ndarray] = {}
     points: list[dict[str, float]] = []
     previous = pump_seed_solve
     previous_previous = None
@@ -570,15 +576,29 @@ def _solve_compression(
                 20.0 * np.log10(max(abs(pump_s21), 1e-300))
                 - 20.0 * np.log10(max(abs(pump_reference_s21), 1e-300))
             )
+            gain_linear = float(10.0 ** (gain_db / 10.0))
+            signal_power = float(current**2 * args.z0_ohm / 2.0)
+            pump_power = float(pump_current**2 * args.z0_ohm / 2.0)
+            depletion_model = depletion_only_model(
+                gain_linear, signal_power, pump_power
+            )
+            balance = power_balance(state_full, basis, circuit)
             reference_gain = gain_db if reference_gain is None else reference_gain
             previous_previous = previous
             previous_previous_current = previous_current
             previous = state
             previous_current = float(current)
+            state_by_current[float(current)] = state_full
         else:
             gain_db = float("nan")
             signal_s21 = pump_s21 = idler_s21 = complex(float("nan"), float("nan"))
             pump_depletion_db = float("nan")
+            depletion_model = float("nan")
+            balance = {
+                "power_balance_rel_err": float("nan"),
+                "manley_rowe_photon_flux": float("nan"),
+                "manley_rowe_rel_err": float("nan"),
+            }
         points.append({
             "signal_current_a": float(current),
             "signal_power_dbm": _current_to_dbm(
@@ -587,6 +607,10 @@ def _solve_compression(
             "gain_db": gain_db,
             "gain_vs_off_db": gain_db - pump_off_gain_db,
             "pump_depletion_db": pump_depletion_db,
+            "compression_model_depletion_only": depletion_model,
+            "power_balance_rel_err": balance["power_balance_rel_err"],
+            "manley_rowe_photon_flux": balance["manley_rowe_photon_flux"],
+            "manley_rowe_rel_err": balance["manley_rowe_rel_err"],
             "signal_s21_real": float(np.real(signal_s21)),
             "signal_s21_imag": float(np.imag(signal_s21)),
             "pump_s21_real": float(np.real(pump_s21)),
