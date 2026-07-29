@@ -398,6 +398,9 @@ def test_run_compression_smoke_writes_artifacts(tmp_path) -> None:
     assert "compression_model_depletion_only" in points
     assert "power_balance_rel_err" in points
     assert "max_power_balance_rel_err" in summary
+    assert "manley_rowe_photon_flux" in points
+    assert "manley_rowe_rel_err" in points
+    assert "max_manley_rowe_rel_err" in summary
     assert "p1db_method" in summary
     assert "signal_s21_real" in points
     assert "pump_s21_real" in points

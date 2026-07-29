@@ -776,6 +776,11 @@ def _solve_compression(
              if np.isfinite(float(point["power_balance_rel_err"]))),
             default=None,
         ),
+        "max_manley_rowe_rel_err": max(
+            (float(point["manley_rowe_rel_err"]) for point in points
+             if np.isfinite(float(point["manley_rowe_rel_err"]))),
+            default=None,
+        ),
         "p1db_signal_current_a": p1db_current_a,
         "p1db_input_dbm": p1db_dbm,
         "p1db_output_dbm": p1db_output_dbm,
