@@ -61,9 +61,12 @@ _FACTOR_FILL_RATIO = 5.0
 # fast_coupled._index_contributions.
 _SCATTER_BYTES_PER_MATRIX_NNZ = 4.0
 # Assembly stages values into one buffer and scatters them; nothing transiently
-# doubles an array the size of the matrix any more, so the peak sits just above
-# steady. Rounded up from the measured 2.51/2.42.
-_ASSEMBLY_PEAK_OVERHEAD = 1.06
+# doubles an array the size of the matrix any more.  These backend-specific
+# factors are rounded up from the post-scatter-rewrite RSS measurements in
+# phase 1 (jtwpa, S=10, 31 tones, 2560 nodes): 2.509296 GiB PARDISO and
+# 1.819073 GiB banded.
+_PARDISO_PEAK_OVERHEAD = 1.053
+_BANDED_PEAK_OVERHEAD = 1.01
 
 
 @dataclass(frozen=True)
@@ -132,7 +135,12 @@ def fast_coupled_footprint(
     steady = (
         base_bytes + matrix_bytes + scatter_bytes + factor_bytes + workspace_bytes
     )
-    peak = int(steady * _ASSEMBLY_PEAK_OVERHEAD)
+    peak_overhead = (
+        _BANDED_PEAK_OVERHEAD
+        if factor_backend == "banded"
+        else _PARDISO_PEAK_OVERHEAD
+    )
+    peak = int(steady * peak_overhead)
     return FastCoupledFootprint(
         matrix_bytes=matrix_bytes,
         scatter_bytes=scatter_bytes,

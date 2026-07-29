@@ -148,7 +148,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--factor-backend",
-        choices=("pardiso", "banded"),
+        choices=("auto", "pardiso", "banded"),
         default="pardiso",
         help=(
             "Sparse factorization for the real_coupled_fast preconditioner. "
@@ -673,6 +673,7 @@ def _solve_compression(
         ),
         "multitone_preconditioner": selected_preconditioner,
         "multitone_backend": selected_backend,
+        "factor_backend": args.factor_backend,
         "recovery": args.recovery,
         "basis": basis.to_metadata(),
     }
@@ -773,6 +774,38 @@ def _frequency_worker_limit(args: argparse.Namespace, task_count: int) -> int:
             flush=True,
         )
     return workers
+
+
+def _select_factor_backend(args: argparse.Namespace, task_count: int) -> str:
+    """Select the faster backend that fits the requested sweep budget."""
+    requested = getattr(args, "factor_backend", "pardiso")
+    if requested != "auto":
+        return requested
+    if int(getattr(args, "n_signal_freq", 1)) <= 1:
+        return "pardiso"
+
+    candidates: dict[str, int] = {}
+    for backend in ("pardiso", "banded"):
+        candidate_values = vars(args).copy()
+        candidate_values["factor_backend"] = backend
+        candidate = argparse.Namespace(**candidate_values)
+        footprint = _estimate_worker_footprint(candidate)
+        headroom = _memory_headroom_gb(footprint.peak_gb)
+        budget_workers = int(
+            max(0.0, float(args.resource_budget_gb) - headroom)
+            // footprint.peak_gb
+        )
+        free_gb = available_memory_gb()
+        free_workers = (
+            budget_workers
+            if free_gb is None
+            else int(max(0.0, free_gb - headroom) // footprint.peak_gb)
+        )
+        candidates[backend] = max(
+            1,
+            min(int(args.signal_workers), task_count, budget_workers, free_workers),
+        )
+    return "banded" if candidates["banded"] > candidates["pardiso"] else "pardiso"
 
 
 def _estimate_worker_footprint(
@@ -893,6 +926,7 @@ def _run_frequency_sweep(args: argparse.Namespace) -> dict[str, object]:
         "signal_workers": workers,
         "signal_workers_requested": int(args.signal_workers),
         "resource_budget_gb": float(args.resource_budget_gb),
+        "factor_backend": args.factor_backend,
         "frequencies_ghz": [float(value) for value in frequencies],
     }
     (args.output_dir / "frequency_summary.json").write_text(
@@ -906,6 +940,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.n_signal_freq == 1 and args.signal_ghz is None:
         parser.error("--signal-ghz is required for a single-frequency run")
+    args.factor_backend = _select_factor_backend(args, max(args.n_signal_freq, 1))
     # The preconditioner is constructed deep inside the problem, and frequency
     # workers are separate processes, so the choice travels as an environment
     # variable the way the other factor-backend switches already do.
@@ -922,6 +957,7 @@ def main(argv: list[str] | None = None) -> int:
         "signal_frequency_range_ghz": [args.signal_ghz, args.signal_ghz],
         "n_signal_freq": 1,
         "signal_workers": 1,
+        "factor_backend": args.factor_backend,
     })
     if args.summary_json:
         args.summary_json.write_text(json.dumps(summary, indent=2), encoding="utf-8")

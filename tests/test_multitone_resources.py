@@ -11,12 +11,15 @@ from twpa_solver.multitone.resources import (
     guard,
 )
 
-# Measured on jtwpa S=10 (n_tones=31, full backend n=2560) with pypardiso, as
-# the peak working set of a whole run_compression run (3 signal power points).
+# Measured on jtwpa S=10 (n_tones=31, full backend n=2560) with one worker and
+# one signal point after the scatter-map rewrite.  RSS was sampled with
+# Get-Process while the solve was running.
 JTWPA_S10_TONES = 31
 JTWPA_S10_NODES = 2560
-MEASURED_PEAK_GB = 2.51
-MEASURED_BANDED_PEAK_GB = 1.84
+MEASURED_STEADY_GB = 2.394
+MEASURED_PEAK_GB = 2.509296
+MEASURED_BANDED_STEADY_GB = 1.824
+MEASURED_BANDED_PEAK_GB = 1.819073
 MEASURED_MATRIX_NNZ = 23_705_080
 # The machine these campaigns run on can spare about this much.
 CAMPAIGN_MEMORY_CEILING_GB = 7.0
@@ -60,6 +63,7 @@ def test_fast_coupled_estimate_is_conservative_against_measured_peak() -> None:
     """
     footprint = fast_coupled_footprint(JTWPA_S10_TONES, JTWPA_S10_NODES)
 
+    assert footprint.steady_gb >= MEASURED_STEADY_GB
     assert footprint.peak_gb >= MEASURED_PEAK_GB
     assert footprint.peak_gb < 1.5 * MEASURED_PEAK_GB
     assert footprint.peak_bytes > footprint.steady_bytes
@@ -76,6 +80,7 @@ def test_banded_estimate_is_conservative_and_smaller_than_sparse() -> None:
     )
     sparse = fast_coupled_footprint(JTWPA_S10_TONES, JTWPA_S10_NODES)
 
+    assert banded.steady_gb >= MEASURED_BANDED_STEADY_GB
     assert banded.peak_gb >= MEASURED_BANDED_PEAK_GB
     assert banded.peak_gb < 1.5 * MEASURED_BANDED_PEAK_GB
     assert banded.peak_gb < sparse.peak_gb

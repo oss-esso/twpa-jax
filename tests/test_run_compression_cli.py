@@ -210,6 +210,19 @@ def test_banded_backend_raises_the_worker_cap(monkeypatch) -> None:
     assert _frequency_worker_limit(banded, 8) > _frequency_worker_limit(sparse, 8)
 
 
+def test_auto_backend_uses_banded_only_when_it_adds_a_worker(monkeypatch) -> None:
+    monkeypatch.setattr(run_compression, "available_memory_gb", lambda: 7.0)
+    args = _worker_args(
+        "--multitone-sidebands", "10",
+        "--resource-budget-gb", "1024",
+        "--factor-backend", "auto",
+    )
+    args.n_signal_freq = 4
+    assert run_compression._select_factor_backend(args, 4) == "banded"
+    args.n_signal_freq = 1
+    assert run_compression._select_factor_backend(args, 1) == "pardiso"
+
+
 def test_sweep_refuses_to_start_when_one_worker_cannot_fit(monkeypatch) -> None:
     """Refuse rather than swap when even a single worker exceeds free memory.
 
