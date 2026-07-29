@@ -72,6 +72,31 @@ def test_spatial_profiles_validate_chain_and_unwrap_phase() -> None:
     assert [row["branch_index"] for row in profiles] == [0, 1, 2]
     assert all(np.isfinite(row["delta_k_eff_rad_per_cell"]) for row in profiles)
 
+    segmented_incidence = sp.csr_matrix(
+        np.array(
+            (
+                [1.0, 0.0],
+                [-1.0, 0.0],
+                [0.0, 0.0],
+                [0.0, 1.0],
+                [0.0, -1.0],
+            )
+        )
+    )
+    segmented = CircuitMatrices(
+        C=sp.eye(5, format="csr"),
+        G=sp.csr_matrix((5, 5)),
+        K=sp.eye(5, format="csr"),
+        Bphi=segmented_incidence,
+        Ic=np.ones(2),
+    )
+    segmented_state = np.ones((basis.n_tones, 5), dtype=np.complex128)
+    segmented_profiles = spatial_profiles(segmented_state, basis, segmented)
+    assert [(row["start_node"], row["stop_node"]) for row in segmented_profiles] == [
+        (0, 1),
+        (3, 4),
+    ]
+
 
 def test_reference_states_execute_all_four_solve_paths() -> None:
     circuit, _metadata = _jpa()

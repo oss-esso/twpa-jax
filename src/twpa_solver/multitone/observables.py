@@ -191,8 +191,7 @@ def _chain_branch_nodes(circuit: CircuitMatrices) -> tuple[np.ndarray, np.ndarra
     monotone = np.all(np.diff(starts_array) >= 0) and np.all(
         np.diff(stops_array) > 0
     )
-    connected = np.all(starts_array[1:] <= stops_array[:-1])
-    if not monotone or not connected:
+    if not monotone:
         raise ValueError(
             "spatial_profiles assumes Bphi branches are chain-monotone in "
             "cell order; observed endpoints="
