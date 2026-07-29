@@ -31,7 +31,16 @@ def _problem_with_path(problem, path: AffineSourcePath):
     if isinstance(problem, FullMultiToneProblem):
         return replace(problem, source_path=path)
     full = replace(problem.full, source_path=path)
-    return type(problem)(full, problem.partition, linear_apply_mode=problem.linear_apply_mode)
+    # The partition carries the cached Schur complements and the cached fast
+    # preconditioner scatter/symbolic factorization, so rebuilding the problem
+    # per power point is cheap. ``preconditioner`` must be carried across or the
+    # rebuilt problem silently reverts to the default.
+    return type(problem)(
+        full,
+        problem.partition,
+        linear_apply_mode=problem.linear_apply_mode,
+        preconditioner=problem.preconditioner,
+    )
 
 
 def solve_signal_power_point(

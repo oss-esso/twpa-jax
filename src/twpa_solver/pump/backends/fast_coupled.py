@@ -244,14 +244,35 @@ class FastCoupledPreconditioner:
         self._ell_index = {ell: i for i, ell in enumerate(self._ells)}
         nsrc = 2 * len(self._ells) * nnzk
 
+        # W has 8 entries per (mode, mode) block per khat nonzero. Preallocate
+        # the COO triplets at exactly that size and fill them by slice: the
+        # earlier list-of-arrays + np.concatenate held three int64/float64
+        # copies of the whole thing at once, which on a 31-tone multitone basis
+        # (47M nonzeros) transiently cost ~2.9 GB on top of the final matrix.
+        # int32 indices suffice -- both M.nnz and nsrc are far below 2^31.
+        entries_per_block = 8
+        total_entries = len(modes) * len(modes) * entries_per_block * nnzk
+        if max(M.nnz, nsrc) > np.iinfo(np.int32).max:
+            raise ValueError(
+                f"scatter map indices exceed int32: M.nnz={M.nnz}, nsrc={nsrc}"
+            )
+        W_rows = np.empty(total_entries, dtype=np.int32)
+        W_cols = np.empty(total_entries, dtype=np.int32)
+        W_val = np.empty(total_entries, dtype=np.float64)
+        offsets = np.arange(nnzk, dtype=np.int32)
+        cursor = 0
+
         def src_seg(ell, part):  # part: 0=real, 1=imag
             base = (2 * self._ell_index[ell] + part) * nnzk
-            return base + np.arange(nnzk)
-
-        W_rows, W_cols, W_val = [], [], []
+            return base + offsets
 
         def add(tgt, src, coeff):
-            W_rows.append(tgt); W_cols.append(src); W_val.append(coeff)
+            nonlocal cursor
+            end = cursor + nnzk
+            W_rows[cursor:end] = tgt
+            W_cols[cursor:end] = src
+            W_val[cursor:end] = coeff
+            cursor = end
 
         for ki, k in enumerate(modes):
             for qi, q in enumerate(modes):
@@ -260,17 +281,17 @@ class FastCoupledPreconditioner:
                 t_ri = self._block_target(M, ki, qi + H, kr, kc)
                 t_ir = self._block_target(M, ki + H, qi, kr, kc)
                 t_ii = self._block_target(M, ki + H, qi + H, kr, kc)
-                o = np.ones(nnzk)
                 # L = khat_ed: Lr->(+rr,+ii), Li->(-ri,+ir)
-                add(t_rr, src_seg(ed, 0), o); add(t_ii, src_seg(ed, 0), o)
-                add(t_ri, src_seg(ed, 1), -o); add(t_ir, src_seg(ed, 1), o)
+                add(t_rr, src_seg(ed, 0), 1.0); add(t_ii, src_seg(ed, 0), 1.0)
+                add(t_ri, src_seg(ed, 1), -1.0); add(t_ir, src_seg(ed, 1), 1.0)
                 # P = khat_es: Pr->(+rr,-ii), Pi->(+ri,+ir)
-                add(t_rr, src_seg(es, 0), o); add(t_ii, src_seg(es, 0), -o)
-                add(t_ri, src_seg(es, 1), o); add(t_ir, src_seg(es, 1), o)
-        W = sp.csr_matrix(
-            (np.concatenate(W_val),
-             (np.concatenate(W_rows), np.concatenate(W_cols))),
-            shape=(M.nnz, nsrc))
+                add(t_rr, src_seg(es, 0), 1.0); add(t_ii, src_seg(es, 0), -1.0)
+                add(t_ri, src_seg(es, 1), 1.0); add(t_ir, src_seg(es, 1), 1.0)
+        assert cursor == total_entries
+        W = sp.coo_matrix(
+            (W_val, (W_rows, W_cols)), shape=(M.nnz, nsrc)
+        ).tocsr()
+        del W_rows, W_cols, W_val
         self._W = W
 
         # Constant Sc contribution into M_const.

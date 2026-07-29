@@ -22,6 +22,13 @@ from twpa_solver.pump.problem import (
 )
 
 
+@dataclass(frozen=True)
+class _LinearBlockView:
+    """Expose ``_linear_blocks`` under the attribute name Schur code expects."""
+
+    schur: list[sp.csc_matrix]
+
+
 @dataclass
 class FullMultiToneProblem:
     """Duck-typed Newton problem for a finite positive-frequency tone basis."""
@@ -33,6 +40,12 @@ class FullMultiToneProblem:
     input_power_dbm: float | None = None
     dc_branch_flux: np.ndarray | None = None
     preconditioner: str | None = None
+    # Survives ``dataclasses.replace``: the compression sweep rebuilds the
+    # problem once per signal-power point with only ``source_path`` changed,
+    # and everything expensive here (dynamic blocks, the fast preconditioner's
+    # scatter map and symbolic factorization) depends on the circuit and basis
+    # only. Sharing this dict keeps that work at once per sweep.
+    cache: dict[object, object] | None = None
 
     def __post_init__(self) -> None:
         from twpa_solver.multitone.preconditioners import (
@@ -60,18 +73,33 @@ class FullMultiToneProblem:
             self.dc_branch_flux = np.asarray(self.dc_branch_flux, dtype=float).reshape(-1)
             if self.dc_branch_flux.size != self.nb:
                 raise ValueError("dc_branch_flux length does not match branch count")
-        self._linear_blocks = []
-        for omega in self.basis.omegas:
-            selected_loss = self.loss_model
-            if hasattr(selected_loss, "evaluate"):
-                selected_loss = selected_loss.evaluate(
-                    float(omega / (2.0 * np.pi)),
-                    "multitone",
-                    self.input_power_dbm,
+        if self.cache is None:
+            self.cache = {}
+        blocks_key = ("linear_blocks", id(self.loss_model), self.input_power_dbm)
+        cached_blocks = self.cache.get(blocks_key)
+        if cached_blocks is None:
+            self._linear_blocks = []
+            for omega in self.basis.omegas:
+                selected_loss = self.loss_model
+                if hasattr(selected_loss, "evaluate"):
+                    selected_loss = selected_loss.evaluate(
+                        float(omega / (2.0 * np.pi)),
+                        "multitone",
+                        self.input_power_dbm,
+                    )
+                self._linear_blocks.append(
+                    dynamic_block(self.circuit, omega, loss_model=str(selected_loss)).tocsc()
                 )
-            self._linear_blocks.append(
-                dynamic_block(self.circuit, omega, loss_model=str(selected_loss)).tocsc()
-            )
+            self.cache[blocks_key] = self._linear_blocks
+        else:
+            self._linear_blocks = cached_blocks
+        # Attribute aliases so the shared fast-coupled preconditioner, written
+        # against the Schur-reduced problem, works unmodified on the full node
+        # set (where "retained" is every node and the Schur complement is just
+        # the dynamic block).
+        self.Bphi_r = self.Bphi
+        self.BphiT_r = self.BphiT
+        self.part = _LinearBlockView(self._linear_blocks)
 
     def zeros(self) -> np.ndarray:
         return np.zeros((self.H, self.n), dtype=np.complex128)
@@ -87,6 +115,13 @@ class FullMultiToneProblem:
         return list(self.basis.tones)
 
     def assemble_real_coupled_fast(self, tangent: TangentState):
+        """Exact real-coupled preconditioner with assembly + symbolic reuse.
+
+        Builds the scatter map and symbolic factorization once per basis and
+        caches them on the shared ``cache``; each Newton step then only rebuilds
+        ``M.data`` and runs a numeric-only factor. Produces the identical matrix
+        to :meth:`assemble_real_coupled_preconditioner`.
+        """
         if self.preconditioner == "floquet_sector":
             from twpa_solver.multitone.preconditioners import (
                 FloquetSectorPreconditioner,
@@ -95,9 +130,16 @@ class FullMultiToneProblem:
             preconditioner = FloquetSectorPreconditioner(self)
             preconditioner.refactor(tangent)
             return preconditioner
-        return self.assemble_real_coupled_preconditioner(
-            self.spectral_tangent_state(tangent)
+        from twpa_solver.pump.backends.fast_coupled import (
+            FastCoupledPreconditioner,
         )
+
+        fast = self.cache.get("fast_coupled")
+        if fast is None:
+            fast = FastCoupledPreconditioner(self)
+            self.cache["fast_coupled"] = fast
+        fast.refactor(tangent)
+        return fast
 
     def branch_flux_time(self, X: np.ndarray) -> np.ndarray:
         x_t = self.grid.synthesize(X)
