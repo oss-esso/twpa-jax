@@ -10,12 +10,12 @@ import scipy.sparse as sp
 import scipy.sparse.linalg as spla
 
 from twpa_solver.core import CircuitMatrices
+from twpa_solver.core.nonlinear import make_branch_law
 from twpa_solver.core.linear import dynamic_block
 from twpa_solver.multitone.basis import MultiToneBasis, ToneIndex
 from twpa_solver.multitone.grid import TorusGrid
 from twpa_solver.multitone.source import AffineSourcePath
 from twpa_solver.pump.problem import (
-    JosephsonBranchArray,
     SpectralTangentState,
     TangentState,
     pack_complex,
@@ -60,7 +60,7 @@ class FullMultiToneProblem:
         self.K = self.circuit.K.tocsr()
         self.Bphi = self.circuit.Bphi.tocsr()
         self.BphiT = self.Bphi.T.tocsr()
-        self.branch = JosephsonBranchArray(self.circuit.Ic, self.circuit.phi0)
+        self.branch = make_branch_law(self.circuit)
         self.grid = TorusGrid(self.basis)
         self.n = self.C.shape[0]
         self.H = self.basis.n_tones

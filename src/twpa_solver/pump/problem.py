@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import math
 from dataclasses import dataclass
+from typing import Any
 
 import numpy as np
 import scipy.sparse as sp
@@ -107,7 +108,7 @@ class FullPumpProblem:
     G: sp.csr_matrix
     K: sp.csr_matrix
     Bphi: sp.csr_matrix
-    branch: JosephsonBranchArray
+    branch: Any
     grid: HarmonicGrid
     pump_node_index: int
     pump_current_a: float
