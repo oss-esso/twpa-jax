@@ -13,6 +13,27 @@ from twpa_solver.core.constants import PHI0_REDUCED
 from twpa_solver.core.nonlinear import EffectiveSnailBranchLaw
 
 
+def ladder_dispersion(
+    omega_rad_per_s: float | np.ndarray,
+    *,
+    inductance_h: float,
+    snail_capacitance_f: float,
+    ground_capacitance_f: float,
+    cell_length_m: float,
+) -> np.ndarray:
+    """Return discrete-LC-ladder wavenumber in rad/m.
+
+    The exact cell relation is
+    ``sin(k dx / 2)^2 = omega^2 L Cg / (4 (1 - omega^2 L C))``.
+    """
+    omega = np.asarray(omega_rad_per_s, dtype=float)
+    argument = omega * np.sqrt(inductance_h * ground_capacitance_f)
+    argument /= 2.0 * np.sqrt(
+        1.0 - omega**2 * inductance_h * snail_capacitance_f
+    )
+    return 2.0 * np.arcsin(argument) / cell_length_m
+
+
 def build_effective_snail_line(
     *,
     cells: int = 700,
