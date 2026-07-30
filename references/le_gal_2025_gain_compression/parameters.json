@@ -48,15 +48,19 @@
       "example_phase_mismatch_1_per_m": 484.59158076293534,
       "status": "derived, not digitized; numerical lobe scan is recorded in the development note"
     },
-    "alternate_cpr_cubic_coefficients": {
-      "published_placement_Ic_units": 0.004160,
-      "external_flux_on_small_junction_Ic_units": -0.016506
+    "cpr_operating_point_coefficients": {
+      "note": "Both external-flux placements reduce to the same shifted law at Phi0/2; the two are not independent conventions. Coefficients are in Ic units with phi0 divided out.",
+      "half_flux_g1_over_Ic": 0.271333333,
+      "half_flux_g3_over_Ic": 0.004160494,
+      "half_flux_g3_over_g1": 0.015333515,
+      "g3_sign_change_ratio": 0.037037037,
+      "superseded": "The previously recorded -0.016506 was the cubic of the unshifted law at Phi=0 and described no solved circuit."
     }
   },
   "provenance": {
     "published": ["paper metadata", "device parameters", "equation forms"],
     "digitized": [],
-    "inferred": ["Z0 from published L and Cg", "equilibrium and tangent from the SNAIL equation", "CME Taylor/ladder coefficients", "alternate CPR cubic coefficient"],
+    "inferred": ["Z0 from published L and Cg", "equilibrium and tangent from the SNAIL equation", "CME Taylor/ladder coefficients", "CPR operating-point Taylor coefficients"],
     "digitization_status": "not yet populated; no synthetic values are substituted"
   }
 }

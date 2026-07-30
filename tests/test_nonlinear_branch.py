@@ -4,7 +4,11 @@ import numpy as np
 import pytest
 
 from twpa_solver.core.constants import PHI0_REDUCED
-from twpa_solver.core.nonlinear import EffectiveSnailBranchLaw, JosephsonBranchLaw
+from twpa_solver.core.nonlinear import (
+    EffectiveSnailBranchLaw,
+    JosephsonBranchLaw,
+    snail_taylor_coefficients,
+)
 from twpa_solver.builders.le_gal_2025 import build_effective_snail_line
 
 
@@ -42,3 +46,17 @@ def test_shifted_snail_law_is_zero_and_odd_at_equilibrium() -> None:
         circuit.metadata["linear_inductance_h"],
         rtol=1e-12,
     )
+
+
+def test_snail_taylor_coefficients_at_half_flux() -> None:
+    for ratio in (0.0, 0.02, 0.037037037, 0.05, 0.062, 0.1, 0.2):
+        result = snail_taylor_coefficients(ratio, 0.5)
+        expected_g1 = 1.0 / 3.0 - ratio
+        expected_g3 = ratio / 6.0 - 1.0 / 162.0
+        assert result["g1"] == pytest.approx(expected_g1, rel=1e-9)
+        assert result["g3"] == pytest.approx(expected_g3, rel=1e-9)
+        assert result["g3_over_g1"] == pytest.approx(
+            expected_g3 / expected_g1, rel=1e-9
+        )
+    threshold = snail_taylor_coefficients(6.0 / 162.0, 0.5)
+    assert threshold["g3"] == pytest.approx(0.0, abs=1e-9)
