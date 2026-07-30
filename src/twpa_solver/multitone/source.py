@@ -15,12 +15,14 @@ class MultiToneDrive:
 
     tone: ToneIndex
     node_index: int
-    current_a: float
+    current_a: float | complex
 
     def to_coeffs(self, basis: MultiToneBasis, n_nodes: int) -> np.ndarray:
         """Return this drive as a coefficient array using the 0.5 convention."""
         coefficients = np.zeros((basis.n_tones, n_nodes), dtype=np.complex128)
-        coefficients[basis.index_of(self.tone), self.node_index] = 0.5 * self.current_a
+        coefficients[basis.index_of(self.tone), self.node_index] = (
+            0.5 * self.current_a
+        )
         return coefficients
 
 

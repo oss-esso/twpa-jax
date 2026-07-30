@@ -26,6 +26,7 @@ from twpa_solver.multitone.basis import (
 from twpa_solver.multitone.compression import solve_signal_power_point
 from twpa_solver.multitone.compression_curve import (
     build_compression_curve,
+    depletion_only_gain_db,
     depletion_only_model,
     refine_p1db,
 )
@@ -251,7 +252,12 @@ def _build_multitone_basis(
     omega_p: float,
     delta: float,
 ) -> MultiToneBasis:
-    omega_max = omega_p * (max(pump_modes) + 1.0)
+    # Matched sidebands fold Floquet indices into h; the largest retained h
+    # grows with the requested sideband count, even for a fundamental-only
+    # pump.  The previous ``max(pump_modes)+1`` clipped S=10 production bases.
+    omega_max = omega_p * (
+        max(pump_modes) + float(args.multitone_sidebands) + 1.0
+    )
     if args.multitone_basis == "matched":
         basis = build_sideband_matched_basis(
             pump_modes,
@@ -487,6 +493,11 @@ def _solve_compression(
         source_current_a=float(currents[0]),
     )
     pump_off_gain_db = float(20.0 * np.log10(max(abs(pump_off_s21), 1e-300)))
+    signal_row = basis.index_of(basis.signal_tone)
+    output_node = circuit.port_to_index[out_port]
+    pump_off_signal_voltage = (
+        1j * basis.omegas[signal_row] * pump_off_state[signal_row, output_node]
+    )
     pump_only_problem = make_problem(AffineSourcePath.pump_turn_on(pump_source))
     pump_seed_solve = solve_seed(pump_seed)
     pump_only_state, pump_only_report = HarmonicNewtonKrylovSolver(settings).solve_one(
@@ -584,18 +595,62 @@ def _solve_compression(
                 source_current_a=float(current),
             )
             gain_db = float(20.0 * np.log10(max(abs(signal_s21), 1e-300)))
+            signal_voltage = (
+                1j
+                * basis.omegas[signal_row]
+                * state_full[signal_row, output_node]
+            )
+            gain_vs_off_db = float(
+                20.0
+                * np.log10(
+                    max(
+                        abs(
+                            (signal_voltage / float(current))
+                            / (
+                                pump_off_signal_voltage
+                                / float(currents[0])
+                            )
+                        ),
+                        1e-300,
+                    )
+                )
+            )
             pump_depletion_db = float(
                 20.0 * np.log10(max(abs(pump_s21), 1e-300))
                 - 20.0 * np.log10(max(abs(pump_reference_s21), 1e-300))
             )
-            gain_linear = float(10.0 ** (gain_db / 10.0))
+            gain_linear = float(10.0 ** (gain_vs_off_db / 10.0))
             signal_power = float(current**2 * args.z0_ohm / 2.0)
             pump_power = float(pump_current**2 * args.z0_ohm / 2.0)
-            depletion_model = depletion_only_model(
+            depletion_model = depletion_only_gain_db(
                 gain_linear, signal_power, pump_power
             )
-            balance = power_balance(state_full, basis, circuit)
-            reference_gain = gain_db if reference_gain is None else reference_gain
+            balance = power_balance(
+                state_full,
+                basis,
+                circuit,
+                reference_X_full=observable_state(
+                    pump_only_problem, pump_only_state
+                ),
+                z0_ohm=args.z0_ohm,
+            )
+            residual_problem = FullMultiToneProblem(
+                circuit,
+                basis,
+                AffineSourcePath.signal_turn_on(
+                    pump_source, signal_unit * float(current)
+                ),
+            )
+            residual = residual_problem.residual_coeffs(state_full, 1.0)
+            source_norm = np.linalg.norm(
+                residual_problem.source_coeffs(1.0)
+            )
+            hb_residual_rel = float(
+                np.linalg.norm(residual) / max(source_norm, 1e-300)
+            )
+            reference_gain = (
+                gain_vs_off_db if reference_gain is None else reference_gain
+            )
             previous_previous = previous
             previous_previous_current = previous_current
             previous = state
@@ -603,33 +658,62 @@ def _solve_compression(
             state_by_current[float(current)] = state
         else:
             gain_db = float("nan")
+            gain_vs_off_db = float("nan")
             signal_s21 = pump_s21 = idler_s21 = complex(float("nan"), float("nan"))
             pump_depletion_db = float("nan")
             depletion_model = float("nan")
             balance = {
                 "power_balance_rel_err": float("nan"),
                 "manley_rowe_photon_flux": float("nan"),
+                "manley_rowe_photon_scale": float("nan"),
+                "manley_rowe_evaluable": float("nan"),
                 "manley_rowe_rel_err": float("nan"),
+                "external_supplied_power": float("nan"),
+                "external_manley_rowe_photon_flux": float("nan"),
+                "external_manley_rowe_photon_scale": float("nan"),
+                "external_manley_rowe_evaluable": float("nan"),
+                "external_manley_rowe_rel_err": float("nan"),
             }
+            hb_residual_rel = float("nan")
         points.append({
             "signal_current_a": float(current),
             "signal_power_dbm": _current_to_dbm(
                 float(current), args.z0_ohm, attenuation_db
             ),
             "gain_db": gain_db,
-            "gain_vs_off_db": gain_db - pump_off_gain_db,
+            "gain_vs_off_db": gain_vs_off_db,
             "pump_depletion_db": pump_depletion_db,
             "compression_model_depletion_only": depletion_model,
             "power_balance_rel_err": balance["power_balance_rel_err"],
+            "hb_residual_rel": hb_residual_rel,
             "manley_rowe_photon_flux": balance["manley_rowe_photon_flux"],
+            "manley_rowe_photon_scale": balance["manley_rowe_photon_scale"],
+            "manley_rowe_evaluable": balance["manley_rowe_evaluable"],
             "manley_rowe_rel_err": balance["manley_rowe_rel_err"],
+            "external_supplied_power": balance["external_supplied_power"],
+            "external_manley_rowe_photon_flux": balance[
+                "external_manley_rowe_photon_flux"
+            ],
+            "external_manley_rowe_photon_scale": balance[
+                "external_manley_rowe_photon_scale"
+            ],
+            "external_manley_rowe_evaluable": balance[
+                "external_manley_rowe_evaluable"
+            ],
+            "external_manley_rowe_rel_err": balance[
+                "external_manley_rowe_rel_err"
+            ],
             "signal_s21_real": float(np.real(signal_s21)),
             "signal_s21_imag": float(np.imag(signal_s21)),
             "pump_s21_real": float(np.real(pump_s21)),
             "pump_s21_imag": float(np.imag(pump_s21)),
             "idler_s21_real": float(np.real(idler_s21)),
             "idler_s21_imag": float(np.imag(idler_s21)),
-            "compression_db": float(reference_gain - gain_db) if reference_gain is not None and np.isfinite(gain_db) else float("nan"),
+            "compression_db": (
+                float(reference_gain - gain_vs_off_db)
+                if reference_gain is not None and np.isfinite(gain_vs_off_db)
+                else float("nan")
+            ),
             "status": solved.status,
             "recovery_rung": solved.used_recovery,
             "last_converged_signal_current_a": solved.last_converged_signal_current_a,
@@ -647,17 +731,24 @@ def _solve_compression(
                 and points[-1]["compression_db"] >= 1.0
             ):
                 states["p1db"] = state_full
-    small_signal_gain_db = float(points[0]["gain_db"]) if points else float("nan")
+    small_signal_gain_db = (
+        float(points[0]["gain_vs_off_db"]) if points else float("nan")
+    )
     no_gain = not np.isfinite(small_signal_gain_db) or small_signal_gain_db < 3.0
     if no_gain:
         for point in points:
             point["compression_db"] = float("nan")
     curve = build_compression_curve(
         [float(point["signal_power_dbm"]) for point in points],
-        [float(point["gain_db"]) for point in points],
+        [float(point["gain_vs_off_db"]) for point in points],
         small_signal_gain_db,
     )
     p1db_current_a = None if no_gain else _interpolate_p1db_current(points)
+    # Kept even when refinement overwrites p1db_current_a: the refined-versus-
+    # interpolated delta is the number that decides whether already-published
+    # sweeps need re-running, and reading it off two separate runs would fold
+    # run-to-run variation into a comparison that has none.
+    p1db_interpolated_current_a = p1db_current_a
     p1db_method = "interpolated"
     valid_points = [
         point for point in points
@@ -706,16 +797,28 @@ def _solve_compression(
                         make_problem(AffineSourcePath.pump_turn_on(pump_source)),
                         candidate.state,
                     )
-                    trial_s21 = tone_s21(
-                        trial_state, basis, circuit,
-                        signal_tone=basis.signal_tone,
-                        source_port=source_port,
-                        out_port=out_port,
-                        source_current_a=current_trial,
+                    trial_voltage = (
+                        1j
+                        * basis.omegas[signal_row]
+                        * trial_state[signal_row, output_node]
+                    )
+                    trial_gain_vs_off_db = float(
+                        20.0
+                        * np.log10(
+                            max(
+                                abs(
+                                    (trial_voltage / current_trial)
+                                    / (
+                                        pump_off_signal_voltage
+                                        / float(currents[0])
+                                    )
+                                ),
+                                1e-300,
+                            )
+                        )
                     )
                     return float(
-                        reference_gain
-                        - 20.0 * np.log10(max(abs(trial_s21), 1e-300))
+                        reference_gain - trial_gain_vs_off_db
                     )
 
                 p1db_dbm_refined = refine_p1db(
@@ -772,6 +875,7 @@ def _solve_compression(
                 "sigma_min": result.sigma_min,
                 "matrix_size": result.matrix_size,
                 "torus_resolution": list(result.torus_resolution),
+                "reason": result.reason,
             }
         statuses = [item["status"] for item in stability_points.values()]
         stability_status = (
@@ -803,11 +907,18 @@ def _solve_compression(
         "pump_reference_s21_imag": float(np.imag(pump_reference_s21)),
         "p1db": p1db_dbm,
         "p1db_method": "none" if no_gain else p1db_method,
+        "p1db_interpolated_dbm": (
+            _current_to_dbm(
+                p1db_interpolated_current_a, args.z0_ohm, attenuation_db
+            )
+            if p1db_interpolated_current_a is not None
+            else None
+        ),
         "first_1db_crossing_dbm": curve.first_1db_crossing_dbm,
         "number_of_crossings": curve.number_of_crossings,
         "nonmonotonic_compression": curve.nonmonotonic_compression,
         "compression_model_depletion_only_description": (
-            "linear-gain trend baseline; not an acceptance oracle"
+            "dB gain from the linear-gain depletion trend; not an acceptance oracle"
         ),
         "max_power_balance_rel_err": max(
             (float(point["power_balance_rel_err"]) for point in points
@@ -817,6 +928,14 @@ def _solve_compression(
         "max_manley_rowe_rel_err": max(
             (float(point["manley_rowe_rel_err"]) for point in points
              if np.isfinite(float(point["manley_rowe_rel_err"]))),
+            default=None,
+        ),
+        "max_external_manley_rowe_rel_err": max(
+            (
+                float(point["external_manley_rowe_rel_err"])
+                for point in points
+                if np.isfinite(float(point["external_manley_rowe_rel_err"]))
+            ),
             default=None,
         ),
         "p1db_signal_current_a": p1db_current_a,
@@ -846,6 +965,11 @@ def _solve_compression(
                 continue
             for row in spatial_profiles(states[label], basis, circuit):
                 spatial_rows.append({"operating_point": label, **row})
+    if args.save_states == "all":
+        for index, current in enumerate(currents):
+            state = state_by_current.get(float(current))
+            if state is not None:
+                states[f"signal_{index:04d}"] = state
     return points, states, summary, spatial_rows
 
 

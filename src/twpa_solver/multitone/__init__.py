@@ -49,6 +49,7 @@ from twpa_solver.multitone.compression_curve import (
     CompressionCurve,
     CompressionPoint,
     build_compression_curve,
+    depletion_only_gain_db,
     depletion_only_model,
     refine_p1db,
 )
@@ -92,6 +93,7 @@ __all__ = [
     "CompressionCurve",
     "CompressionPoint",
     "build_compression_curve",
+    "depletion_only_gain_db",
     "depletion_only_model",
     "refine_p1db",
     "MultitoneStabilityResult",

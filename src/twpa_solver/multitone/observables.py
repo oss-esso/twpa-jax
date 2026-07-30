@@ -9,6 +9,7 @@ from typing import Any
 import numpy as np
 
 from twpa_solver.core import CircuitMatrices
+from twpa_solver.core.nonlinear import make_branch_law
 from twpa_solver.core.linear import (
     dynamic_block,
     port_s_from_unit_current_response,
@@ -29,9 +30,7 @@ def _port_current_coefficients(
     """Return physical port currents from the multitone KCL residual."""
     waveform = basis.synthesize(X_full)
     phase = (circuit.Bphi.T @ waveform.T).T
-    nonlinear_time = circuit.Bphi @ (
-        circuit.Ic[None, :] * np.sin(phase / circuit.phi0)
-    ).T
+    nonlinear_time = circuit.Bphi @ make_branch_law(circuit).current(phase).T
     nonlinear = basis.project(nonlinear_time.T)
     currents = np.empty_like(X_full)
     for row, omega in enumerate(basis.omegas):
@@ -119,9 +118,21 @@ def junction_diagnostics(
 
 
 def power_balance(
-    X_full: np.ndarray, basis: MultiToneBasis, circuit: CircuitMatrices
+    X_full: np.ndarray,
+    basis: MultiToneBasis,
+    circuit: CircuitMatrices,
+    *,
+    reference_X_full: np.ndarray | None = None,
+    z0_ohm: float = 50.0,
 ) -> dict[str, float]:
-    """Compute real-power and photon-flux balance diagnostics."""
+    """Compute real-power and incremental photon-flux diagnostics.
+
+    ``reference_X_full`` is the pump-only operating point.  When supplied,
+    the external Manley--Rowe quantity is formed from the change in port
+    power caused by turning on the signal.  This removes pump-harmonic power
+    conversion already present without a signal, which is not part of the
+    signal/idler saturation invariant.
+    """
     waveform = basis.synthesize(X_full)
     derivative = np.zeros_like(waveform)
     for row, tone in enumerate(basis.tones):
@@ -134,19 +145,55 @@ def power_balance(
         coefficient[row] = -(basis.omegas[row] ** 2) * X_full[row]
         acceleration += basis.synthesize(coefficient)
     phase = (circuit.Bphi.T @ waveform.T).T
-    nonlinear = circuit.Bphi @ (
-        circuit.Ic[None, :] * np.sin(phase / circuit.phi0)
-    ).T
+    nonlinear = circuit.Bphi @ make_branch_law(circuit).current(phase).T
     internal = (
         (circuit.C @ acceleration.T).T
         + (circuit.G @ derivative.T).T
         + (circuit.K @ waveform.T).T
         + nonlinear.T
     )
-    supplied_power = float(np.mean(np.sum(derivative * internal, axis=1)))
+    internal_supplied_power = float(np.mean(np.sum(derivative * internal, axis=1)))
     dissipation = float(
         np.mean(np.sum(derivative * (circuit.G @ derivative.T).T, axis=1))
     )
+    waves = extract_port_waves(
+        X_full,
+        basis,
+        circuit,
+        tuple(circuit.port_to_index),
+        z0_ohm=z0_ohm,
+    )
+    reference_waves = (
+        extract_port_waves(
+            reference_X_full,
+            basis,
+            circuit,
+            tuple(circuit.port_to_index),
+            z0_ohm=z0_ohm,
+        )
+        if reference_X_full is not None
+        else None
+    )
+    port_power_by_tone: dict[ToneIndex, float] = {}
+    for row, tone in enumerate(basis.tones):
+        power = float(
+            sum(
+                waves["a_power"][(tone, port)]
+                - waves["b_power"][(tone, port)]
+                for port in circuit.port_to_index
+            )
+        )
+        if reference_waves is not None:
+            power -= float(
+                sum(
+                    reference_waves["a_power"][(tone, port)]
+                    - reference_waves["b_power"][(tone, port)]
+                    for port in circuit.port_to_index
+                )
+            )
+        port_power_by_tone[tone] = power
+    external_supplied_power = float(sum(port_power_by_tone.values()))
+    supplied_power = internal_supplied_power
     real_power_scale = max(abs(supplied_power), abs(dissipation))
     relative = (
         0.0
@@ -162,12 +209,57 @@ def power_balance(
         photon_terms.append(float(np.sum(power) / omega))
     photon_flux = float(np.sum(photon_terms))
     photon_scale = float(np.sum(np.abs(photon_terms)))
+    # Below this scale the quotient is dominated by cancellation/roundoff;
+    # exposing it as a false 0.5--style physical error is misleading.
+    manley_evaluable = photon_scale > 1e-28
+    manley_relative = (
+        abs(photon_flux) / photon_scale if manley_evaluable else 0.0
+    )
+    # The finite-signal Manley--Rowe invariant is the three-wave conversion
+    # channel, not the raw photon sum over every retained pump harmonic.  A
+    # pump-only solution can contain harmonic generation (for example the
+    # h=1 -> h=3 conversion), which is conservative in energy but is not part
+    # of signal/idler saturation and gives a spurious ~1/2 photon residual.
+    conversion_tones = (basis.pump_tone, basis.signal_tone, basis.idler_tone)
+    external_photon_terms = [
+        float(port_power_by_tone[tone] / tone.omega(basis.omega_p, basis.delta))
+        for tone in conversion_tones
+    ]
+    external_photon_flux = float(np.sum(external_photon_terms))
+    external_photon_scale = float(np.sum(np.abs(external_photon_terms)))
+    external_manley_evaluable = external_photon_scale > 1e-30
     return {
         "supplied_power": supplied_power,
+        "internal_supplied_power": internal_supplied_power,
+        "external_supplied_power": external_supplied_power,
         "dissipated_power": dissipation,
         "power_balance_rel_err": relative,
         "manley_rowe_photon_flux": photon_flux,
-        "manley_rowe_rel_err": abs(photon_flux) / max(photon_scale, 1e-30),
+        "manley_rowe_photon_scale": photon_scale,
+        "manley_rowe_evaluable": float(manley_evaluable),
+        "manley_rowe_rel_err": manley_relative,
+        "external_manley_rowe_photon_flux": external_photon_flux,
+        "external_manley_rowe_photon_scale": external_photon_scale,
+        "external_manley_rowe_evaluable": float(external_manley_evaluable),
+        "external_manley_rowe_rel_err": (
+            abs(external_photon_flux) / external_photon_scale
+            if external_manley_evaluable
+            else 0.0
+        ),
+        # Explicit names for the two scopes.  The legacy keys above remain
+        # readable by existing experiment consumers.
+        "conversion_manley_rowe_photon_flux": external_photon_flux,
+        "conversion_manley_rowe_photon_scale": external_photon_scale,
+        "conversion_manley_rowe_evaluable": float(external_manley_evaluable),
+        "conversion_manley_rowe_rel_err": (
+            abs(external_photon_flux) / external_photon_scale
+            if external_manley_evaluable
+            else 0.0
+        ),
+        "all_tone_manley_rowe_photon_flux": photon_flux,
+        "all_tone_manley_rowe_photon_scale": photon_scale,
+        "all_tone_manley_rowe_evaluable": float(manley_evaluable),
+        "all_tone_manley_rowe_rel_err": manley_relative,
     }
 
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 import math
 
 import numpy as np
+import pytest
 import scipy.sparse as sp
 
 from twpa_solver.builders.jc_doc import build_jpa
@@ -310,6 +311,49 @@ def test_pump_only_limit_matches_full_pump_solution() -> None:
         )
     off_q = [i for i, tone in enumerate(basis.tones) if tone.q != 0]
     assert float(np.max(np.abs(state[off_q]))) < 1e-12
+
+
+def test_signal_phase_covariance_rotates_signal_and_conjugates_idler() -> None:
+    circuit, metadata = _jpa()
+    pump_problem, pump_state, _solution, _khat = _pump(circuit, metadata)
+    basis = _basis(4.8)
+    pump_source = _pump_source(pump_problem, basis)
+    pump_initial = promote_pump_solution(
+        pump_state,
+        PumpBasis(PUMP_MODES, "dense_real", OMEGA_P),
+        basis,
+    )
+    solver = HarmonicNewtonKrylovSolver(_settings())
+    current = 1.0e-10
+    phases = np.asarray([0.0, 0.7, 1.4])
+    signal_values = []
+    idler_values = []
+    previous = pump_initial
+    for phase in phases:
+        signal = MultiToneDrive(
+            basis.signal_tone,
+            circuit.port_to_index[1],
+            current * np.exp(1j * phase),
+        ).to_coeffs(basis, circuit.node_count)
+        problem = FullMultiToneProblem(
+            circuit,
+            basis,
+            AffineSourcePath.signal_turn_on(pump_source, signal),
+        )
+        state, report = solver.solve_one(problem, previous, 1.0)
+        assert report.converged
+        previous = state
+        node = circuit.port_to_index[1]
+        signal_values.append(state[basis.index_of(basis.signal_tone), node])
+        idler_values.append(state[basis.index_of(basis.idler_tone), node])
+    signal_values = np.asarray(signal_values)
+    idler_values = np.asarray(idler_values)
+    np.testing.assert_allclose(np.abs(signal_values), np.abs(signal_values[0]), rtol=1e-6)
+    np.testing.assert_allclose(np.abs(idler_values), np.abs(idler_values[0]), rtol=1e-5)
+    signal_slope = np.polyfit(phases, np.unwrap(np.angle(signal_values)), 1)[0]
+    idler_slope = np.polyfit(phases, np.unwrap(np.angle(idler_values)), 1)[0]
+    assert signal_slope == pytest.approx(1.0, abs=1e-3)
+    assert idler_slope == pytest.approx(-1.0, abs=1e-3)
 
 
 def test_pump_off_matches_khat_off_zero_reference() -> None:

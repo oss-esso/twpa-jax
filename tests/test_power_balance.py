@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import numpy as np
 import scipy.sparse as sp
+import pytest
 
 from twpa_solver.core import CircuitMatrices
-from twpa_solver.multitone.basis import build_three_tone_basis
+from twpa_solver.multitone.basis import ToneIndex, build_three_tone_basis
+from twpa_solver.multitone import observables
 from twpa_solver.multitone.observables import power_balance
 from twpa_solver.multitone.problem import FullMultiToneProblem
 from twpa_solver.multitone.source import AffineSourcePath, MultiToneDrive
@@ -14,7 +16,7 @@ from twpa_solver.pump import HarmonicNewtonKrylovSolver, NewtonKrylovSettings
 def _circuit(loss: float) -> CircuitMatrices:
     return CircuitMatrices(
         C=sp.eye(2, format="csr") * 1e-15,
-        G=sp.eye(2, format="csr") * loss,
+        G=sp.eye(2, format="csr") * (1.0 / 50.0 + loss),
         K=sp.csr_matrix([[2e9, -1e9], [-1e9, 2e9]]),
         Bphi=sp.csr_matrix([[1.0], [-1.0]]),
         Ic=np.array([1e-6]),
@@ -26,7 +28,10 @@ def _state(loss: float):
     circuit = _circuit(loss)
     basis = build_three_tone_basis(2.0e10, 1.0e9)
     source = MultiToneDrive(
-        basis.pump_tone, 0, 1e-9
+        basis.pump_tone, 0, 1e-8
+    ).to_coeffs(basis, circuit.C.shape[0])
+    source += MultiToneDrive(
+        basis.signal_tone, 0, 1e-10
     ).to_coeffs(basis, circuit.C.shape[0])
     problem = FullMultiToneProblem(
         circuit, basis, AffineSourcePath.pump_turn_on(source)
@@ -56,9 +61,11 @@ def _state(loss: float):
 def test_power_balance_lossless_nonzero_state_and_manley_rowe() -> None:
     state, basis, circuit = _state(0.0)
     result = power_balance(state, basis, circuit)
-    assert abs(result["supplied_power"]) < 1e-30
-    assert result["dissipated_power"] == 0.0
-    assert result["manley_rowe_rel_err"] < 1e-12
+    assert result["supplied_power"] == pytest.approx(
+        result["dissipated_power"], abs=1e-30
+    )
+    assert result["power_balance_rel_err"] < 1e-12
+    assert result["external_manley_rowe_evaluable"] == 0.0
 
 
 def test_power_balance_lossy_closes_with_dissipation() -> None:
@@ -66,3 +73,33 @@ def test_power_balance_lossy_closes_with_dissipation() -> None:
     result = power_balance(state, basis, circuit)
     assert result["dissipated_power"] > 0.0
     assert result["power_balance_rel_err"] < 1e-12
+
+
+def test_manley_rowe_ignores_pump_harmonic_conversion(monkeypatch) -> None:
+    """Harmonic-only conversion must not make the signal gate evaluable."""
+    circuit = _circuit(0.0)
+    basis = build_three_tone_basis(2.0e10, 1.0e9)
+    basis = type(basis)(
+        tones=[*basis.tones, (3, 0)],
+        omega_p=basis.omega_p,
+        delta=basis.delta,
+        n_p=14,
+        n_delta=basis.n_delta,
+    )
+    zero = np.zeros((basis.n_tones, 2), dtype=np.complex128)
+    powers = {
+        (tone, port): (1e-20 if tone == ToneIndex(3, 0) else 0.0)
+        for tone in basis.tones
+        for port in circuit.port_to_index
+    }
+
+    def fake_waves(*args, **kwargs):
+        return {
+            "a_power": powers,
+            "b_power": {key: 0.0 for key in powers},
+        }
+
+    monkeypatch.setattr(observables, "extract_port_waves", fake_waves)
+    result = power_balance(zero, basis, circuit)
+    assert result["external_manley_rowe_photon_scale"] == 0.0
+    assert result["external_manley_rowe_evaluable"] == 0.0

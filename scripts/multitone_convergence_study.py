@@ -56,9 +56,15 @@ class ConvergenceResult:
     even_pump_fraction: float
     runtime_s: float
     p1db_method: str
+    status: str = "OK"
+    message: str = ""
 
 
-def _settings() -> NewtonKrylovSettings:
+class SettingBudgetExceeded(RuntimeError):
+    """One setting ran past its wall budget; the rest of the matrix continues."""
+
+
+def _settings(preconditioner: str = "real_coupled") -> NewtonKrylovSettings:
     return NewtonKrylovSettings(
         newton_tol=1e-10,
         max_newton=30,
@@ -67,7 +73,7 @@ def _settings() -> NewtonKrylovSettings:
         gmres_restart=40,
         gmres_maxiter=60,
         min_alpha=1.0 / 1024.0,
-        preconditioner="real_coupled",
+        preconditioner=preconditioner,
         compute_time_residual=False,
         verbose=False,
         continuation_predictor="none",
@@ -158,12 +164,26 @@ def solve_jpa_p1db(
     *,
     device: str = "jpa",
     pump_scale: float | None = None,
-    n_signal_power: int = 41,
+    n_signal_power: int = 15,
     signal_current_min_a: float = 1e-12,
     signal_current_max_a: float = 2e-7,
+    budget_s: float = 0.0,
 ) -> ConvergenceResult:
-    """Solve one real nonlinear P1dB point for a convergence setting."""
+    """Solve one real nonlinear P1dB point for a convergence setting.
+
+    ``budget_s > 0`` bounds the wall time spent on this setting. The coarse
+    sweep and the refinement bracket both check it between solves, so a
+    setting that runs long is reported as ``TIMEOUT`` instead of stalling the
+    whole matrix.
+    """
     started = time.perf_counter()
+
+    def check_budget(stage: str) -> None:
+        if budget_s > 0.0 and time.perf_counter() - started > budget_s:
+            raise SettingBudgetExceeded(
+                f"exceeded {budget_s:.0f} s budget during {stage}"
+            )
+
     circuit, fixture_pump_current, metadata = _circuit(device)
     if pump_scale is None:
         pump_scale = {"jpa": 2.2, "jtwpa": 2.0, "fqjtwpa": 1.0}[device]
@@ -184,12 +204,19 @@ def solve_jpa_p1db(
         pump_node_index=circuit.port_to_index[1],
         pump_current_a=pump_current,
     )
-    solver = HarmonicNewtonKrylovSolver(_settings())
-    pump_state, pump_reports = solver.solve_continuation(
+    # The pump solve keeps the plain real_coupled preconditioner so its
+    # iterate path matches production exactly. The multitone solves take
+    # real_coupled_fast, which is the same matrix with the scatter map and
+    # symbolic factorization cached -- the study was previously refactoring
+    # from scratch every Newton step, which is what made Q=3 unaffordable.
+    pump_solver = HarmonicNewtonKrylovSolver(_settings("real_coupled"))
+    solver = HarmonicNewtonKrylovSolver(_settings("real_coupled_fast"))
+    pump_state, pump_reports = pump_solver.solve_continuation(
         pump_problem, continuation_steps=12
     )
     if not pump_reports[-1].converged:
         raise RuntimeError("pump solve did not converge")
+    check_budget("pump solve")
 
     basis = _basis(setting, pump_modes, omega_p, delta)
     pump_basis = PumpBasis(pump_modes, setting.pump_policy, omega_p)
@@ -230,6 +257,7 @@ def solve_jpa_p1db(
     previous_current = 0.0
     previous_previous_current = 0.0
     for current in currents:
+        check_budget("coarse signal sweep")
         problem = FullMultiToneProblem(
             circuit,
             basis,
@@ -276,6 +304,7 @@ def solve_jpa_p1db(
         raise RuntimeError("signal sweep did not produce a P1dB bracket")
 
     def evaluate(power_dbm: float) -> float:
+        check_budget("P1dB refinement")
         current = math.sqrt(2.0 * 1e-3 * 10.0 ** (power_dbm / 10.0) / Z0_OHM)
         nearest = min(
             state_by_current,
@@ -378,27 +407,111 @@ def _row(result: ConvergenceResult) -> dict[str, object]:
         "even_pump_fraction": result.even_pump_fraction,
         "runtime_s": result.runtime_s,
         "p1db_method": result.p1db_method,
+        "status": result.status,
+        "message": result.message,
     }
+
+
+FIELDNAMES = (
+    "basis_kind", "signal_order_max", "pump_policy", "pump_order",
+    "torus_scale", "n_tones", "n_p", "n_delta", "p1db_dbm",
+    "small_signal_gain_db", "even_pump_fraction", "runtime_s",
+    "p1db_method", "status", "message",
+)
+
+
+def _failed(
+    setting: ConvergenceSetting, status: str, message: str, runtime_s: float
+) -> ConvergenceResult:
+    return ConvergenceResult(
+        setting=setting,
+        p1db_dbm=float("nan"),
+        small_signal_gain_db=float("nan"),
+        n_tones=0,
+        n_p=0,
+        n_delta=0,
+        even_pump_fraction=float("nan"),
+        runtime_s=runtime_s,
+        p1db_method="none",
+        status=status,
+        message=message,
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--n-signal-power", type=int, default=41)
+    parser.add_argument(
+        "--n-signal-power",
+        type=int,
+        default=15,
+        help=(
+            "Coarse sweep points. The bracket only has to contain the "
+            "crossing -- the reported P1dB comes from nonlinear refinement "
+            "inside it -- so a dense coarse grid buys nothing but wall time."
+        ),
+    )
     parser.add_argument("--device", choices=("jtwpa", "fqjtwpa"), required=True)
+    parser.add_argument(
+        "--per-setting-budget-s",
+        type=float,
+        default=0.0,
+        help=(
+            "Wall budget per setting; 0 disables. A setting over budget is "
+            "written as TIMEOUT and the matrix continues, so one slow corner "
+            "cannot cost the whole study."
+        ),
+    )
     args = parser.parse_args(argv)
-    results = [
-        solve_jpa_p1db(
-            setting, device=args.device, n_signal_power=args.n_signal_power
-        )
-        for setting in convergence_settings()
-    ]
-    rows = [_row(result) for result in results]
     args.output.parent.mkdir(parents=True, exist_ok=True)
+
+    # Written incrementally: a setting that overruns must not cost the rows
+    # already paid for. The previous version buffered every result and wrote
+    # once at the end, so an interrupted matrix produced no CSV at all.
+    results: list[ConvergenceResult] = []
     with args.output.open("w", newline="", encoding="utf-8") as handle:
-        writer = csv.DictWriter(handle, fieldnames=list(rows[0]))
+        writer = csv.DictWriter(handle, fieldnames=list(FIELDNAMES))
         writer.writeheader()
-        writer.writerows(rows)
+        handle.flush()
+        for setting in convergence_settings():
+            started = time.perf_counter()
+            try:
+                result = solve_jpa_p1db(
+                    setting,
+                    device=args.device,
+                    n_signal_power=args.n_signal_power,
+                    budget_s=args.per_setting_budget_s,
+                )
+            except SettingBudgetExceeded as exc:
+                result = _failed(
+                    setting, "TIMEOUT", str(exc), time.perf_counter() - started
+                )
+            except RuntimeError as exc:
+                result = _failed(
+                    setting, "FAILED", str(exc), time.perf_counter() - started
+                )
+            except MemoryError as exc:
+                # Not a RuntimeError, so it would otherwise escape and kill the
+                # matrix. The large-torus corners of this study genuinely do not
+                # fit on a 7 GB machine; that is a result about the setting, not
+                # a reason to lose the settings already solved.
+                result = _failed(
+                    setting, "OOM", str(exc) or "out of memory",
+                    time.perf_counter() - started,
+                )
+            results.append(result)
+            writer.writerow(_row(result))
+            handle.flush()
+            print(
+                f"{setting} -> {result.status} "
+                f"p1db={result.p1db_dbm:.6f} dBm "
+                f"runtime={result.runtime_s:.1f} s",
+                flush=True,
+            )
+
+    results = [result for result in results if result.status == "OK"]
+    if not results:
+        raise RuntimeError("no convergence setting completed; see the CSV")
 
     grouped = {
         "signal_order_max": [
@@ -426,16 +539,34 @@ def main(argv: list[str] | None = None) -> int:
             and result.setting.pump_order == 3
         ],
     }
+    # Every knob's number is printed before anything raises. A study that
+    # reports only the first failing knob makes the run worth repeating; one
+    # that reports all of them makes it worth reading.
+    failures: list[str] = []
     for knob, values in grouped.items():
-        ordered = sorted(
-            values,
-            key=lambda result: getattr(result.setting, knob),
-        )
-        delta = abs(ordered[-1].p1db_dbm - ordered[-2].p1db_dbm)
-        if delta >= 0.2:
-            raise RuntimeError(
-                f"{knob} P1dB did not converge: delta={delta:.6f} dB"
+        ordered = sorted(values, key=lambda result: getattr(result.setting, knob))
+        if len(ordered) < 2:
+            print(
+                f"acceptance {knob}: SKIPPED, only {len(ordered)} completed "
+                "setting(s) -- gate not evaluated",
+                flush=True,
             )
+            failures.append(f"{knob}: incomplete ({len(ordered)} settings)")
+            continue
+        delta = abs(ordered[-1].p1db_dbm - ordered[-2].p1db_dbm)
+        verdict = "PASS" if delta < 0.2 else "FAIL"
+        print(
+            f"acceptance {knob}: |dP1dB|={delta:.6f} dB between "
+            f"{getattr(ordered[-2].setting, knob)} and "
+            f"{getattr(ordered[-1].setting, knob)} -> {verdict}",
+            flush=True,
+        )
+        if delta >= 0.2:
+            failures.append(f"{knob}: delta={delta:.6f} dB")
+    if failures:
+        raise RuntimeError(
+            "P1dB basis convergence not accepted: " + "; ".join(failures)
+        )
     return 0
 
 

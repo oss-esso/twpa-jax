@@ -21,6 +21,7 @@ from twpa_solver.multitone.source import AffineSourcePath, MultiToneDrive
 from twpa_solver.pump import HarmonicNewtonKrylovSolver
 from twpa_solver.multitone.compression_curve import (
     build_compression_curve,
+    depletion_only_gain_db,
     depletion_only_model,
     refine_p1db,
 )
@@ -46,6 +47,14 @@ def test_refine_p1db_and_depletion_model() -> None:
     crossing = refine_p1db(lambda power: power + 40.0, (-40.0, -30.0))
     assert crossing == pytest.approx(-39.0, abs=0.01)
     assert depletion_only_model(10.0, 1.0, 100.0) == pytest.approx(10.0 / 1.2)
+
+
+def test_depletion_only_gain_is_converted_to_db() -> None:
+    model = depletion_only_model(10.0, 1.0, 100.0)
+    expected = 10.0 * math.log10(model)
+    assert depletion_only_gain_db(10.0, 1.0, 100.0) == pytest.approx(
+        expected, abs=1e-12
+    )
 
 
 def test_spatial_depletion_null_matches_small_signal_profile() -> None:

@@ -32,6 +32,14 @@ def depletion_only_model(gain_linear: float, signal_power: float, pump_power: fl
     return gain_linear / (1.0 + 2.0 * gain_linear * signal_power / pump_power)
 
 
+def depletion_only_gain_db(
+    gain_linear: float, signal_power: float, pump_power: float
+) -> float:
+    """Return the depletion model's power gain in dB."""
+    model_gain = depletion_only_model(gain_linear, signal_power, pump_power)
+    return float(10.0 * np.log10(model_gain))
+
+
 def refine_p1db(
     evaluator: Callable[[float], float],
     bracket_dbm: tuple[float, float],
