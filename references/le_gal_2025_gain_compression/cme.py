@@ -80,11 +80,11 @@ def published_cme_parameters(
     # Projection of a real cubic waveform onto its positive-frequency
     # envelope contributes the standard 1/8 Fourier factor.
     gamma = (cubic_current / slope) * k_p / 8.0
-    # ``_rhs`` multiplies coupling by two envelope amplitudes, so this is the
-    # physical coefficient in 1/(m Wb^2), not the already pump-scaled gain.
+    # The four-wave-mixing RHS multiplies this by two pump envelopes, so this
+    # is the physical coefficient in 1/(m Wb^2), not a pump-scaled gain.
     coupling = abs(gamma)
-    # SPM/XPM coefficients follow the same Taylor phase-shift coefficient;
-    # the factors are the Appendix-C three-wave degeneracy factors.
+    # SPM/XPM coefficients are stored before the explicit degeneracy factors
+    # in the four-wave RHS.
     return CMEParameters(
         length=cells * cell_length_m,
         coupling=float(coupling),
@@ -92,9 +92,9 @@ def published_cme_parameters(
         self_phase_p=float(gamma),
         self_phase_s=float(gamma),
         self_phase_i=float(gamma),
-        cross_phase_ps=float(2.0 * gamma),
-        cross_phase_pi=float(2.0 * gamma),
-        cross_phase_si=float(2.0 * gamma),
+        cross_phase_ps=float(gamma),
+        cross_phase_pi=float(gamma),
+        cross_phase_si=float(gamma),
         omega_p=omega_p,
         omega_s=omega_s,
         omega_i=omega_i,
@@ -109,14 +109,14 @@ def _rhs(z: float, y: np.ndarray, p: CMEParameters) -> np.ndarray:
     derivative = np.array(
         [
             -0.5 * p.loss_p * ap
-            + 1j * (p.self_phase_p * abs(ap) ** 2 + p.cross_phase_ps * abs(ass) ** 2 + p.cross_phase_pi * abs(ai) ** 2) * ap
-            + 2.0 * coupling * ass * ai * np.conj(phase),
+            + 1j * (p.self_phase_p * abs(ap) ** 2 + 2.0 * p.cross_phase_ps * abs(ass) ** 2 + 2.0 * p.cross_phase_pi * abs(ai) ** 2) * ap
+            + 2.0 * coupling * np.conj(ap) * ass * ai * phase,
             -0.5 * p.loss_s * ass
-            + 1j * (p.self_phase_s * abs(ass) ** 2 + p.cross_phase_ps * abs(ap) ** 2 + p.cross_phase_si * abs(ai) ** 2) * ass
-            + coupling * ap * np.conj(ai) * phase,
+            + 1j * (p.self_phase_s * abs(ass) ** 2 + 2.0 * p.cross_phase_ps * abs(ap) ** 2 + 2.0 * p.cross_phase_si * abs(ai) ** 2) * ass
+            + coupling * ap**2 * np.conj(ai) * np.conj(phase),
             -0.5 * p.loss_i * ai
-            + 1j * (p.self_phase_i * abs(ai) ** 2 + p.cross_phase_pi * abs(ap) ** 2 + p.cross_phase_si * abs(ass) ** 2) * ai
-            + coupling * ap * np.conj(ass) * phase,
+            + 1j * (p.self_phase_i * abs(ai) ** 2 + 2.0 * p.cross_phase_pi * abs(ap) ** 2 + 2.0 * p.cross_phase_si * abs(ass) ** 2) * ai
+            + coupling * ap**2 * np.conj(ass) * np.conj(phase),
         ],
         dtype=np.complex128,
     )
@@ -136,10 +136,20 @@ def integrate_cme(
     if points < 2:
         raise ValueError("points must be at least 2")
     initial_array = np.asarray(initial, dtype=np.complex128)
-    y0 = np.concatenate((initial_array.real, initial_array.imag))
+    scale = max(float(np.max(np.abs(initial_array))), 1e-300)
+    scaled_initial = initial_array / scale
+    scaled_parameters = CMEParameters(
+        **{
+            name: value * scale**2
+            if name.startswith(("coupling", "self_phase", "cross_phase"))
+            else value
+            for name, value in parameters.__dict__.items()
+        }
+    )
+    y0 = np.concatenate((scaled_initial.real, scaled_initial.imag))
     z = np.linspace(0.0, parameters.length, points)
     result = solve_ivp(
-        lambda coordinate, state: _rhs(coordinate, state, parameters),
+        lambda coordinate, state: _rhs(coordinate, state, scaled_parameters),
         (0.0, parameters.length),
         y0,
         t_eval=z,
@@ -150,7 +160,7 @@ def integrate_cme(
     )
     if not result.success:
         raise RuntimeError(result.message)
-    return z, result.y[:3] + 1j * result.y[3:]
+    return z, scale * (result.y[:3] + 1j * result.y[3:])
 
 
 def envelopes_from_powers(

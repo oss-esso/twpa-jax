@@ -56,3 +56,15 @@ def test_published_cme_coefficients_are_derived_and_nonzero() -> None:
     assert parameters.phase_mismatch != 0.0
     initial = envelopes_from_powers(1.0e-11, 1.0e-14, parameters)
     assert initial[0] > initial[1] > 0.0
+
+
+def test_published_four_wave_cme_conserves_photon_flux() -> None:
+    parameters = published_cme_parameters(6.4e9)
+    initial = envelopes_from_powers(
+        10.0 ** ((-78.4 - 30.0) / 10.0),
+        10.0 ** ((-115.0 - 30.0) / 10.0),
+        parameters,
+    )
+    _, envelopes = integrate_cme(initial, parameters, points=401)
+    flux = photon_flux(envelopes)
+    assert np.max(np.abs(flux - flux[0])) / flux[0] < 1e-7
