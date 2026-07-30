@@ -43,9 +43,9 @@
       "fourier_projection_factor": 0.125,
       "z0_ohm": 62.37649990575112,
       "example_signal_frequency_GHz": 6.0,
-      "example_gamma_1_per_m_Wb2": 1.4568982059450348e33,
-      "example_fwm_coupling_1_per_m_Wb2": 1.4568982059450348e33,
-      "example_phase_mismatch_1_per_m": 484.59158076293534,
+      "example_gamma_1_per_m_Wb2": 2.9732616447857853e32,
+      "example_fwm_coupling_1_per_m_Wb2": 2.9732616447857853e32,
+      "example_phase_mismatch_1_per_m": 60.4,
       "status": "derived, not digitized; numerical lobe scan is recorded in the development note"
     },
     "cpr_operating_point_coefficients": {

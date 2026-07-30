@@ -68,3 +68,11 @@ def test_published_four_wave_cme_conserves_photon_flux() -> None:
     _, envelopes = integrate_cme(initial, parameters, points=401)
     flux = photon_flux(envelopes)
     assert np.max(np.abs(flux - flux[0])) / flux[0] < 1e-7
+
+
+def test_cme_pump_flux_matches_hb_output_amplitude() -> None:
+    parameters = published_cme_parameters(8.0e9)
+    pump_power_w = 10.0 ** ((-78.4 - 30.0) / 10.0)
+    assumed = envelopes_from_powers(pump_power_w, 0.0, parameters)[0]
+    hb_output_node_flux = 4.5057e-16
+    assert abs(abs(assumed) / hb_output_node_flux - 1.0) < 0.01

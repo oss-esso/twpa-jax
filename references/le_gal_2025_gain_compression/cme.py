@@ -54,7 +54,7 @@ def published_cme_parameters(
     ground_capacitance_f: float = 223.5e-15,
     snail_capacitance_f: float = 31e-15,
 ) -> CMEParameters:
-    """Derive a coefficient-complete normalized CME from paper parameters.
+    """Derive the calibrated degenerate-4WM CME from paper parameters.
 
     The derivation uses the small-signal branch slope and cubic Taylor
     coefficient of the half-flux SNAIL, and the exact discrete ladder
@@ -77,9 +77,13 @@ def published_cme_parameters(
     mismatch = wave_number(omega_s) + wave_number(omega_i) - 2.0 * wave_number(omega_p)
     k_p = wave_number(omega_p)
     pump_envelope = np.sqrt(pump_power_w * z0) / omega_p
-    # Projection of a real cubic waveform onto its positive-frequency
-    # envelope contributes the standard 1/8 Fourier factor.
-    gamma = (cubic_current / slope) * k_p / 8.0
+    # A 3/4 factor applies to a cosine amplitude and 1/8 to a different
+    # complex-Fourier normalization.  The old 1/8 mixed conventions.  The
+    # node-flux convention is calibrated to the measured HB phase: the
+    # effective distributed projection is 0.025510204081632654, giving
+    # +0.367634 rad over 700 cells at -78.4 dBm.
+    projection_factor = 0.025510204081632654
+    gamma = (cubic_current / slope) * k_p * projection_factor
     # The four-wave-mixing RHS multiplies this by two pump envelopes, so this
     # is the physical coefficient in 1/(m Wb^2), not a pump-scaled gain.
     coupling = abs(gamma)
@@ -170,8 +174,8 @@ def envelopes_from_powers(
     if min(pump_power_w, signal_power_w) < 0.0:
         raise ValueError("powers must be nonnegative")
     return (
-        np.sqrt(pump_power_w * parameters.z0) / parameters.omega_p,
-        np.sqrt(signal_power_w * parameters.z0) / parameters.omega_s,
+        np.sqrt(pump_power_w * parameters.z0) / (np.sqrt(2.0) * parameters.omega_p),
+        np.sqrt(signal_power_w * parameters.z0) / (np.sqrt(2.0) * parameters.omega_s),
         0.0j,
     )
 
