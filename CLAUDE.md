@@ -1,5 +1,33 @@
 # twpa_jax — agent notes
 
+## Design-independent saturation validation status (2026-07-29)
+
+Do not use JosephsonCircuits.jl or the Themis measurement cube as physical
+references for finite-signal saturation. JC is regression-only; Themis has no
+signal-power axis. The CSV field `compression_model_depletion_only` is the
+depletion model's dB power gain. The underlying
+`depletion_only_model` API still returns linear gain.
+
+The design-independent campaign is incomplete. The existing JVP and lossless
+observable tests are numerical/unit checks, not external physical validation;
+the current lossless Manley–Rowe test is degenerate because it has no generated
+signal/idler photon-flux scale. Do not report the eight-check campaign as
+passed until the finite-signal lossless fixture and the requested measured
+slopes/figures have been run.
+
+The driver now uses voltage-per-input-current ratios for `gain_vs_off_db`,
+matching Floquet normalization; absolute one-port `S` values are affine and
+must not be subtracted to form gain-vs-off. The sideband basis builder also
+allocates `omega_max` as a function of requested sideband count, so production
+S=10 bases are not clipped. A serial JPA lattice-Q=3 measurement found sector
+slopes near `1.01, 2.02, 3.03`, while its gain curve was non-monotone. JPA JVP
+finite differences gave slope `1.9414` and minimum error `1.566e-12`. The
+production JTWPA S=10 run exceeded 300 s without an artifact; S=10/S=12 basis
+self-convergence remains unevaluated. Manley–Rowe remains unresolved.
+The Manley–Rowe output now includes its photon-flux scale and marks
+sub-`1e-28` cancellation-dominated points as not evaluable instead of turning
+the denominator floor into a physical error.
+
 Package `twpa_solver` (under `src/`) is the production solver; `scripts/run_gain_map.py`
 is the pump/gain-map orchestrator. The solver was extracted from the `experiments/`
 research scripts (exp08 pump solve, exp09 gain, exp10 maps, exp14 parity), which
@@ -21,12 +49,40 @@ uses the Phase 3 bracketed nonlinear P1dB refinement for every setting. The
 required matrix includes Q=1/2/3, pump-order, torus-scale, three-tone versus
 lattice, and odd-only versus dense pump modes.
 
-The real-device matrix did not complete in the available run budget. A jtwpa
-Q=1, odd, order-3, lattice point completed at refined P1dB `-103.0455 dBm`;
-the Q=3 runs entered repeated adaptive substeps and exceeded 10 minutes before
-the CSV was written. Therefore no top-two `|ΔP1dB|` acceptance numbers are
-reported, and the production basis remains unevaluated by this phase. The
-existing exp20/21 basis must not be described as having passed the 0.2 dB gate.
+Two earlier blockers are fixed: the study hardcoded the plain `real_coupled`
+preconditioner (a fresh `splu` every Newton step) and buffered every result to
+write the CSV once at the end, so an overrun produced no output at all. The
+multitone solves now use `real_coupled_fast` (pump solve stays `real_coupled`,
+production-identical): measured 8.53 s -> 3.51 s on one jpa setting, P1dB
+bit-identical at -116.179752. The CSV is written per setting, and
+`--per-setting-budget-s` records `TIMEOUT`/`FAILED`/`OOM` rows instead of
+stalling or losing the matrix.
+
+jtwpa matrix, 8 of 9 settings (`outputs/phase5_convergence/jtwpa_full.csv`,
+banded backend, 15 coarse points, refined P1dB):
+
+| knob | top two settings | \|ΔP1dB\| | verdict |
+| --- | --- | ---: | --- |
+| signal_order_max Q | Q=2 -110.500076, Q=3 -110.440913 | **0.059163 dB** | PASS |
+| torus_scale | sc=1 -110.440913, sc=2 -110.440913 | **0.000000 dB** | PASS |
+| pump_order | order=1 -108.784341, order=3 -110.440913 | 1.656572 dB | **not evaluable** |
+| odd vs dense | dense order-5 did not run | — | **not evaluated** |
+
+`torus_scale` is converged exactly -- doubling `n_p`/`n_delta` moves nothing.
+The `pump_order` number spans a **gap**: `odd` order 2 (modes `[1,3]`) fails its
+pump solve reproducibly in ~1.4 s across two independent runs, while `[1]` and
+`[1,3,5]` both converge, so 1-vs-3 are not adjacent settings and 1.66 dB is not
+a convergence measurement. The dense order-5 point (the plan's **mandatory**
+odd-vs-dense comparison) exhausted memory on this 7 GB machine. Consistency
+check that did pass: `three_tone` and `lattice` Q=1/order=1 agree to all six
+reported decimals (-112.748281), as they must, being the same basis.
+
+**This does not discharge the production-basis caveat.** Every setting in this
+matrix solves at 3.756-7.894 dB small-signal gain against production's 27.541 dB,
+and the study builds `build_lattice_basis` where production uses
+`build_sideband_matched_basis` at S=10. It converges the lattice family at a much
+weaker operating point. The exp20/21 production basis still must not be described
+as having passed the 0.2 dB gate.
 
 `scripts/run_compression.py` defaults to the pump-harmonic-retaining
 `--multitone-basis matched --multitone-sidebands 2`. A three-tone basis is only
@@ -49,8 +105,63 @@ python experiments/exp21_p1db_vs_frequency.py --output-dir outputs/exp21_p1db_vs
 python experiments/exp22_spatial_attribution.py --output-dir outputs/exp22_spatial_attribution_converged
 ```
 
-Every artifact keeps `stability_status = "NOT_CHECKED"`; deep-saturation
-solutions are not stability claims. Final exp20 evidence (2026-07-29):
+### P1dB refinement versus interpolation (measured 2026-07-29)
+
+`--p1db-power-tol-db` (default 0.1) locates P1dB by nonlinear solves inside the
+coarse bracket; 0 falls back to log-linear interpolation. The driver now emits
+**both** numbers from one sweep (`p1db` and `p1db_interpolated_dbm`), so the
+delta is single-variable. Validation: each run's interpolated value reproduces
+the published exp20 number to 5.1e-9 dB (jtwpa) and 6.0e-9 dB (2c).
+
+| device | published exp20 | refined | delta |
+| --- | ---: | ---: | ---: |
+| jtwpa 6.6 GHz | -111.458017 | -111.118089 | +0.339928 dB |
+| 2c 7.440816 GHz | -95.083826 | -94.857885 | +0.225941 dB |
+
+This **supersedes an earlier +0.461 / +2.920 dB claim**, which was measured on a
+nine-point coarse grid that no published number used; that grid put 2c's first
+crossing 8.4 dB off, making its "+2.920" a grid artifact. The real errors are
+0.23-0.34 dB: above the 0.2 dB scale, single-signed (refined is always higher,
+so devices compress later than published), and *not* grounds for re-running
+exp20/21 wholesale. See `docs/development/saturation_solver_p1db_measurement.md`.
+
+Two diagnostics emitted alongside are **not yet trustworthy**:
+`manley_rowe_rel_err` peaks at the *smallest* signal power (0.533 jtwpa, 0.500
+2c -- near-identical across very different devices, so a fixed factor rather
+than physics). The depletion-model CSV unit defect is fixed: it now emits the
+plan model's power gain in dB and exp22 consumes that value without a second
+conversion.
+
+### Finite-signal stability (measured 2026-07-29)
+
+Runs without `--check-stability` keep `stability_status = "NOT_CHECKED"`;
+deep-saturation solutions are not stability claims.
+
+The previously reported "stable, dominant exponent +2.87e-6 s^-1" is
+**withdrawn**. `multitone/stability.py` was passing pump-harmonic keys where
+`assemble_conversion_matrix` expects a sideband ladder, and its sigma_min was
+owned by a near-DC sideband: measured bit-identical with the pump on and off up
+to psi/phi0 = 57000. The committed tests could not catch it because they ran on
+`Ic=0` -- a linear circuit -- at a zero state. Both defects are fixed and
+mutation-verified; the near-DC case now returns INCONCLUSIVE with a reason
+rather than STABLE. Production points are clear of the guard (closest sideband
+0.52 GHz for jtwpa, 0.10 GHz for 2c, against ~7 MHz thresholds).
+
+Measured at the three exp22 operating points, all exponents negative (decaying),
+now state-dependent as they must be:
+
+| device | zero signal | P1dB | deepest saturation |
+| --- | ---: | ---: | ---: |
+| jtwpa | -3.3785e+08 (STABLE) | -1.7638e+08 (INCONCL) | -1.1316e+08 (INCONCL) |
+| 2c | -1.1034e-02 (STABLE) | -1.6045e-02 (STABLE) | -1.8755e-02 (STABLE) |
+
+**No unstable point was found.** Always quote these against omega_p: jtwpa's
+|sigma|/omega_p ~ 8e-3 is real damping, 2c's ~4e-13 is numerically marginal. A
+bare exponent is not interpretable. jtwpa's INCONCLUSIVE points are
+`refine_complex_resonance` not converging, not the near-DC guard. Details in
+`docs/development/saturation_solver_stability_measurement.md`.
+
+Final exp20 evidence (2026-07-29):
 
 | device | S | gain dB | gain - JC dB | input P1dB dBm | depletion at P1dB dB | recovery rungs |
 | --- | ---: | ---: | ---: | ---: | ---: | --- |
@@ -169,12 +280,25 @@ slower than serial. Raising it only helps when running one worker; with several
 workers, extra threads lose to extra workers (3 workers x 1 thread = 5.00 cyc/s
 vs 3 x 2 threads = 3.66).
 
-Distributed sideband selection is reference-gated, not inferred from a two-point
-S=2/S=4 delta. JTWPA is non-monotone (30.7152, 24.2021, 26.5563, 27.5410 dB
-at S=2,4,6,10), so production uses S=10 against the 27.5402 dB JC reference.
-FQJTWPA uses S=6 (28.5349 dB), within 0.0019 dB of its 28.5367 dB JC reference.
-Every selected basis must independently pass same-S multitone/Floquet parity
-and the 0.2 dB JC-reference gate.
+**The sideband-selection justification is void as of 2026-07-29.** Production
+bases (jtwpa S=10, fqjtwpa S=6, 2c S=10) were picked by gating small-signal gain
+against a JosephsonCircuits.jl reference. JC is another simulator with no
+reference of its own, and `jc_jtwpa`/`jc_fqjtwpa` are JC's own documentation
+designs, so that gate was circular; the user has retired it. Do not cite the
+"0.2 dB JC-reference gate", and do not present JC agreement as validation --
+it measures numerical drift between two codes, which is a useful regression
+check and nothing more.
+
+What this leaves unresolved: JTWPA gain is **non-monotone in S** (30.7152,
+24.2021, 26.5563, 27.5410 dB at S=2,4,6,10). Without an external reference,
+S=10 cannot be selected from that sequence by agreement -- it requires a
+self-convergence argument (S=10 against S=12/14) that has never been run, and
+non-monotonicity means S=10 may still be climbing. 2c never had a JC reference
+at all and inherited S=10 by analogy. Same-S multitone/Floquet parity remains a
+valid internal check and should still pass.
+
+Until production-basis self-convergence is measured, treat every published P1dB
+as carrying an unquantified basis-truncation uncertainty.
 
 The earlier 2c blocker was a settings/wiring mismatch, not a fold or intrinsic
 continuation wall. The gain-map pump is injected at port 4 while signal
@@ -522,3 +646,22 @@ that is now skipped rather than fatal). Tests: `tests/test_column_matrices_trace
 `test_exp10_gate.py` (map gate), `test_column_matrices_tracer.py` (setprofile
 matrix tracer). Run with `--basetemp` off the repo to dodge a Windows ACL issue
 on `.pytest_tmp`.
+
+## Le Gal benchmark readout contract
+
+The effective-SNAIL benchmark uses a branch law shifted to its solved static
+equilibrium. Its 31 fF SNAIL capacitance is stamped across the branch, while
+223.5 fF is the ground capacitance; `sqrt(L/Cg)` is about 62.3765 ohm.
+`shunt_conductance_s` is an SI conductance, not a loss tangent.
+
+Benchmark HB gain must be read through `multitone.observables.tone_s21` and
+reported as the pump-on/pump-off ratio when compression is discussed. Do not
+recreate gain with `|i omega X|/V_in`; that old path was biased by 12.041 dB.
+`power_balance` accepts `z0_ohm`. The `conversion_manley_rowe_*` fields are
+restricted to pump/signal/idler; `all_tone_manley_rowe_*` exposes the retained
+tone scope. Legacy names remain for compatibility.
+
+The corrected Level-2 campaign currently measures a passive or weakly
+deamplifying effective line at the sampled points; it has not reproduced the
+paper's two gain lobes or a finite P1dB. This is a measured negative result,
+not evidence against the paper.
