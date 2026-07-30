@@ -37,7 +37,7 @@ def _current_from_dbm(power_dbm: float, z0_ohm: float) -> float:
     return math.sqrt(2.0 * 10.0 ** ((power_dbm - 30.0) / 10.0) / z0_ohm)
 
 
-def _run_point(cells: int, signal_ghz: float, power_dbm: float, sidebands: int, external_flux_on_small_junction: bool = False, pump_power_dbm: float = -78.4) -> dict[str, object]:
+def _run_point(cells: int, signal_ghz: float, power_dbm: float, sidebands: int, external_flux_on_small_junction: bool = False, pump_power_dbm: float = -78.4, pump_modes: tuple[int, ...] = (1, 3, 5)) -> dict[str, object]:
     started = time.perf_counter()
     circuit = build_effective_snail_line(
         cells=cells, port_impedance_ohm=62.4,
@@ -49,7 +49,7 @@ def _run_point(cells: int, signal_ghz: float, power_dbm: float, sidebands: int, 
     pump_problem = FullPumpProblem(
         C=circuit.C, G=circuit.G, K=circuit.K, Bphi=circuit.Bphi,
         branch=circuit.branch_law,
-        grid=HarmonicGrid(np.array([1, 3, 5]), nt=16, omega=omega_p),
+        grid=HarmonicGrid(np.array(pump_modes), nt=max(16, 2 * max(pump_modes) + 2), omega=omega_p),
         pump_node_index=circuit.port_to_index[1], pump_current_a=pump_current,
     )
     solver = HarmonicNewtonKrylovSolver(_settings())
@@ -58,10 +58,10 @@ def _run_point(cells: int, signal_ghz: float, power_dbm: float, sidebands: int, 
         return {"cells": cells, "signal_GHz": signal_ghz, "signal_dBm": power_dbm,
                 "status": "PUMP_FAILED", "runtime_s": time.perf_counter() - started}
     delta = omega_p - 2.0 * math.pi * signal_ghz * 1e9
-    basis = build_sideband_matched_basis([1, 3, 5], sidebands, omega_p, delta, omega_p * 12.0)
+    basis = build_sideband_matched_basis(list(pump_modes), sidebands, omega_p, delta, omega_p * 12.0)
     pump_source = np.zeros((basis.n_tones, circuit.node_count), dtype=np.complex128)
     pump_coeffs = pump_problem.source_coeffs(1.0)
-    for row, mode in enumerate([1, 3, 5]):
+    for row, mode in enumerate(pump_modes):
         pump_source[basis.index_of(ToneIndex(mode, 0))] = pump_coeffs[row]
     signal_current = _current_from_dbm(power_dbm, z0_ohm)
     signal_source = MultiToneDrive(
@@ -72,8 +72,8 @@ def _run_point(cells: int, signal_ghz: float, power_dbm: float, sidebands: int, 
         circuit, basis, AffineSourcePath.signal_turn_on(pump_source, signal_source)
     )
     seed = np.zeros_like(pump_source)
-    for mode in [1, 3, 5]:
-        seed[basis.index_of(ToneIndex(mode, 0))] = pump_state[[1, 3, 5].index(mode)]
+    for row, mode in enumerate(pump_modes):
+        seed[basis.index_of(ToneIndex(mode, 0))] = pump_state[row]
     state, report = solver.solve_one(problem, seed, 1.0)
     residual = float(np.linalg.norm(problem.residual_coeffs(state, 1.0)))
     signal_row = basis.index_of(basis.signal_tone)
@@ -136,6 +136,7 @@ def main() -> int:
     parser.add_argument("--sidebands", type=int, default=3)
     parser.add_argument("--external-flux-on-small-junction", action="store_true")
     parser.add_argument("--pump-power-dbm", type=float, default=-78.4)
+    parser.add_argument("--pump-modes", type=int, nargs="+", default=[1, 3, 5])
     args = parser.parse_args()
     rows: list[dict[str, object]] = []
     for cells in args.cells:
@@ -145,6 +146,7 @@ def main() -> int:
                     cells, frequency, power, args.sidebands,
                     args.external_flux_on_small_junction,
                     args.pump_power_dbm,
+                    tuple(args.pump_modes),
                 ))
     grouped: dict[tuple[int, float], list[dict[str, object]]] = {}
     for row in rows:

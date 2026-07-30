@@ -1,0 +1,24 @@
+[
+  {
+    "cells": 700,
+    "signal_GHz": 8.268,
+    "signal_dBm": -115.0,
+    "external_flux_on_small_junction": false,
+    "pump_dBm": -69.3,
+    "status": "SOLVED",
+    "residual_norm": 3.5791400280941915e-16,
+    "s21_db": 3.9375643427252043,
+    "gain_vs_off_db": 4.508543029938995,
+    "hb_gain_db": 3.9375643427252043,
+    "pump_depletion_db": -0.0003909021041184449,
+    "nonlinear_pump_phase_rad": 5.375819853596918e-05,
+    "spatial_phase_mismatch_rad_min": -32.974027983997345,
+    "spatial_phase_mismatch_rad_max": 29.19101652314347,
+    "depletion_model_gain_dB": -0.5711836647125423,
+    "pump_off_s21_db": -0.5709786872137904,
+    "pump_off_status": "SOLVED",
+    "runtime_s": 4.4849536000037915,
+    "compression_db": 0.0,
+    "p1db_dBm": null
+  }
+]
