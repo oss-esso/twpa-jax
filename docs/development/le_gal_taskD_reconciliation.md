@@ -28,3 +28,11 @@ model discrepancy: the reduced single-branch model reproduces the measured
 small-pump phase but not the paper-scale gain morphology at the published
 `-78.4 dBm`. The benchmark configuration remains `-78.4 dBm`; diagnostic
 higher pump powers are not adopted.
+
+The explicit one-cell three-large/one-small comparison at half flux gives
+`g1 = +0.271333333 Ic`, `g3 = +0.004160494 Ic`, and
+`g3/g1 = +0.015333515`. The ratio to the reduced value is `1.00000002`, so
+the effective single-branch reduction is not the source of an 8x or 22x
+nonlinearity error. The earlier attribution to that reduction is superseded;
+the remaining open defect is the linear/reference-path zigzag identified in
+Task 1.
