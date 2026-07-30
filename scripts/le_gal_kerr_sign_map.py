@@ -19,7 +19,13 @@ def main() -> None:
                 flux = 0.20 + flux_index * 0.01
                 try:
                     result = snail_taylor_coefficients(ratio, flux)
-                    row = {"ratio": ratio, "flux_over_flux0": flux, **result, "g1_over_Ic": result["g1"], "status": "STABLE"}
+                    row = {
+                        "ratio": ratio, "flux_over_flux0": flux,
+                        "equilibrium_flux_rad": result["equilibrium_flux_rad"],
+                        "g1_over_Ic": result["g1"], "g2_over_Ic": "",
+                        "g3_over_Ic": result["g3"],
+                        "g3_over_g1": result["g3_over_g1"], "status": "STABLE",
+                    }
                 except ValueError:
                     row = {"ratio": ratio, "flux_over_flux0": flux, "status": "NO_STABLE_EQUILIBRIUM"}
                 writer.writerow(row)

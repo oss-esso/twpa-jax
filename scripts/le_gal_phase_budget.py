@@ -1,6 +1,6 @@
 """Emit the signed discrete-ladder phase budget.
 
-The nonlinear term uses the measured CME magnitude 591.34 rad/m and the
+The nonlinear term uses the measured CME magnitude 60.4 rad/m and the
 positive published ``g3/g1`` sign.  Thus ``dk_nl`` is positive.  The linear
 term is ``2*k_p-k_s-k_i`` from the exact ladder dispersion and retains its
 signed value.
@@ -36,7 +36,7 @@ def main() -> None:
             idler = 15.0 - signal
             ks, ki = k(np.array([signal, idler]) * 1e9)
             dk_lin = 2 * kp - ks - ki
-            dk_nl = 591.34
+            dk_nl = 60.4
             dk_total = dk_lin + dk_nl
             regime = "PHASE_MATCHED" if abs(dk_total) * length < 1.0 else "MISMATCHED"
             writer.writerow([signal, idler, kp, ks, ki, dk_lin, dk_nl, dk_total, regime])
