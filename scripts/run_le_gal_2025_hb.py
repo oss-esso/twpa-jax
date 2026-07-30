@@ -127,7 +127,10 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--cells", type=int, nargs="+", default=[20, 50, 700])
-    parser.add_argument("--frequencies", type=float, nargs="+", default=[5.0, 6.0, 8.0, 9.5])
+    default_frequencies = sorted({
+        round(float(value), 2) for value in np.arange(4.0, 11.0 + 0.125, 0.25)
+    } | {6.4, 8.6})
+    parser.add_argument("--frequencies", type=float, nargs="+", default=default_frequencies)
     parser.add_argument("--powers", type=float, nargs="+", default=[-115.0, -110.0, -105.0, -100.0, -94.0])
     parser.add_argument("--sidebands", type=int, default=3)
     parser.add_argument("--external-flux-on-small-junction", action="store_true")
