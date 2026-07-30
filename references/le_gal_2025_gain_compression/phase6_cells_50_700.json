@@ -1,0 +1,24 @@
+[
+  {
+    "cells": 50,
+    "signal_GHz": 6.0,
+    "signal_dBm": -110.0,
+    "status": "SOLVED",
+    "residual_norm": 1.8263068867968214e-16,
+    "signal_coefficient_abs": 3.2562981425398844e-18,
+    "cme_endpoint_gain_dB": 0.17257187951569194,
+    "depletion_model_gain_dB": 19.437180098821653,
+    "runtime_s": 0.3533270000007178
+  },
+  {
+    "cells": 700,
+    "signal_GHz": 6.0,
+    "signal_dBm": -110.0,
+    "status": "SOLVED",
+    "residual_norm": 4.950092576179815e-20,
+    "signal_coefficient_abs": 2.7234127868331523e-17,
+    "cme_endpoint_gain_dB": 0.17257187951569194,
+    "depletion_model_gain_dB": 19.437180098821653,
+    "runtime_s": 2.1410839000000124
+  }
+]

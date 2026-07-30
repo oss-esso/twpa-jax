@@ -1,0 +1,62 @@
+{
+  "paper": {
+    "title": "Gain compression in Josephson Traveling-Wave Parametric Amplifiers",
+    "arxiv": "2502.03022v2",
+    "doi": "10.1103/tq8k-m3dr",
+    "source": "https://arxiv.org/abs/2502.03022",
+    "target": "published simulated curves; experimental traces are out of scope"
+  },
+  "units": {
+    "frequency": "GHz",
+    "power": "dBm at the device input",
+    "length": "m",
+    "capacitance": "F",
+    "inductance": "H",
+    "current": "A",
+    "flux": "Wb"
+  },
+  "published_values": {
+    "cells": 700,
+    "cell_length_m": 8.7e-6,
+    "large_junction_critical_current_A": 1.4e-6,
+    "snail_ratio": 0.062,
+    "snail_inductance_H": 8.696e-10,
+    "snail_capacitance_F": 3.1e-14,
+    "ground_capacitance_F": 2.235e-13,
+    "external_flux_over_flux0": 0.5,
+    "pump_frequency_GHz": 7.5,
+    "pump_power_dBm": -78.4,
+    "pump_loss_tangent": 0.00219,
+    "signal_frequency_range_GHz": [4.0, 11.0],
+    "signal_power_range_dBm": [-115.0, -94.0]
+  },
+  "equations": {
+    "snail_current_phase": "I(phi)=r Ic sin(phi/phi0)+Ic sin((phi-phi_ext)/(3 phi0))",
+    "input_envelope": "A_j(0)=sqrt(P_j Z0)/omega_j",
+    "characteristic_impedance": "Z0=sqrt(L/Cg)",
+    "depletion_model": "G(Ps)=Glin/(1+2 Glin Ps/Pp)",
+    "appendix": "Appendix C three-envelope coupled-mode equations"
+  },
+  "inferred": {
+    "cme_coefficients": {
+      "derivation": "g3=Ic*(r/6-1/162)/phi0^3, g1=Ic*(1/3-r)/phi0, gamma=(g3/g1)*kp/8; kp and mismatch use the discrete LC ladder dispersion with dx=8.7 um",
+      "fourier_projection_factor": 0.125,
+      "z0_ohm": 62.37649990575112,
+      "example_signal_frequency_GHz": 6.0,
+      "example_gamma_1_per_m_Wb2": 1.4568982059450348e33,
+      "example_fwm_coupling_1_per_m_Wb2": 1.4568982059450348e33,
+      "example_phase_mismatch_1_per_m": 484.59158076293534,
+      "status": "derived, not digitized; numerical lobe scan is recorded in the development note"
+    },
+    "alternate_cpr_cubic_coefficients": {
+      "published_placement_Ic_units": 0.004160,
+      "external_flux_on_small_junction_Ic_units": -0.016506
+    }
+  },
+  "provenance": {
+    "published": ["paper metadata", "device parameters", "equation forms"],
+    "digitized": [],
+    "inferred": ["Z0 from published L and Cg", "equilibrium and tangent from the SNAIL equation", "CME Taylor/ladder coefficients", "alternate CPR cubic coefficient"],
+    "digitization_status": "not yet populated; no synthetic values are substituted"
+  }
+}
