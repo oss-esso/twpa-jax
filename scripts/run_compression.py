@@ -483,8 +483,9 @@ def _solve_compression(
     )
     if not pump_off_report.converged:
         raise RuntimeError("pump-off small-signal reference did not converge")
+    pump_off_state_full = observable_state(pump_off_problem, pump_off_state)
     pump_off_s21 = tone_s21(
-        observable_state(pump_off_problem, pump_off_state),
+        pump_off_state_full,
         basis,
         circuit,
         signal_tone=basis.signal_tone,
@@ -494,9 +495,13 @@ def _solve_compression(
     )
     pump_off_gain_db = float(20.0 * np.log10(max(abs(pump_off_s21), 1e-300)))
     signal_row = basis.index_of(basis.signal_tone)
+    # ``output_node`` indexes the full node set, so the reference voltage has to
+    # be read off the reconstructed state.  The Schur backend solves on the
+    # retained ports only, and indexing it directly is out of bounds for every
+    # ``--circuit-dir`` device.
     output_node = circuit.port_to_index[out_port]
     pump_off_signal_voltage = (
-        1j * basis.omegas[signal_row] * pump_off_state[signal_row, output_node]
+        1j * basis.omegas[signal_row] * pump_off_state_full[signal_row, output_node]
     )
     pump_only_problem = make_problem(AffineSourcePath.pump_turn_on(pump_source))
     pump_seed_solve = solve_seed(pump_seed)
