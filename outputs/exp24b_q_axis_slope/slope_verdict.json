@@ -1,0 +1,76 @@
+{
+  "common_frequencies_ghz": [
+    6.257,
+    6.49,
+    6.71,
+    6.943,
+    7.29,
+    7.629
+  ],
+  "dropped_frequencies_ghz": [
+    5.8,
+    6.03
+  ],
+  "fits": [
+    {
+      "q": 1,
+      "n": 6,
+      "frequencies_ghz": [
+        6.257,
+        6.49,
+        6.71,
+        6.943,
+        7.29,
+        7.629
+      ],
+      "slope": -0.4437868708089163,
+      "slope_standard_error": 0.062775146364182,
+      "intercept": -86.94354025492414,
+      "fit_rms_db": 0.29964429980564034
+    },
+    {
+      "q": 2,
+      "n": 6,
+      "frequencies_ghz": [
+        6.257,
+        6.49,
+        6.71,
+        6.943,
+        7.29,
+        7.629
+      ],
+      "slope": -0.682832521196314,
+      "slope_standard_error": 0.10486545212173767,
+      "intercept": -80.38290452940106,
+      "fit_rms_db": 0.5006393894298173
+    }
+  ],
+  "slope_difference_q2_minus_q1": -0.23904565038739767,
+  "combined_slope_standard_error": 0.1222189921810065,
+  "difference_sigma": 1.9558797378509776,
+  "verdict": "NOT_RESOLVED",
+  "recommendation": "Report the slope change and collect more frequencies. The slope verdict is provisional because q<=3 is not converged at every spot check.",
+  "q3_spot_checks": [
+    {
+      "signal_ghz": 6.943,
+      "p1db_q2_dbm": -88.81226657994628,
+      "p1db_q3_dbm": -88.31226657994628,
+      "delta_q3_minus_q2_db": 0.5,
+      "gate_ok": false
+    },
+    {
+      "signal_ghz": 7.629,
+      "p1db_q2_dbm": -92.22893324661297,
+      "p1db_q3_dbm": -92.31226657994628,
+      "delta_q3_minus_q2_db": -0.08333333333331439,
+      "gate_ok": true
+    }
+  ],
+  "q3_convergence_ok": false,
+  "references": {
+    "production basis": -0.4,
+    "pump-depletion bound": -1.0,
+    "measured hardware": -2.231
+  },
+  "absolute_p1db_caveat": "Dense h=[1..6] changes absolute gain relative to the odd-only production basis; only within-q slopes are interpreted."
+}
