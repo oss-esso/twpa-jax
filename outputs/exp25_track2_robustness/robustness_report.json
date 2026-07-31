@@ -1,0 +1,32 @@
+[
+  {
+    "signal_ghz": 5.8,
+    "log_level_flag_returncode": 2,
+    "solver_returncode": 0,
+    "summary_exists": true,
+    "n_rows": 16,
+    "n_valid": 15,
+    "missing_rows": [
+      {
+        "index": 14,
+        "signal_power_dbm": "-81.35393324661295",
+        "status": "DEADLINE",
+        "compression_db": "nan"
+      }
+    ],
+    "raw_adjacent_crossing_indices": [],
+    "valid_sequence_crossing_indices": [
+      13
+    ],
+    "status": "CHECK",
+    "p1db_input_dbm": -83.39559991327963,
+    "p1db_interpolated_dbm": -85.31235164831101,
+    "number_of_crossings": 0
+  },
+  {
+    "signal_ghz": 6.03,
+    "log_level_flag_returncode": 2,
+    "solver_returncode": 1,
+    "summary_exists": false
+  }
+]

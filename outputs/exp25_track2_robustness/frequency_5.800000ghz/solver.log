@@ -1,0 +1,260 @@
+COMMAND: C:\Python313\python.exe scripts/run_compression.py --output-dir outputs\exp25_track2_robustness\frequency_5.800000ghz --circuit-dir outputs/ipm_python_design --pump-freq-ghz 7.540816326531111 --pump-current-a 7.231074707853736e-06 --pump-current-jc-scale 1.0 --pump-mode-policy dense_real --pump-harmonics 6 --pump-nt 40 --multitone-basis lattice --multitone-sidebands 2 --source-port 1 --pump-port 4 --out-port 2 --attenuation-db 0 --factor-backend pardiso --n-signal-power 16 --signal-current-min-a 1e-10 --signal-current-max-a 1e-6 --recovery ladder --signal-continuation-deadline-s 600 --signal-workers 1 --signal-ghz 5.8 --allow-memory-overcommit
+
+=== continuation lambda=0.250000 ===
+step_status=VALID_CONVERGED coeff_rel=7.042e-13 newton=4 gmres_total=4 factor_s=0.700 runtime_s=1.013 reason=
+=== continuation lambda=0.500000 ===
+step_status=VALID_CONVERGED coeff_rel=7.267e-13 newton=5 gmres_total=5 factor_s=0.884 runtime_s=1.268 reason=
+=== continuation lambda=0.750000 ===
+step_status=VALID_CONVERGED coeff_rel=7.778e-13 newton=6 gmres_total=6 factor_s=1.112 runtime_s=1.562 reason=
+=== continuation lambda=1.000000 ===
+step_status=VALID_CONVERGED coeff_rel=7.374e-13 newton=8 gmres_total=8 factor_s=1.468 runtime_s=2.077 reason=
+=== adaptive continuation lambda=0.250000 step=0.250000 ===
+step_status=VALID_CONVERGED coeff_rel=1.339e-14 newton=4 gmres_total=4 factor_s=4.883 runtime_s=7.831 reason=
+=== adaptive continuation lambda=0.625000 step=0.375000 ===
+step_status=VALID_CONVERGED coeff_rel=5.411e-12 newton=5 gmres_total=5 factor_s=6.176 runtime_s=9.887 reason=
+=== adaptive continuation lambda=1.000000 step=0.375000 ===
+step_status=VALID_CONVERGED coeff_rel=1.701e-14 newton=13 gmres_total=13 factor_s=16.024 runtime_s=26.102 reason=
+=== adaptive continuation lambda=0.093750 step=0.093750 ===
+step_status=VALID_CONVERGED coeff_rel=1.849e-14 newton=6 gmres_total=6 factor_s=7.328 runtime_s=11.974 reason=
+=== adaptive continuation lambda=0.234375 step=0.140625 ===
+step_status=FAIL coeff_rel=2.200e-03 newton=6 gmres_total=6 factor_s=7.370 runtime_s=13.041 reason=stalled at Newton 6 (reduction ratio 0.973)
+=== adaptive continuation lambda=0.164063 step=0.070313 ===
+step_status=FAIL coeff_rel=2.474e-05 newton=14 gmres_total=14 factor_s=16.830 runtime_s=29.087 reason=stalled at Newton 14 (reduction ratio 0.980)
+=== adaptive continuation lambda=0.128906 step=0.035156 ===
+step_status=FAIL coeff_rel=3.547e-04 newton=5 gmres_total=5 factor_s=6.043 runtime_s=11.351 reason=line search failed at Newton 5
+=== adaptive continuation lambda=0.111328 step=0.017578 ===
+step_status=VALID_CONVERGED coeff_rel=4.349e-13 newton=6 gmres_total=6 factor_s=7.327 runtime_s=11.932 reason=
+=== adaptive continuation lambda=0.137695 step=0.026367 ===
+step_status=VALID_CONVERGED coeff_rel=2.402e-14 newton=4 gmres_total=4 factor_s=4.749 runtime_s=7.802 reason=
+=== adaptive continuation lambda=0.177246 step=0.039551 ===
+step_status=VALID_CONVERGED coeff_rel=4.263e-14 newton=7 gmres_total=7 factor_s=8.455 runtime_s=14.025 reason=
+=== adaptive continuation lambda=0.236572 step=0.059326 ===
+step_status=FAIL coeff_rel=7.902e-05 newton=12 gmres_total=12 factor_s=15.097 runtime_s=25.786 reason=stalled at Newton 12 (reduction ratio 0.987)
+=== adaptive continuation lambda=0.206909 step=0.029663 ===
+step_status=VALID_CONVERGED coeff_rel=1.904e-11 newton=10 gmres_total=10 factor_s=12.075 runtime_s=20.395 reason=
+=== adaptive continuation lambda=0.251404 step=0.044495 ===
+step_status=VALID_CONVERGED coeff_rel=1.159e-13 newton=5 gmres_total=5 factor_s=5.889 runtime_s=9.694 reason=
+=== adaptive continuation lambda=0.318146 step=0.066742 ===
+step_status=VALID_CONVERGED coeff_rel=4.096e-13 newton=8 gmres_total=8 factor_s=9.661 runtime_s=15.819 reason=
+=== adaptive continuation lambda=0.418259 step=0.100113 ===
+step_status=FAIL coeff_rel=1.703e-05 newton=12 gmres_total=12 factor_s=15.211 runtime_s=27.260 reason=line search failed at Newton 12
+=== adaptive continuation lambda=0.368202 step=0.050056 ===
+step_status=VALID_CONVERGED coeff_rel=1.892e-14 newton=6 gmres_total=6 factor_s=7.979 runtime_s=12.794 reason=
+=== adaptive continuation lambda=0.443287 step=0.075085 ===
+step_status=VALID_CONVERGED coeff_rel=1.895e-14 newton=5 gmres_total=5 factor_s=6.816 runtime_s=10.809 reason=
+=== adaptive continuation lambda=0.555914 step=0.112627 ===
+step_status=VALID_CONVERGED coeff_rel=2.921e-13 newton=6 gmres_total=6 factor_s=7.815 runtime_s=12.599 reason=
+=== adaptive continuation lambda=0.724854 step=0.168941 ===
+step_status=FAIL coeff_rel=4.739e-05 newton=10 gmres_total=10 factor_s=13.132 runtime_s=22.655 reason=stalled at Newton 10 (reduction ratio 0.990)
+=== adaptive continuation lambda=0.640384 step=0.084470 ===
+step_status=VALID_CONVERGED coeff_rel=4.790e-12 newton=8 gmres_total=8 factor_s=10.622 runtime_s=16.792 reason=
+=== adaptive continuation lambda=0.767090 step=0.126705 ===
+step_status=FAIL coeff_rel=1.356e-03 newton=7 gmres_total=7 factor_s=9.025 runtime_s=15.988 reason=stalled at Newton 7 (reduction ratio 0.976)
+=== adaptive continuation lambda=0.703737 step=0.063353 ===
+step_status=FAIL coeff_rel=6.022e-05 newton=11 gmres_total=11 factor_s=14.766 runtime_s=24.113 reason=stalled at Newton 11 (reduction ratio 0.985)
+=== adaptive continuation lambda=0.672061 step=0.031676 ===
+step_status=VALID_CONVERGED coeff_rel=1.071e-11 newton=15 gmres_total=15 factor_s=19.663 runtime_s=32.078 reason=
+=== adaptive continuation lambda=0.719575 step=0.047515 ===
+step_status=VALID_CONVERGED coeff_rel=3.315e-13 newton=7 gmres_total=7 factor_s=8.930 runtime_s=14.322 reason=
+=== adaptive continuation lambda=0.790847 step=0.071272 ===
+step_status=FAIL coeff_rel=7.076e-06 newton=13 gmres_total=13 factor_s=17.017 runtime_s=27.910 reason=stalled at Newton 13 (reduction ratio 0.925)
+=== adaptive continuation lambda=0.755211 step=0.035636 ===
+step_status=FAIL coeff_rel=1.992e-04 newton=12 gmres_total=12 factor_s=15.529 runtime_s=27.277 reason=stalled at Newton 12 (reduction ratio 0.997)
+=== adaptive continuation lambda=0.737393 step=0.017818 ===
+step_status=VALID_CONVERGED coeff_rel=1.956e-14 newton=6 gmres_total=6 factor_s=7.685 runtime_s=12.188 reason=
+=== adaptive continuation lambda=0.764120 step=0.026727 ===
+step_status=FAIL coeff_rel=1.241e-05 newton=7 gmres_total=7 factor_s=9.234 runtime_s=16.586 reason=line search failed at Newton 7
+=== adaptive continuation lambda=0.750756 step=0.013363 ===
+step_status=VALID_CONVERGED coeff_rel=1.963e-14 newton=5 gmres_total=5 factor_s=6.479 runtime_s=10.288 reason=
+=== adaptive continuation lambda=0.770802 step=0.020045 ===
+step_status=VALID_CONVERGED coeff_rel=1.864e-11 newton=7 gmres_total=7 factor_s=9.268 runtime_s=14.615 reason=
+=== adaptive continuation lambda=0.800869 step=0.030068 ===
+step_status=VALID_CONVERGED coeff_rel=2.028e-14 newton=6 gmres_total=6 factor_s=7.924 runtime_s=12.517 reason=
+=== adaptive continuation lambda=0.845971 step=0.045102 ===
+step_status=FAIL coeff_rel=1.700e-05 newton=4 gmres_total=4 factor_s=5.211 runtime_s=9.240 reason=line search failed at Newton 4
+=== adaptive continuation lambda=0.823420 step=0.022551 ===
+step_status=VALID_CONVERGED coeff_rel=2.068e-14 newton=8 gmres_total=8 factor_s=10.228 runtime_s=16.918 reason=
+=== adaptive continuation lambda=0.857247 step=0.033826 ===
+step_status=VALID_CONVERGED coeff_rel=2.968e-11 newton=11 gmres_total=11 factor_s=13.111 runtime_s=21.297 reason=
+=== adaptive continuation lambda=0.907986 step=0.050739 ===
+step_status=FAIL coeff_rel=1.076e-04 newton=13 gmres_total=13 factor_s=14.798 runtime_s=27.895 reason=stalled at Newton 13 (reduction ratio 0.998)
+=== adaptive continuation lambda=0.882616 step=0.025370 ===
+step_status=VALID_CONVERGED coeff_rel=1.461e-11 newton=5 gmres_total=5 factor_s=5.985 runtime_s=9.552 reason=
+=== adaptive continuation lambda=0.920671 step=0.038055 ===
+step_status=FAIL coeff_rel=3.811e-06 newton=10 gmres_total=10 factor_s=11.558 runtime_s=19.095 reason=stalled at Newton 10 (reduction ratio 0.951)
+=== adaptive continuation lambda=0.901644 step=0.019027 ===
+step_status=VALID_CONVERGED coeff_rel=1.981e-14 newton=6 gmres_total=6 factor_s=6.900 runtime_s=11.212 reason=
+=== adaptive continuation lambda=0.930184 step=0.028541 ===
+step_status=VALID_CONVERGED coeff_rel=1.811e-11 newton=4 gmres_total=4 factor_s=4.619 runtime_s=7.494 reason=
+=== adaptive continuation lambda=0.046875 step=0.046875 ===
+step_status=VALID_CONVERGED coeff_rel=1.834e-14 newton=5 gmres_total=5 factor_s=5.655 runtime_s=9.281 reason=
+=== adaptive continuation lambda=0.117188 step=0.070313 ===
+step_status=VALID_CONVERGED coeff_rel=1.871e-14 newton=6 gmres_total=6 factor_s=6.897 runtime_s=11.249 reason=
+=== adaptive continuation lambda=0.222656 step=0.105469 ===
+step_status=VALID_CONVERGED coeff_rel=6.379e-11 newton=8 gmres_total=8 factor_s=9.205 runtime_s=15.002 reason=
+=== adaptive continuation lambda=0.380859 step=0.158203 ===
+step_status=FAIL coeff_rel=1.086e-02 newton=4 gmres_total=4 factor_s=4.586 runtime_s=8.879 reason=stalled at Newton 4 (reduction ratio 0.998)
+=== adaptive continuation lambda=0.301758 step=0.079102 ===
+step_status=FAIL coeff_rel=4.896e-03 newton=4 gmres_total=4 factor_s=4.614 runtime_s=8.729 reason=stalled at Newton 4 (reduction ratio 0.831)
+=== adaptive continuation lambda=0.262207 step=0.039551 ===
+step_status=FAIL coeff_rel=7.597e-04 newton=9 gmres_total=9 factor_s=10.395 runtime_s=18.590 reason=stalled at Newton 9 (reduction ratio 0.999)
+=== adaptive continuation lambda=0.242432 step=0.019775 ===
+step_status=FAIL coeff_rel=1.012e-05 newton=10 gmres_total=10 factor_s=11.529 runtime_s=19.527 reason=stalled at Newton 10 (reduction ratio 0.966)
+=== adaptive continuation lambda=0.232544 step=0.009888 ===
+step_status=VALID_CONVERGED coeff_rel=1.185e-13 newton=6 gmres_total=6 factor_s=7.019 runtime_s=11.474 reason=
+=== adaptive continuation lambda=0.247375 step=0.014832 ===
+step_status=VALID_CONVERGED coeff_rel=3.403e-14 newton=5 gmres_total=5 factor_s=5.758 runtime_s=9.374 reason=
+=== adaptive continuation lambda=0.269623 step=0.022247 ===
+step_status=FAIL coeff_rel=1.236e-05 newton=9 gmres_total=9 factor_s=10.286 runtime_s=18.201 reason=stalled at Newton 9 (reduction ratio 0.989)
+=== adaptive continuation lambda=0.258499 step=0.011124 ===
+step_status=VALID_CONVERGED coeff_rel=1.845e-11 newton=4 gmres_total=4 factor_s=4.585 runtime_s=7.475 reason=
+=== adaptive continuation lambda=0.275185 step=0.016685 ===
+step_status=VALID_CONVERGED coeff_rel=2.326e-13 newton=6 gmres_total=6 factor_s=6.964 runtime_s=11.284 reason=
+=== adaptive continuation lambda=0.300213 step=0.025028 ===
+step_status=FAIL coeff_rel=6.778e-06 newton=12 gmres_total=12 factor_s=13.758 runtime_s=24.532 reason=stalled at Newton 12 (reduction ratio 0.997)
+=== adaptive continuation lambda=0.287699 step=0.012514 ===
+step_status=VALID_CONVERGED coeff_rel=1.884e-12 newton=6 gmres_total=6 factor_s=6.933 runtime_s=11.303 reason=
+=== adaptive continuation lambda=0.306470 step=0.018771 ===
+step_status=VALID_CONVERGED coeff_rel=5.922e-13 newton=7 gmres_total=7 factor_s=8.108 runtime_s=13.135 reason=
+=== adaptive continuation lambda=0.334627 step=0.028157 ===
+step_status=VALID_CONVERGED coeff_rel=6.477e-11 newton=9 gmres_total=9 factor_s=10.402 runtime_s=16.958 reason=
+=== adaptive continuation lambda=0.376862 step=0.042235 ===
+step_status=FAIL coeff_rel=1.317e-03 newton=7 gmres_total=7 factor_s=7.871 runtime_s=14.109 reason=stalled at Newton 7 (reduction ratio 0.863)
+=== adaptive continuation lambda=0.355744 step=0.021118 ===
+step_status=FAIL coeff_rel=7.301e-04 newton=6 gmres_total=6 factor_s=6.842 runtime_s=12.584 reason=line search failed at Newton 6
+=== adaptive continuation lambda=0.345185 step=0.010559 ===
+step_status=FAIL coeff_rel=1.303e-04 newton=9 gmres_total=9 factor_s=10.398 runtime_s=18.594 reason=line search failed at Newton 9
+=== adaptive continuation lambda=0.339906 step=0.005279 ===
+step_status=VALID_CONVERGED coeff_rel=1.634e-11 newton=4 gmres_total=4 factor_s=4.579 runtime_s=7.445 reason=
+=== adaptive continuation lambda=0.347825 step=0.007919 ===
+step_status=VALID_CONVERGED coeff_rel=3.405e-12 newton=6 gmres_total=6 factor_s=6.858 runtime_s=11.131 reason=
+=== adaptive continuation lambda=0.359704 step=0.011879 ===
+step_status=VALID_CONVERGED coeff_rel=1.740e-12 newton=7 gmres_total=7 factor_s=8.078 runtime_s=13.182 reason=
+=== adaptive continuation lambda=0.377522 step=0.017818 ===
+step_status=VALID_CONVERGED coeff_rel=7.279e-13 newton=6 gmres_total=6 factor_s=6.891 runtime_s=11.205 reason=
+=== adaptive continuation lambda=0.404249 step=0.026727 ===
+step_status=FAIL coeff_rel=3.219e-06 newton=13 gmres_total=13 factor_s=14.863 runtime_s=25.513 reason=stalled at Newton 13 (reduction ratio 0.939)
+=== adaptive continuation lambda=0.390885 step=0.013363 ===
+step_status=VALID_CONVERGED coeff_rel=4.529e-11 newton=5 gmres_total=5 factor_s=5.746 runtime_s=9.330 reason=
+=== adaptive continuation lambda=0.410930 step=0.020045 ===
+step_status=VALID_CONVERGED coeff_rel=6.708e-14 newton=5 gmres_total=5 factor_s=5.794 runtime_s=9.374 reason=
+=== adaptive continuation lambda=0.440998 step=0.030068 ===
+step_status=VALID_CONVERGED coeff_rel=8.010e-13 newton=5 gmres_total=5 factor_s=5.766 runtime_s=9.376 reason=
+=== adaptive continuation lambda=0.486100 step=0.045102 ===
+step_status=VALID_CONVERGED coeff_rel=1.216e-13 newton=8 gmres_total=8 factor_s=9.135 runtime_s=14.821 reason=
+=== adaptive continuation lambda=0.553752 step=0.067653 ===
+step_status=FAIL coeff_rel=1.912e-03 newton=7 gmres_total=7 factor_s=7.950 runtime_s=15.252 reason=stalled at Newton 7 (reduction ratio 0.953)
+=== adaptive continuation lambda=0.519926 step=0.033826 ===
+step_status=FAIL coeff_rel=4.214e-05 newton=8 gmres_total=8 factor_s=9.118 runtime_s=17.323 reason=stalled at Newton 8 (reduction ratio 0.997)
+=== adaptive continuation lambda=0.503013 step=0.016913 ===
+step_status=VALID_CONVERGED coeff_rel=2.330e-14 newton=7 gmres_total=7 factor_s=8.023 runtime_s=13.073 reason=
+=== adaptive continuation lambda=0.528383 step=0.025370 ===
+step_status=VALID_CONVERGED coeff_rel=1.794e-13 newton=5 gmres_total=5 factor_s=5.750 runtime_s=9.335 reason=
+=== adaptive continuation lambda=0.566437 step=0.038055 ===
+step_status=VALID_CONVERGED coeff_rel=3.164e-11 newton=6 gmres_total=6 factor_s=6.892 runtime_s=11.211 reason=
+=== adaptive continuation lambda=0.623519 step=0.057082 ===
+step_status=VALID_CONVERGED coeff_rel=2.822e-12 newton=6 gmres_total=6 factor_s=6.884 runtime_s=11.340 reason=
+=== adaptive continuation lambda=0.709142 step=0.085623 ===
+step_status=FAIL coeff_rel=1.110e-04 newton=8 gmres_total=9 factor_s=9.216 runtime_s=17.194 reason=line search failed at Newton 8
+=== adaptive continuation lambda=0.666330 step=0.042811 ===
+step_status=VALID_CONVERGED coeff_rel=2.171e-14 newton=6 gmres_total=6 factor_s=6.912 runtime_s=11.217 reason=
+=== adaptive continuation lambda=0.730547 step=0.064217 ===
+step_status=VALID_CONVERGED coeff_rel=2.342e-14 newton=9 gmres_total=9 factor_s=10.349 runtime_s=17.012 reason=
+=== adaptive continuation lambda=0.826873 step=0.096326 ===
+step_status=VALID_CONVERGED coeff_rel=2.238e-14 newton=10 gmres_total=10 factor_s=11.527 runtime_s=19.082 reason=
+=== adaptive continuation lambda=0.971361 step=0.144488 ===
+step_status=FAIL coeff_rel=1.055e-02 newton=4 gmres_total=4 factor_s=4.525 runtime_s=8.783 reason=stalled at Newton 4 (reduction ratio 0.991)
+=== adaptive continuation lambda=0.899117 step=0.072244 ===
+step_status=VALID_CONVERGED coeff_rel=9.920e-13 newton=6 gmres_total=6 factor_s=6.936 runtime_s=11.309 reason=
+=== adaptive continuation lambda=1.000000 step=0.100883 ===
+step_status=VALID_CONVERGED coeff_rel=1.013e-12 newton=6 gmres_total=6 factor_s=7.180 runtime_s=11.638 reason=
+=== adaptive continuation lambda=0.093750 step=0.093750 ===
+step_status=VALID_CONVERGED coeff_rel=1.849e-14 newton=6 gmres_total=6 factor_s=6.962 runtime_s=11.309 reason=
+=== adaptive continuation lambda=0.234375 step=0.140625 ===
+step_status=FAIL coeff_rel=2.200e-03 newton=6 gmres_total=6 factor_s=6.973 runtime_s=12.208 reason=stalled at Newton 6 (reduction ratio 0.973)
+=== adaptive continuation lambda=0.164063 step=0.070313 ===
+step_status=FAIL coeff_rel=2.474e-05 newton=14 gmres_total=14 factor_s=16.184 runtime_s=27.702 reason=stalled at Newton 14 (reduction ratio 0.980)
+=== adaptive continuation lambda=0.128906 step=0.035156 ===
+step_status=FAIL coeff_rel=3.547e-04 newton=5 gmres_total=5 factor_s=5.745 runtime_s=10.752 reason=line search failed at Newton 5
+=== adaptive continuation lambda=0.111328 step=0.017578 ===
+step_status=VALID_CONVERGED coeff_rel=4.349e-13 newton=6 gmres_total=6 factor_s=6.859 runtime_s=11.143 reason=
+=== adaptive continuation lambda=0.137695 step=0.026367 ===
+step_status=VALID_CONVERGED coeff_rel=2.402e-14 newton=4 gmres_total=4 factor_s=4.561 runtime_s=7.459 reason=
+=== adaptive continuation lambda=0.177246 step=0.039551 ===
+step_status=VALID_CONVERGED coeff_rel=4.281e-14 newton=7 gmres_total=7 factor_s=8.038 runtime_s=13.201 reason=
+=== adaptive continuation lambda=0.236572 step=0.059326 ===
+step_status=FAIL coeff_rel=7.902e-05 newton=12 gmres_total=12 factor_s=13.790 runtime_s=23.683 reason=stalled at Newton 12 (reduction ratio 0.987)
+=== adaptive continuation lambda=0.206909 step=0.029663 ===
+step_status=VALID_CONVERGED coeff_rel=1.904e-11 newton=10 gmres_total=10 factor_s=11.539 runtime_s=19.343 reason=
+=== adaptive continuation lambda=0.251404 step=0.044495 ===
+step_status=VALID_CONVERGED coeff_rel=1.160e-13 newton=5 gmres_total=5 factor_s=5.768 runtime_s=9.349 reason=
+=== adaptive continuation lambda=0.318146 step=0.066742 ===
+step_status=VALID_CONVERGED coeff_rel=4.095e-13 newton=8 gmres_total=8 factor_s=9.200 runtime_s=14.935 reason=
+=== adaptive continuation lambda=0.418259 step=0.100113 ===
+step_status=FAIL coeff_rel=1.703e-05 newton=12 gmres_total=12 factor_s=13.625 runtime_s=24.629 reason=line search failed at Newton 12
+=== adaptive continuation lambda=0.368202 step=0.050056 ===
+step_status=VALID_CONVERGED coeff_rel=1.877e-14 newton=6 gmres_total=6 factor_s=6.873 runtime_s=11.274 reason=
+=== adaptive continuation lambda=0.443287 step=0.075085 ===
+step_status=VALID_CONVERGED coeff_rel=1.909e-14 newton=5 gmres_total=5 factor_s=5.731 runtime_s=9.339 reason=
+=== adaptive continuation lambda=0.555914 step=0.112627 ===
+step_status=VALID_CONVERGED coeff_rel=2.921e-13 newton=6 gmres_total=6 factor_s=6.913 runtime_s=11.188 reason=
+=== adaptive continuation lambda=0.724854 step=0.168941 ===
+step_status=FAIL coeff_rel=4.739e-05 newton=10 gmres_total=10 factor_s=11.590 runtime_s=20.012 reason=stalled at Newton 10 (reduction ratio 0.990)
+=== adaptive continuation lambda=0.640384 step=0.084470 ===
+step_status=VALID_CONVERGED coeff_rel=4.790e-12 newton=8 gmres_total=8 factor_s=9.312 runtime_s=15.073 reason=
+=== adaptive continuation lambda=0.767090 step=0.126705 ===
+step_status=FAIL coeff_rel=1.356e-03 newton=7 gmres_total=7 factor_s=8.018 runtime_s=14.605 reason=stalled at Newton 7 (reduction ratio 0.976)
+=== adaptive continuation lambda=0.703737 step=0.063353 ===
+step_status=FAIL coeff_rel=6.022e-05 newton=11 gmres_total=11 factor_s=12.647 runtime_s=21.558 reason=stalled at Newton 11 (reduction ratio 0.985)
+=== adaptive continuation lambda=0.672061 step=0.031676 ===
+step_status=VALID_CONVERGED coeff_rel=1.071e-11 newton=15 gmres_total=15 factor_s=17.239 runtime_s=29.291 reason=
+=== adaptive continuation lambda=0.719575 step=0.047515 ===
+step_status=VALID_CONVERGED coeff_rel=3.313e-13 newton=7 gmres_total=7 factor_s=8.052 runtime_s=13.115 reason=
+=== adaptive continuation lambda=0.790847 step=0.071272 ===
+step_status=FAIL coeff_rel=7.076e-06 newton=13 gmres_total=13 factor_s=15.081 runtime_s=25.439 reason=stalled at Newton 13 (reduction ratio 0.925)
+=== adaptive continuation lambda=0.755211 step=0.035636 ===
+step_status=FAIL coeff_rel=1.992e-04 newton=12 gmres_total=12 factor_s=13.917 runtime_s=25.147 reason=stalled at Newton 12 (reduction ratio 0.997)
+=== adaptive continuation lambda=0.737393 step=0.017818 ===
+step_status=VALID_CONVERGED coeff_rel=1.963e-14 newton=6 gmres_total=6 factor_s=7.001 runtime_s=11.284 reason=
+=== adaptive continuation lambda=0.764120 step=0.026727 ===
+step_status=FAIL coeff_rel=1.241e-05 newton=7 gmres_total=7 factor_s=8.001 runtime_s=15.006 reason=line search failed at Newton 7
+=== adaptive continuation lambda=0.750756 step=0.013363 ===
+step_status=VALID_CONVERGED coeff_rel=1.949e-14 newton=5 gmres_total=5 factor_s=5.736 runtime_s=9.289 reason=
+=== adaptive continuation lambda=0.770802 step=0.020045 ===
+step_status=VALID_CONVERGED coeff_rel=1.864e-11 newton=7 gmres_total=7 factor_s=8.027 runtime_s=13.024 reason=
+=== adaptive continuation lambda=0.800869 step=0.030068 ===
+step_status=VALID_CONVERGED coeff_rel=2.013e-14 newton=6 gmres_total=6 factor_s=6.873 runtime_s=11.197 reason=
+=== adaptive continuation lambda=0.845971 step=0.045102 ===
+step_status=FAIL coeff_rel=1.700e-05 newton=4 gmres_total=4 factor_s=4.658 runtime_s=8.584 reason=line search failed at Newton 4
+=== adaptive continuation lambda=0.823420 step=0.022551 ===
+step_status=VALID_CONVERGED coeff_rel=2.036e-14 newton=8 gmres_total=8 factor_s=9.213 runtime_s=15.703 reason=
+=== adaptive continuation lambda=0.857247 step=0.033826 ===
+step_status=VALID_CONVERGED coeff_rel=2.968e-11 newton=11 gmres_total=11 factor_s=12.556 runtime_s=20.622 reason=
+=== adaptive continuation lambda=0.907986 step=0.050739 ===
+step_status=FAIL coeff_rel=1.076e-04 newton=13 gmres_total=13 factor_s=15.128 runtime_s=28.533 reason=stalled at Newton 13 (reduction ratio 0.998)
+=== adaptive continuation lambda=0.882616 step=0.025370 ===
+step_status=VALID_CONVERGED coeff_rel=1.461e-11 newton=5 gmres_total=5 factor_s=5.739 runtime_s=9.336 reason=
+=== adaptive continuation lambda=0.920671 step=0.038055 ===
+step_status=FAIL coeff_rel=3.811e-06 newton=10 gmres_total=10 factor_s=11.521 runtime_s=19.041 reason=stalled at Newton 10 (reduction ratio 0.951)
+=== adaptive continuation lambda=0.901644 step=0.019027 ===
+step_status=VALID_CONVERGED coeff_rel=1.967e-14 newton=6 gmres_total=6 factor_s=6.967 runtime_s=11.289 reason=
+=== adaptive continuation lambda=0.930184 step=0.028541 ===
+step_status=VALID_CONVERGED coeff_rel=1.811e-11 newton=4 gmres_total=4 factor_s=4.652 runtime_s=7.558 reason=
+=== adaptive continuation lambda=0.972996 step=0.042811 ===
+step_status=FAIL coeff_rel=1.889e-05 newton=6 gmres_total=6 factor_s=6.871 runtime_s=12.479 reason=stalled at Newton 6 (reduction ratio 0.985)
+=== adaptive continuation lambda=0.951590 step=0.021406 ===
+step_status=VALID_CONVERGED coeff_rel=1.996e-14 newton=5 gmres_total=5 factor_s=5.788 runtime_s=9.393 reason=
+=== adaptive continuation lambda=0.983699 step=0.032109 ===
+step_status=VALID_CONVERGED coeff_rel=1.991e-14 newton=7 gmres_total=7 factor_s=8.242 runtime_s=13.205 reason=
+=== adaptive continuation lambda=1.000000 step=0.016301 ===
+step_status=VALID_CONVERGED coeff_rel=2.065e-14 newton=9 gmres_total=9 factor_s=10.496 runtime_s=17.166 reason=
+=== adaptive continuation lambda=0.153846 step=0.153846 ===
+step_status=VALID_CONVERGED coeff_rel=2.978e-11 newton=6 gmres_total=6 factor_s=6.947 runtime_s=11.474 reason=
+=== adaptive continuation lambda=0.384615 step=0.230769 ===
+step_status=VALID_CONVERGED coeff_rel=2.000e-12 newton=6 gmres_total=6 factor_s=7.155 runtime_s=11.501 reason=
+=== adaptive continuation lambda=0.730769 step=0.346154 ===
+step_status=VALID_CONVERGED coeff_rel=1.878e-14 newton=8 gmres_total=8 factor_s=9.509 runtime_s=15.355 reason=
+=== adaptive continuation lambda=1.000000 step=0.269231 ===
+step_status=VALID_CONVERGED coeff_rel=2.659e-12 newton=8 gmres_total=8 factor_s=9.370 runtime_s=15.120 reason=
+
+--- STDERR ---
