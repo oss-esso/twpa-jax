@@ -1,0 +1,26 @@
+[
+  {
+    "tan_delta": 0.0001,
+    "n": 3,
+    "slope_db_per_db": -0.4307154146179575,
+    "slope_se_db_per_db": 0.062255514810592806,
+    "intercept_dbm": -85.41785301753846,
+    "fit_rms_db": 0.27461687775464716
+  },
+  {
+    "tan_delta": 0.001,
+    "n": 0,
+    "slope_db_per_db": null,
+    "slope_se_db_per_db": null,
+    "intercept_dbm": null,
+    "fit_rms_db": null
+  },
+  {
+    "tan_delta": 0.01,
+    "n": 0,
+    "slope_db_per_db": null,
+    "slope_se_db_per_db": null,
+    "intercept_dbm": null,
+    "fit_rms_db": null
+  }
+]

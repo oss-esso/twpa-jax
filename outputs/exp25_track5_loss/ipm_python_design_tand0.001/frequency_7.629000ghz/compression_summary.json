@@ -1,0 +1,134 @@
+{
+  "status": "VALID_SOLVED",
+  "stability_status": "NOT_CHECKED",
+  "stability_points": {},
+  "circuit_source": "outputs\\ipm_python_design_tand0.001",
+  "pump_freq_ghz": 7.540816326531111,
+  "signal_ghz": 7.629,
+  "pump_current_a": 7.231074707853736e-06,
+  "pump_converged": true,
+  "pump_current_jc_scale": 1.0,
+  "pump_solution_dir": null,
+  "source_port": 1,
+  "pump_port": 4,
+  "out_port": 2,
+  "diagnostic_port": 2,
+  "attenuation_db": 0.0,
+  "attenuation_source": "explicit",
+  "small_signal_gain_db": 5.484836698803326,
+  "small_signal_gain_vs_off_db": 5.484836698803326,
+  "pump_off_gain_db": -9.083645814585644,
+  "pump_reference_s21_real": -0.022484602750182738,
+  "pump_reference_s21_imag": -0.1315609427457603,
+  "p1db": null,
+  "p1db_method": "interpolated",
+  "p1db_interpolated_dbm": null,
+  "first_1db_crossing_dbm": null,
+  "number_of_crossings": 0,
+  "nonmonotonic_compression": true,
+  "compression_model_depletion_only_description": "dB gain from the linear-gain depletion trend; not an acceptance oracle",
+  "max_power_balance_rel_err": 2.698269916920592e-09,
+  "max_manley_rowe_rel_err": 0.5000155312622089,
+  "max_external_manley_rowe_rel_err": 0.6997656409343966,
+  "p1db_signal_current_a": null,
+  "p1db_input_dbm": null,
+  "p1db_output_dbm": null,
+  "p1db_pump_depletion_db": null,
+  "message": null,
+  "multitone_preconditioner": "real_coupled_fast",
+  "multitone_backend": "schur_cpu_mt",
+  "factor_backend": "pardiso",
+  "recovery": "ladder",
+  "basis": {
+    "tones": [
+      {
+        "h": 1,
+        "q": -1
+      },
+      {
+        "h": 1,
+        "q": 0
+      },
+      {
+        "h": 1,
+        "q": 1
+      },
+      {
+        "h": 2,
+        "q": -1
+      },
+      {
+        "h": 2,
+        "q": 0
+      },
+      {
+        "h": 2,
+        "q": 1
+      },
+      {
+        "h": 3,
+        "q": -1
+      },
+      {
+        "h": 3,
+        "q": 0
+      },
+      {
+        "h": 3,
+        "q": 1
+      },
+      {
+        "h": 4,
+        "q": -1
+      },
+      {
+        "h": 4,
+        "q": 0
+      },
+      {
+        "h": 4,
+        "q": 1
+      },
+      {
+        "h": 5,
+        "q": -1
+      },
+      {
+        "h": 5,
+        "q": 0
+      },
+      {
+        "h": 5,
+        "q": 1
+      },
+      {
+        "h": 6,
+        "q": -1
+      },
+      {
+        "h": 6,
+        "q": 0
+      },
+      {
+        "h": 6,
+        "q": 1
+      }
+    ],
+    "omega_p": 47380346347.00022,
+    "delta": -554074361.4728394,
+    "n_p": 26,
+    "n_delta": 6,
+    "real_reconstruction_factor": 2.0,
+    "phase_convention": "exp_plus_i_(h_theta_p_plus_q_theta_delta)"
+  },
+  "multitone_basis": "lattice",
+  "multitone_sidebands": 1,
+  "n_signal_power": 16,
+  "resource_budget_gb": 8.0,
+  "signal_frequency_range_ghz": [
+    7.629,
+    7.629
+  ],
+  "n_signal_freq": 1,
+  "signal_workers": 1
+}

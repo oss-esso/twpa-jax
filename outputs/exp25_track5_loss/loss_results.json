@@ -1,0 +1,92 @@
+[
+  {
+    "tan_delta": 0.0001,
+    "signal_ghz": 5.8,
+    "returncode": 0,
+    "status": "VALID_SOLVED",
+    "small_signal_gain_db": 4.943046848023236,
+    "p1db_input_dbm": -87.64559991327963,
+    "number_of_crossings": 1,
+    "max_power_balance_rel_err": 3.3722281887166344e-08
+  },
+  {
+    "tan_delta": 0.0001,
+    "signal_ghz": 6.943,
+    "returncode": 0,
+    "status": "VALID_SOLVED",
+    "small_signal_gain_db": 12.62021955896592,
+    "p1db_input_dbm": -90.47893324661295,
+    "number_of_crossings": 1,
+    "max_power_balance_rel_err": 2.819585312432446e-07
+  },
+  {
+    "tan_delta": 0.0001,
+    "signal_ghz": 7.629,
+    "returncode": 0,
+    "status": "VALID_SOLVED",
+    "small_signal_gain_db": 15.366227653036422,
+    "p1db_input_dbm": -92.31226657994628,
+    "number_of_crossings": 1,
+    "max_power_balance_rel_err": 1.5473596438059535e-07
+  },
+  {
+    "tan_delta": 0.001,
+    "signal_ghz": 5.8,
+    "returncode": 0,
+    "status": "VALID_SOLVED",
+    "small_signal_gain_db": 3.7579090460418514,
+    "p1db_input_dbm": null,
+    "number_of_crossings": 0,
+    "max_power_balance_rel_err": 3.8679138328254674e-09
+  },
+  {
+    "tan_delta": 0.001,
+    "signal_ghz": 6.943,
+    "returncode": 0,
+    "status": "VALID_SOLVED",
+    "small_signal_gain_db": 4.73340304081365,
+    "p1db_input_dbm": null,
+    "number_of_crossings": 0,
+    "max_power_balance_rel_err": 3.946443939509781e-10
+  },
+  {
+    "tan_delta": 0.001,
+    "signal_ghz": 7.629,
+    "returncode": 0,
+    "status": "VALID_SOLVED",
+    "small_signal_gain_db": 5.484836698803326,
+    "p1db_input_dbm": null,
+    "number_of_crossings": 0,
+    "max_power_balance_rel_err": 2.698269916920592e-09
+  },
+  {
+    "tan_delta": 0.01,
+    "signal_ghz": 5.8,
+    "returncode": 0,
+    "status": "NO_GAIN_AT_OPERATING_POINT",
+    "small_signal_gain_db": -0.002457129294326341,
+    "p1db_input_dbm": null,
+    "number_of_crossings": 0,
+    "max_power_balance_rel_err": 1.4233140690033754e-14
+  },
+  {
+    "tan_delta": 0.01,
+    "signal_ghz": 6.943,
+    "returncode": 0,
+    "status": "NO_GAIN_AT_OPERATING_POINT",
+    "small_signal_gain_db": 0.08791541185176954,
+    "p1db_input_dbm": null,
+    "number_of_crossings": 0,
+    "max_power_balance_rel_err": 4.373881568324422e-14
+  },
+  {
+    "tan_delta": 0.01,
+    "signal_ghz": 7.629,
+    "returncode": 0,
+    "status": "NO_GAIN_AT_OPERATING_POINT",
+    "small_signal_gain_db": 0.061670805107000515,
+    "p1db_input_dbm": null,
+    "number_of_crossings": 0,
+    "max_power_balance_rel_err": 1.5338074701891222e-14
+  }
+]
