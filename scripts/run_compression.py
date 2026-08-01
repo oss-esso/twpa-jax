@@ -160,6 +160,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Write branch profiles at small, mid, and near-P1dB signal powers.",
     )
     parser.add_argument(
+        "--spatial-profiles-all",
+        action="store_true",
+        help="Write branch profiles at the four selected saturation powers; requires --save-states all.",
+    )
+    parser.add_argument(
         "--multitone-preconditioner",
         choices=MULTITONE_PRECONDITIONERS,
         default="real_coupled_fast",
@@ -551,6 +556,7 @@ def _solve_compression(
     )
     states: dict[str, np.ndarray] = {}
     state_by_current: dict[float, np.ndarray] = {}
+    full_state_by_current: dict[float, np.ndarray] = {}
     points: list[dict[str, float]] = []
     previous = pump_seed_solve
     previous_previous = None
@@ -663,6 +669,7 @@ def _solve_compression(
             previous = state
             previous_current = float(current)
             state_by_current[float(current)] = state
+            full_state_by_current[float(current)] = state_full
         else:
             gain_db = float("nan")
             gain_vs_off_db = float("nan")
@@ -991,6 +998,34 @@ def _solve_compression(
             state = state_by_current.get(float(current))
             if state is not None:
                 states[f"signal_{index:04d}"] = state
+    if args.spatial_profiles_all:
+        if args.save_states != "all":
+            raise ValueError("--spatial-profiles-all requires --save-states all")
+        valid_currents = sorted(state_by_current)
+        if not valid_currents:
+            raise ValueError("no converged signal states available for spatial profiles")
+        if p1db_current_a is None:
+            raise ValueError("P1dB is required for --spatial-profiles-all")
+        targets = {
+            "smallest": valid_currents[0],
+            "decade_below_p1db": p1db_current_a / math.sqrt(10.0),
+            "p1db": p1db_current_a,
+            "largest_converged": valid_currents[-1],
+        }
+        for label, target_current in targets.items():
+            selected_current = min(
+                valid_currents,
+                key=lambda current: abs(math.log(current / target_current)),
+            )
+            for row in spatial_profiles(full_state_by_current[selected_current], basis, circuit):
+                spatial_rows.append(
+                    {
+                        "operating_point": label,
+                        "selected_signal_current_a": float(selected_current),
+                        "target_signal_current_a": float(target_current),
+                        **row,
+                    }
+                )
     return points, states, summary, spatial_rows
 
 
