@@ -23,6 +23,7 @@ class CompressionCurve:
     first_1db_crossing_dbm: float | None
     number_of_crossings: int
     nonmonotonic_compression: bool
+    failed_signal_power_dbm: tuple[float, ...] = ()
 
 
 def depletion_only_model(gain_linear: float, signal_power: float, pump_power: float) -> float:
@@ -66,19 +67,54 @@ def build_compression_curve(
     signal_power_dbm: list[float],
     gain_db: list[float],
     small_signal_gain_db: float,
+    statuses: list[str] | None = None,
 ) -> CompressionCurve:
     """Build curve metadata, including first crossing and nonmonotonicity."""
+    if statuses is None:
+        statuses = ["VALID_SOLVED"] * len(signal_power_dbm)
+    if len(statuses) != len(signal_power_dbm) or len(gain_db) != len(signal_power_dbm):
+        raise ValueError("signal powers, gains, and statuses must have equal lengths")
     points = [
-        CompressionPoint(float(power), float(gain), float(small_signal_gain_db - gain))
-        for power, gain in zip(signal_power_dbm, gain_db)
+        CompressionPoint(
+            float(power),
+            float(gain),
+            float(small_signal_gain_db - gain),
+            str(status),
+        )
+        for power, gain, status in zip(signal_power_dbm, gain_db, statuses)
     ]
     compression = np.asarray([point.compression_db for point in points])
-    crossings = np.flatnonzero(compression >= 1.0)
-    first = float(points[int(crossings[0])].signal_power_dbm) if crossings.size else None
+    adjacent_valid = [
+        index
+        for index in range(len(points) - 1)
+        if points[index].status == "VALID_SOLVED"
+        and points[index + 1].status == "VALID_SOLVED"
+        and np.isfinite(compression[index])
+        and np.isfinite(compression[index + 1])
+    ]
+    crossing_indices = [
+        index
+        for index in adjacent_valid
+        if compression[index] < 1.0 <= compression[index + 1]
+    ]
+    first = (
+        float(points[crossing_indices[0] + 1].signal_power_dbm)
+        if crossing_indices
+        else None
+    )
+    failed = tuple(
+        float(point.signal_power_dbm)
+        for point in points
+        if point.status != "VALID_SOLVED" or not np.isfinite(point.compression_db)
+    )
     return CompressionCurve(
         points=points,
         p1db_dbm=first,
         first_1db_crossing_dbm=first,
-        number_of_crossings=int(np.count_nonzero((compression[:-1] < 1.0) & (compression[1:] >= 1.0))),
-        nonmonotonic_compression=bool(np.any(np.diff(compression) < 0.0)),
+        number_of_crossings=len(crossing_indices),
+        nonmonotonic_compression=any(
+            compression[index + 1] < compression[index]
+            for index in adjacent_valid
+        ),
+        failed_signal_power_dbm=failed,
     )

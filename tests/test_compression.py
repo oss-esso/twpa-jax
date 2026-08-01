@@ -91,6 +91,16 @@ def test_curve_reports_nonmonotonic_compression() -> None:
     assert curve.nonmonotonic_compression
 
 
+def test_curve_does_not_bridge_a_failed_interior_point() -> None:
+    curve = build_compression_curve(
+        [-90.0, -85.0, -80.0],
+        [20.0, float("nan"), 18.0],
+        20.0,
+    )
+    assert curve.p1db_dbm is None
+    assert curve.number_of_crossings == 0
+
+
 def test_spatial_profiles_validate_chain_and_unwrap_phase() -> None:
     circuit, _metadata = _jpa()
     basis = build_three_tone_basis(10.0, 1.0)

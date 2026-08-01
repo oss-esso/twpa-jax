@@ -294,13 +294,15 @@ def _current_to_dbm(current_a: float, z0_ohm: float, attenuation_db: float) -> f
 
 
 def _interpolate_p1db_current(points: list[dict[str, object]]) -> float | None:
-    valid = [
-        point
-        for point in points
-        if point["status"] == "VALID_SOLVED"
-        and np.isfinite(float(point["compression_db"]))
-    ]
-    for left, right in zip(valid, valid[1:]):
+    adjacent_valid = (
+        (left, right)
+        for left, right in zip(points, points[1:])
+        if left["status"] == "VALID_SOLVED"
+        and right["status"] == "VALID_SOLVED"
+        and np.isfinite(float(left["compression_db"]))
+        and np.isfinite(float(right["compression_db"]))
+    )
+    for left, right in adjacent_valid:
         c_left = float(left["compression_db"])
         c_right = float(right["compression_db"])
         if c_left <= 1.0 <= c_right and c_right > c_left:
@@ -747,6 +749,7 @@ def _solve_compression(
         [float(point["signal_power_dbm"]) for point in points],
         [float(point["gain_vs_off_db"]) for point in points],
         small_signal_gain_db,
+        [str(point["status"]) for point in points],
     )
     p1db_current_a = None if no_gain else _interpolate_p1db_current(points)
     # Kept even when refinement overwrites p1db_current_a: the refined-versus-
@@ -755,12 +758,15 @@ def _solve_compression(
     # run-to-run variation into a comparison that has none.
     p1db_interpolated_current_a = p1db_current_a
     p1db_method = "interpolated"
-    valid_points = [
-        point for point in points
-        if point["status"] == "VALID_SOLVED"
-        and np.isfinite(float(point["compression_db"]))
-    ]
-    for left, right in zip(valid_points, valid_points[1:]):
+    adjacent_valid = (
+        (left, right)
+        for left, right in zip(points, points[1:])
+        if left["status"] == "VALID_SOLVED"
+        and right["status"] == "VALID_SOLVED"
+        and np.isfinite(float(left["compression_db"]))
+        and np.isfinite(float(right["compression_db"]))
+    )
+    for left, right in adjacent_valid:
         if (
             float(left["compression_db"]) < 1.0
             <= float(right["compression_db"])
@@ -921,6 +927,16 @@ def _solve_compression(
         ),
         "first_1db_crossing_dbm": curve.first_1db_crossing_dbm,
         "number_of_crossings": curve.number_of_crossings,
+        "n_requested_power_points": len(points),
+        "n_failed_power_points": len(curve.failed_signal_power_dbm),
+        "failed_signal_power_dbm": list(curve.failed_signal_power_dbm),
+        "failed_power_point_statuses": [
+            str(point["status"])
+            for point in points
+            if point["status"] != "VALID_SOLVED"
+            or not np.isfinite(float(point["compression_db"]))
+        ],
+        "p1db_degraded": bool(curve.failed_signal_power_dbm),
         "nonmonotonic_compression": curve.nonmonotonic_compression,
         "compression_model_depletion_only_description": (
             "dB gain from the linear-gain depletion trend; not an acceptance oracle"
