@@ -66,6 +66,10 @@ def test_power_balance_lossless_nonzero_state_and_manley_rowe() -> None:
     )
     assert result["power_balance_rel_err"] < 1e-12
     assert result["external_manley_rowe_evaluable"] == 0.0
+    assert "pump_net_power_w" in result
+    assert "pump_depletion_all_port_db" in result
+    assert result["pump_depletion_all_port_db"] is None
+    assert set(result["port_power_by_tone_w"]) >= {"h1_q-1", "h1_q0", "h1_q1"}
 
 
 def test_power_balance_lossy_closes_with_dissipation() -> None:
@@ -73,6 +77,7 @@ def test_power_balance_lossy_closes_with_dissipation() -> None:
     result = power_balance(state, basis, circuit)
     assert result["dissipated_power"] > 0.0
     assert result["power_balance_rel_err"] < 1e-12
+    assert np.isfinite(result["external_power_balance_rel_err"])
 
 
 def test_manley_rowe_ignores_pump_harmonic_conversion(monkeypatch) -> None:
