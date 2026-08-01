@@ -1,0 +1,59 @@
+{
+  "matched_z_ohm": 84.6,
+  "ripple": {
+    "frequency_start_ghz": 5.5,
+    "frequency_stop_ghz": 8.999999999999615,
+    "step_ghz": 0.0019999999999997797,
+    "s21_min_db": 1.434446142271279,
+    "s21_max_db": 4.524544661527306,
+    "s21_peak_to_peak_db": 3.0900985192560273,
+    "dominant_ripple_period_ghz": 0.1843157894736639,
+    "n_local_peaks": 52
+  },
+  "slope_fit": {
+    "n": 0,
+    "slope_db_per_db": null
+  },
+  "summaries": [
+    {
+      "signal_ghz": 5.8,
+      "status": "SUBPROCESS_FAILED",
+      "returncode": 1
+    },
+    {
+      "signal_ghz": 6.03,
+      "status": "SUBPROCESS_FAILED",
+      "returncode": 1
+    },
+    {
+      "signal_ghz": 6.257,
+      "status": "SUBPROCESS_FAILED",
+      "returncode": 1
+    },
+    {
+      "signal_ghz": 6.49,
+      "status": "SUBPROCESS_FAILED",
+      "returncode": 1
+    },
+    {
+      "signal_ghz": 6.71,
+      "status": "SUBPROCESS_FAILED",
+      "returncode": 1
+    },
+    {
+      "signal_ghz": 6.943,
+      "status": "SUBPROCESS_FAILED",
+      "returncode": 1
+    },
+    {
+      "signal_ghz": 7.29,
+      "status": "SUBPROCESS_FAILED",
+      "returncode": 1
+    },
+    {
+      "signal_ghz": 7.629,
+      "status": "SUBPROCESS_FAILED",
+      "returncode": 1
+    }
+  ]
+}
