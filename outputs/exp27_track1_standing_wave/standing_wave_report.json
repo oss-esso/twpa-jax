@@ -1,0 +1,75 @@
+{
+  "frequency_ghz": 7.629,
+  "z_line_ohm": 84.62771242910125,
+  "backward_forward_ratio_min": 0.09867218343652134,
+  "backward_forward_ratio_median": 0.3592968810566816,
+  "backward_forward_ratio_mean": 0.3568831633198096,
+  "backward_forward_ratio_max": 0.5327899599430109,
+  "backward_forward_ratio_quantiles": [
+    0.18565019330331156,
+    0.3592968810566816,
+    0.5038422312654006
+  ],
+  "branch_rows": 6,
+  "row_length": 418,
+  "branch_1254": {
+    "branch_index": 1254,
+    "row_index": 3,
+    "row_position": 0,
+    "start_node": 2422,
+    "stop_node": 2423,
+    "v_plus_abs": 34.663528406891636,
+    "v_minus_abs": 16.617362382855074,
+    "backward_forward_ratio": 0.47939038945473567
+  },
+  "delay": {
+    "lj_median_h": 1.239e-10,
+    "cg_diagonal_median_f": 1.73e-14,
+    "junction_capacitance_f": 1.45e-13,
+    "ground_capacitance_on_branch_nodes_median_f": 6.600000000000002e-14,
+    "z_line_from_branch_node_ground_cap_ohm": 43.32750543560899,
+    "n_branches": 2508,
+    "tau_cell_s": 1.4640594250234517e-12,
+    "tau_one_way_s": 3.6718610379588167e-09,
+    "fsr_one_over_tau_ghz": 0.27234146109077667,
+    "fsr_one_over_2tau_ghz": 0.13617073054538834,
+    "path_tau_one_way_s": 7.171915319745488e-09,
+    "path_fsr_one_over_tau_ghz": 0.1394327673176553,
+    "path_fsr_one_over_2tau_ghz": 0.06971638365882765,
+    "measured_ripple_period_ghz": 0.1843157894736639
+  },
+  "port_map": {
+    "1": 0,
+    "2": 3786,
+    "3": 3787,
+    "4": 6445
+  },
+  "port_branch_distance": {
+    "1": {
+      "node_index": 0,
+      "nearest_branch_start": 0,
+      "nearest_branch_stop": 0,
+      "is_josephson_branch_node": false
+    },
+    "2": {
+      "node_index": 3786,
+      "nearest_branch_start": 2507,
+      "nearest_branch_stop": 2507,
+      "is_josephson_branch_node": false
+    },
+    "3": {
+      "node_index": 3787,
+      "nearest_branch_start": 2507,
+      "nearest_branch_stop": 2507,
+      "is_josephson_branch_node": false
+    },
+    "4": {
+      "node_index": 6445,
+      "nearest_branch_start": 2507,
+      "nearest_branch_stop": 2507,
+      "is_josephson_branch_node": false
+    }
+  },
+  "chain_start_node": 479,
+  "chain_end_node": 3736
+}
