@@ -1,0 +1,14 @@
+=== continuation lambda=0.250000 ===
+step_status=VALID_CONVERGED coeff_rel=7.042e-13 newton=4 gmres_total=4 factor_s=0.823 runtime_s=1.258 reason=
+=== continuation lambda=0.500000 ===
+step_status=VALID_CONVERGED coeff_rel=7.267e-13 newton=5 gmres_total=5 factor_s=1.177 runtime_s=1.672 reason=
+=== continuation lambda=0.750000 ===
+step_status=VALID_CONVERGED coeff_rel=7.778e-13 newton=6 gmres_total=6 factor_s=1.347 runtime_s=1.963 reason=
+=== continuation lambda=1.000000 ===
+step_status=VALID_CONVERGED coeff_rel=7.374e-13 newton=8 gmres_total=8 factor_s=1.808 runtime_s=2.617 reason=
+=== adaptive continuation lambda=0.250000 step=0.250000 ===
+step_status=VALID_CONVERGED coeff_rel=1.217e-14 newton=4 gmres_total=4 factor_s=2.405 runtime_s=4.638 reason=
+=== adaptive continuation lambda=0.625000 step=0.375000 ===
+step_status=VALID_CONVERGED coeff_rel=5.411e-12 newton=5 gmres_total=5 factor_s=2.521 runtime_s=5.252 reason=
+=== adaptive continuation lambda=1.000000 step=0.375000 ===
+step_status=VALID_CONVERGED coeff_rel=1.533e-14 newton=13 gmres_total=13 factor_s=5.971 runtime_s=13.142 reason=

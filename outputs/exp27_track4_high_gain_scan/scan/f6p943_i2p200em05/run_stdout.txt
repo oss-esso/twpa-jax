@@ -1,0 +1,4 @@
+=== continuation lambda=0.250000 ===
+step_status=VALID_CONVERGED coeff_rel=7.644e-13 newton=7 gmres_total=7 factor_s=1.467 runtime_s=2.141 reason=
+=== continuation lambda=0.500000 ===
+step_status=FAIL coeff_rel=1.794e-01 newton=6 gmres_total=6 factor_s=1.250 runtime_s=2.191 reason=stalled at Newton 6 (reduction ratio 0.989)

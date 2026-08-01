@@ -1,0 +1,6 @@
+=== continuation lambda=0.250000 ===
+step_status=VALID_CONVERGED coeff_rel=6.926e-13 newton=5 gmres_total=5 factor_s=1.065 runtime_s=1.539 reason=
+=== continuation lambda=0.500000 ===
+step_status=VALID_CONVERGED coeff_rel=7.127e-13 newton=9 gmres_total=9 factor_s=2.214 runtime_s=3.384 reason=
+=== continuation lambda=0.750000 ===
+step_status=FAIL coeff_rel=5.070e-02 newton=3 gmres_total=3 factor_s=0.550 runtime_s=0.900 reason=line search failed at Newton 3
