@@ -1,0 +1,76 @@
+{
+  "frequency_start_ghz": 5.5,
+  "frequency_stop_ghz": 8.999999999999615,
+  "step_ghz": 0.0019999999999997797,
+  "n_points": 1751,
+  "s21_min_db": -2.041819762014558,
+  "s21_max_db": -0.002009406324186354,
+  "s21_peak_to_peak_db": 2.0398103556903715,
+  "dominant_ripple_period_ghz": 0.1843157894736639,
+  "target_locations": [
+    {
+      "frequency_ghz": 5.8,
+      "s21_pump_off_db": -0.2148341860138883,
+      "exp24b_gain_vs_off_db": 4.467883133293019,
+      "ripple_percentile": 75.44260422615649,
+      "nearest_extremum": "peak",
+      "nearest_extremum_frequency_ghz": 5.829999999999964
+    },
+    {
+      "frequency_ghz": 6.03,
+      "s21_pump_off_db": -0.21782041234029864,
+      "exp24b_gain_vs_off_db": 7.303655948183838,
+      "ripple_percentile": 75.214163335237,
+      "nearest_extremum": "trough",
+      "nearest_extremum_frequency_ghz": 6.091999999999935
+    },
+    {
+      "frequency_ghz": 6.257,
+      "s21_pump_off_db": -0.35476341770374076,
+      "exp24b_gain_vs_off_db": 8.788233915751558,
+      "ripple_percentile": 63.221016561964596,
+      "nearest_extremum": "peak",
+      "nearest_extremum_frequency_ghz": 6.209999999999922
+    },
+    {
+      "frequency_ghz": 6.49,
+      "s21_pump_off_db": -1.1379770058859462,
+      "exp24b_gain_vs_off_db": 12.869660230822157,
+      "ripple_percentile": 9.822958309537407,
+      "nearest_extremum": "trough",
+      "nearest_extremum_frequency_ghz": 6.465999999999894
+    },
+    {
+      "frequency_ghz": 6.71,
+      "s21_pump_off_db": -0.5187986319254969,
+      "exp24b_gain_vs_off_db": 13.609190634932698,
+      "ripple_percentile": 48.82924043403769,
+      "nearest_extremum": "peak",
+      "nearest_extremum_frequency_ghz": 6.58599999999988
+    },
+    {
+      "frequency_ghz": 6.943,
+      "s21_pump_off_db": -0.05552844102933308,
+      "exp24b_gain_vs_off_db": 13.636479953032588,
+      "ripple_percentile": 93.37521416333524,
+      "nearest_extremum": "peak",
+      "nearest_extremum_frequency_ghz": 6.959999999999839
+    },
+    {
+      "frequency_ghz": 7.29,
+      "s21_pump_off_db": -0.31852962182089334,
+      "exp24b_gain_vs_off_db": 15.51952823465637,
+      "ripple_percentile": 66.70474014848658,
+      "nearest_extremum": "peak",
+      "nearest_extremum_frequency_ghz": 7.331999999999798
+    },
+    {
+      "frequency_ghz": 7.629,
+      "s21_pump_off_db": -0.734947901825604,
+      "exp24b_gain_vs_off_db": 16.23655164403793,
+      "ripple_percentile": 21.18789263278127,
+      "nearest_extremum": "trough",
+      "nearest_extremum_frequency_ghz": 7.58599999999977
+    }
+  ]
+}
