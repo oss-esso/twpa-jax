@@ -30,7 +30,12 @@ from twpa_solver.multitone.compression_curve import (
     depletion_only_model,
     refine_p1db,
 )
-from twpa_solver.multitone.observables import power_balance, spatial_profiles, tone_s21
+from twpa_solver.multitone.observables import (
+    power_balance,
+    spatial_profile_summary,
+    spatial_profiles,
+    tone_s21,
+)
 from twpa_solver.multitone.preconditioners import (
     MULTITONE_PRECONDITIONERS,
     resolve_multitone_preconditioner,
@@ -1026,6 +1031,14 @@ def _solve_compression(
                         **row,
                     }
                 )
+    if spatial_rows:
+        summary["spatial_profile_summary"] = {}
+        for label in sorted({str(row["operating_point"]) for row in spatial_rows}):
+            label_rows = [row for row in spatial_rows if row["operating_point"] == label]
+            unique_rows = {int(row["branch_index"]): row for row in label_rows}
+            summary["spatial_profile_summary"][label] = spatial_profile_summary(
+                list(unique_rows.values())
+            )
     return points, states, summary, spatial_rows
 
 

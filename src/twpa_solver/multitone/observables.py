@@ -378,11 +378,41 @@ def spatial_profiles(
             "pump_flux_abs": float(abs(pump[branch])),
             "signal_flux_abs": float(abs(signal[branch])),
             "idler_flux_abs": float(abs(idler[branch])),
+            "pump_intensity_normalized": float(
+                abs(pump[branch]) ** 2 / max(np.max(np.abs(pump) ** 2), 1e-300)
+            ),
+            "signal_intensity_normalized": float(
+                abs(signal[branch]) ** 2 / max(np.max(np.abs(signal) ** 2), 1e-300)
+            ),
             "theta_rad": float(theta[branch]),
             "delta_k_eff_rad_per_cell": float(delta_k[branch]),
         }
         for branch in range(circuit.branch_count)
     ]
+
+
+def spatial_profile_summary(
+    rows: list[dict[str, float | int]],
+) -> dict[str, float | int | list[int] | None]:
+    """Summarize pump/signal/idler spatial overlap for profile rows."""
+    pump = np.asarray([float(row["pump_flux_abs"]) for row in rows])
+    signal = np.asarray([float(row["signal_flux_abs"]) for row in rows])
+    idler = np.asarray([float(row["idler_flux_abs"]) for row in rows])
+    denominator = np.linalg.norm(pump) * np.linalg.norm(signal) * np.linalg.norm(idler)
+    overlap = float(np.sum(pump * signal * idler) / max(denominator, 1e-300))
+    threshold = 0.1 * float(np.max(pump))
+    above = np.flatnonzero(pump >= threshold)
+    branch_range = (
+        [int(rows[int(above[0])]["branch_index"]), int(rows[int(above[-1])]["branch_index"])]
+        if above.size
+        else None
+    )
+    return {
+        "overlap_integral": overlap,
+        "pump_above_10pct_branch_range": branch_range,
+        "pump_above_10pct_count": int(above.size),
+        "pump_above_10pct_fraction": float(above.size / max(len(rows), 1)),
+    }
 
 
 def reference_states(

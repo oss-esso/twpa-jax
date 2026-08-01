@@ -14,6 +14,7 @@ from twpa_solver.multitone.observables import (
     reference_states,
     spatial_depletion_null,
     spatial_profiles,
+    spatial_profile_summary,
     tone_s21,
 )
 from twpa_solver.multitone.problem import FullMultiToneProblem
@@ -158,6 +159,26 @@ def test_spatial_profiles_validate_chain_and_unwrap_phase() -> None:
         (0, 1),
         (3, 4),
     ]
+
+
+def test_spatial_profiles_report_normalized_overlap() -> None:
+    basis = build_three_tone_basis(10.0, 1.0)
+    incidence = sp.csr_matrix(
+        np.array([[1.0, 0.0], [-1.0, 1.0], [0.0, -1.0]])
+    )
+    circuit = CircuitMatrices(
+        C=sp.eye(3, format="csr"),
+        G=sp.csr_matrix((3, 3)),
+        K=sp.eye(3, format="csr"),
+        Bphi=incidence,
+        Ic=np.ones(2),
+    )
+    state = np.tile(np.array([[0.0, 1.0, 2.0]], dtype=np.complex128), (basis.n_tones, 1))
+    profiles = spatial_profiles(state, basis, circuit)
+    assert profiles[0]["pump_intensity_normalized"] == pytest.approx(1.0)
+    summary = spatial_profile_summary(profiles)
+    assert summary["overlap_integral"] > 0.0
+    assert summary["pump_above_10pct_fraction"] == pytest.approx(1.0)
 
 
 def test_reference_states_execute_all_four_solve_paths() -> None:
