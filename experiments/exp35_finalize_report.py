@@ -1,128 +1,42 @@
-"""Consolidate exp35 numerical outputs into the requested comparison report."""
+"""Consolidate exp35's assembled-dispersion result."""
 
 from __future__ import annotations
 
-import csv
 import json
-import sys
 from pathlib import Path
 
-import numpy as np
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-
-from references.le_gal_2025_gain_compression.cme import (
-    envelopes_from_powers,
-    integrate_cme,
-    published_cme_parameters,
-)
-
-
-def _cme_gain(signal_ghz: float) -> float:
-    pump_power = 10.0 ** ((-78.4 - 30.0) / 10.0)
-    signal_power = 10.0 ** ((-115.0 - 30.0) / 10.0)
-    parameters = published_cme_parameters(signal_ghz * 1e9)
-    initial = envelopes_from_powers(pump_power, signal_power, parameters)
-    _, envelopes = integrate_cme(initial, parameters, points=401)
-    return float(10.0 * np.log10(abs(envelopes[1, -1] / initial[1]) ** 2))
-
-
-def main() -> None:
-    source = Path("references/le_gal_2025_gain_compression/hb_vs_cme_corrected.csv")
-    with source.open(newline="", encoding="utf-8") as stream:
-        rows = list(csv.DictReader(stream))
-    selected: list[dict[str, object]] = []
-    for frequency in (6.4, 8.6):
-        candidates = [row for row in rows if float(row["f_s_GHz"]) == frequency]
-        first = candidates[0]
-        hb_gain = float(first["hb_gain_vs_off_dB"])
-        cme_gain = _cme_gain(frequency)
-        selected.append({
-            "f_s_GHz": frequency,
-            "hb_gain_vs_off_dB": hb_gain,
-            "cme_gain_dB": cme_gain,
-            "absolute_difference_dB": abs(hb_gain - cme_gain),
-            "hb_status": "SOLVED",
-        })
-    with source.open("w", newline="", encoding="utf-8") as stream:
-        writer = csv.DictWriter(stream, fieldnames=list(selected[0]))
-        writer.writeheader()
-        writer.writerows(selected)
-
-    dispersion = json.loads(
-        Path("references/le_gal_2025_gain_compression/exp35_dispersion.json")
-        .read_text(encoding="utf-8")
+def main() -> int:
+    """Write the dispersion-only report after exp38 superseded its Kerr budget."""
+    source = Path(
+        "references/le_gal_2025_gain_compression/exp35_dispersion.json"
     )
-    table_rows = "".join(
-        f"| {row['f_s_GHz']:.1f} | {row['hb_gain_vs_off_dB']:.6f} | "
-        f"{row['cme_gain_dB']:.6f} | {row['absolute_difference_dB']:.6f} |\n"
-        for row in selected
-    )
+    dispersion = json.loads(source.read_text(encoding="utf-8"))
+    builder_max = float(dispersion["builder_max_relative_error"])
+    builder_rms = float(dispersion["builder_rms_relative_error"])
+    cme_max = float(dispersion["cme_max_relative_error"])
+    cme_rms = float(dispersion["cme_rms_relative_error"])
     report_text = f"""# exp35 Le Gal dispersion validation
 
-## Task 1 — assembled dispersion
+The Bloch eigenvalue is extracted from the assembled residual linearization:
+`K` plus the effective-SNAIL branch tangent. The builder ladder relation agrees
+with it; the older CME ground-capacitance relation does not.
 
-The single-cell Bloch eigenvalue was extracted from the interior stamped `C` and
-`K` entries of the 700-cell circuit built with published parameters. This is method
-B: it directly measures the matrices used by HB and avoids end-reflection phase
-contamination.
+| candidate | max relative deviation | RMS relative deviation |
+| --- | ---: | ---: |
+| builder ladder | {builder_max:.3e} | {builder_rms:.3e} |
+| old CME ground-capacitance form | {cme_max:.6f} | {cme_rms:.6f} |
 
-| candidate | max relative deviation | RMS relative deviation | verdict |
-|---|---:|---:|---|
-| builder ladder dispersion | {dispersion['builder_max_relative_error']:.3e} | {dispersion['builder_rms_relative_error']:.3e} | matches |
-| CME ground-capacitance form | {dispersion['cme_max_relative_error']:.6f} | {dispersion['cme_rms_relative_error']:.6f} | wrong for assembled circuit |
-
-The builder form is therefore the circuit dispersion; the CME form had `Cs` added
-to ground instead of stamped across each branch.
-
-## Task 2 — mismatch convention
-
-The convention adopted everywhere is `dk_total = 2*k_p - k_s - k_i + dk_nl`;
-small `|dk_total|` is the degenerate-4WM gain condition. At 6.0 GHz with a 7.5 GHz
-pump, the corrected linear value is `-1168.145 rad/m`; the opposite expression is
-`+1168.145 rad/m`.
-
-| file | expression | value at fs=6.0 GHz | action |
-|---|---|---:|---|
-| `references/.../cme.py` | `ks + ki - 2*kp` | +1168.145 rad/m | changed to `2*kp - ks - ki`; wave number corrected |
-| `scripts/reproduce_le_gal_2025_cme.py` | `2*kp - ks - ki` | -1168.145 rad/m | retained; uses measured assembled `L=866.372 pH` |
-| `scripts/le_gal_phase_budget.py` | `2*kp - ks - ki` | -1168.145 rad/m | retained; uses measured assembled `L=866.372 pH` |
-| `scripts/run_le_gal_2025_hb.py` | `2*phase[pump] - phase[signal] - phase[idler]` | signed spatial diagnostic | retained |
-
-## Task 3 — corrected phase budget
-
-Zero crossings occur at approximately 6.4273 and 8.5727 GHz.
-
-| fs (GHz) | dk_total (rad/m) | |dk_total| L (rad) |
-|---:|---:|---:|
-| 5.0 | -2680.311 | 16.323 |
-| 6.0 | -568.907 | 3.465 |
-| 8.0 | 463.372 | 2.822 |
-| 8.6 | -30.218 | 0.184 |
-
-The corrected line can phase-match at the published pump, but only in narrow
-frequency neighborhoods; 5–8 GHz examples are strongly incoherent.
-
-## Task 4 — corrected HB/CME comparison
-
-| fs (GHz) | HB gain vs off (dB) | CME gain (dB) | absolute difference (dB) |
-|---:|---:|---:|---:|
-{table_rows}
-The old 24.8 dB CME result is not reproduced after making the oracle use the
-assembled circuit dispersion and sign convention. No published parameter was
-changed and no measurement was used as a tuning target.
-
-## Artifacts
-
-- `experiments/exp35_le_gal_dispersion.py`
-- `references/le_gal_2025_gain_compression/exp35_dispersion.csv`
-- `references/le_gal_2025_gain_compression/exp35_dispersion.json`
-- `references/le_gal_2025_gain_compression/hb_vs_cme_corrected.csv`
+The phase-budget and HB/CME sections formerly in this report are superseded by
+`docs/development/exp38_le_gal_kerr_verdict.md`. exp38 found that the Le Gal
+builder had also stamped the SNAIL tangent into `K`, double-counting the branch
+stiffness in HB; therefore the old exp35 HB gain comparison is historical.
 """
     report = Path("docs/development/exp35_le_gal_dispersion_report.md")
     report.write_text(report_text, encoding="utf-8")
     print(report)
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

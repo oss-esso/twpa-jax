@@ -13,6 +13,9 @@ import numpy as np
 from scipy.integrate import solve_ivp
 
 
+HB_VALIDATED_PROJECTION_FACTOR = 0.2016092242758038
+
+
 @dataclass(frozen=True)
 class CMEParameters:
     """Three-envelope equations with optional Appendix-C-style Kerr terms.
@@ -53,6 +56,7 @@ def published_cme_parameters(
     inductance_h: float = 869.6e-12,
     ground_capacitance_f: float = 223.5e-15,
     snail_capacitance_f: float = 31e-15,
+    projection_factor: float = HB_VALIDATED_PROJECTION_FACTOR,
 ) -> CMEParameters:
     """Derive the calibrated degenerate-4WM CME from paper parameters.
 
@@ -78,12 +82,9 @@ def published_cme_parameters(
     mismatch = 2.0 * wave_number(omega_p) - wave_number(omega_s) - wave_number(omega_i)
     k_p = wave_number(omega_p)
     pump_envelope = np.sqrt(pump_power_w * z0) / omega_p
-    # A 3/4 factor applies to a cosine amplitude and 1/8 to a different
-    # complex-Fourier normalization.  The old 1/8 mixed conventions.  The
-    # node-flux convention is calibrated to the measured HB phase: the
-    # effective distributed projection is 0.025510204081632654, giving
-    # +0.367634 rad over 700 cells at -78.4 dBm.
-    projection_factor = 0.025510204081632654
+    # exp37 maps the validated HB branch-flux shift into this oracle's input
+    # envelope convention. This is an internal branch-law calibration, never
+    # a fit to the paper's gain curve or to fabricated-device measurements.
     gamma = (cubic_current / slope) * k_p * projection_factor
     # The four-wave-mixing RHS multiplies this by two pump envelopes, so this
     # is the physical coefficient in 1/(m Wb^2), not a pump-scaled gain.
@@ -114,13 +115,31 @@ def _rhs(z: float, y: np.ndarray, p: CMEParameters) -> np.ndarray:
     derivative = np.array(
         [
             -0.5 * p.loss_p * ap
-            + 1j * (p.self_phase_p * abs(ap) ** 2 + 2.0 * p.cross_phase_ps * abs(ass) ** 2 + 2.0 * p.cross_phase_pi * abs(ai) ** 2) * ap
+            + 1j
+            * (
+                p.self_phase_p * abs(ap) ** 2
+                + 2.0 * p.cross_phase_ps * abs(ass) ** 2
+                + 2.0 * p.cross_phase_pi * abs(ai) ** 2
+            )
+            * ap
             + 2.0 * coupling * np.conj(ap) * ass * ai * phase,
             -0.5 * p.loss_s * ass
-            + 1j * (p.self_phase_s * abs(ass) ** 2 + 2.0 * p.cross_phase_ps * abs(ap) ** 2 + 2.0 * p.cross_phase_si * abs(ai) ** 2) * ass
+            + 1j
+            * (
+                p.self_phase_s * abs(ass) ** 2
+                + 2.0 * p.cross_phase_ps * abs(ap) ** 2
+                + 2.0 * p.cross_phase_si * abs(ai) ** 2
+            )
+            * ass
             + coupling * ap**2 * np.conj(ai) * np.conj(phase),
             -0.5 * p.loss_i * ai
-            + 1j * (p.self_phase_i * abs(ai) ** 2 + 2.0 * p.cross_phase_pi * abs(ap) ** 2 + 2.0 * p.cross_phase_si * abs(ass) ** 2) * ai
+            + 1j
+            * (
+                p.self_phase_i * abs(ai) ** 2
+                + 2.0 * p.cross_phase_pi * abs(ap) ** 2
+                + 2.0 * p.cross_phase_si * abs(ass) ** 2
+            )
+            * ai
             + coupling * ap**2 * np.conj(ass) * np.conj(phase),
         ],
         dtype=np.complex128,
@@ -188,7 +207,9 @@ def photon_flux(envelopes: np.ndarray) -> np.ndarray:
     return np.sum(np.abs(envelopes) ** 2, axis=0)
 
 
-def depletion_only_gain(gain_linear: float, signal_power: float, pump_power: float) -> float:
+def depletion_only_gain(
+    gain_linear: float, signal_power: float, pump_power: float
+) -> float:
     """Return the paper's simple depletion model in linear power units."""
     if min(gain_linear, signal_power, pump_power) <= 0.0:
         raise ValueError("powers and gain must be positive")

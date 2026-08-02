@@ -1,119 +1,73 @@
-"""Test whether the HB pump self-phase is consistent with its own waveform.
-
-exp36 measured the pump self-phase on the Le Gal line as 0.18067 rad
-(dk_nl = 29.67 rad/m) at -78.4 dBm, and a hand estimate
-``dk_nl = (3/8)(g3/g1)<A^2>k_p`` predicted 151.7 rad/m -- a factor 5.11, close
-to the 4.90 by which the CME oracle's coupling was reduced to match the solver.
-That hand estimate carries assumptions about the phasor normalisation, so it
-cannot settle anything on its own.
-
-This replaces it with a check that is internal to the solver.  It takes the
-converged pump state, reconstructs the branch flux and branch current with the
-solver's *own* AFT synthesis and projection, forms the effective per-branch
-inductance the fundamental actually sees,
-
-    g_eff = I_1 / Psi_1,        L_eff = 1 / g_eff,
-
-and integrates the discrete-ladder wavenumber built from ``L_eff`` along the
-line.  The accumulated phase difference against a deeply linear pump is then
-compared with the phase exp36 measured directly at the ports.
-
-Both numbers come from the same converged state, so agreement means the solver
-is self-consistent and the hand estimate was wrong; disagreement localises the
-defect to the phase the solve actually accumulates.
-"""
+"""Validate the HB Kerr shift against the effective-SNAIL branch law."""
 
 from __future__ import annotations
 
 import argparse
 import json
 import math
+import sys
 from pathlib import Path
 
 import numpy as np
 
-from twpa_solver.builders.le_gal_2025 import (
-    build_effective_snail_line,
-    ladder_dispersion,
-)
-from twpa_solver.pump import (
-    HarmonicGrid,
-    HarmonicNewtonKrylovSolver,
-    NewtonKrylovSettings,
-)
-from twpa_solver.pump.problem import FullPumpProblem
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-PUMP_GHZ = 7.5
-PUMP_MODES = (1, 3, 5)
+from experiments.exp35_le_gal_dispersion import bloch_wavenumber
+from experiments.exp36_le_gal_kerr_phase import (
+    CELL_LENGTH_M,
+    PUMP_GHZ,
+    REFERENCE_PUMP_DBM,
+    solve_pump,
+)
+from twpa_solver.builders.le_gal_2025 import build_effective_snail_line
+from twpa_solver.core import CircuitMatrices
+from twpa_solver.pump import FullPumpProblem, measure_pump_nonlinear_wavenumber
+
 NOMINAL_PUMP_DBM = -78.4
-REFERENCE_PUMP_DBM = -118.4
-CELL_LENGTH_M = 8.7e-6
-GROUND_CAPACITANCE_F = 223.5e-15
-SNAIL_CAPACITANCE_F = 31e-15
-MEASURED_KERR_PHASE_RAD = 0.18066957963645902
 
 
-def settings() -> NewtonKrylovSettings:
-    """Solver settings copied from `scripts/run_le_gal_2025_hb.py`."""
-    return NewtonKrylovSettings(
-        newton_tol=1e-9, max_newton=25, gmres_rtol=1e-7, gmres_atol=0.0,
-        gmres_restart=30, gmres_maxiter=50, min_alpha=1.0 / 1024.0,
-        preconditioner="real_coupled", compute_time_residual=False,
-        verbose=False, continuation_predictor="none", jvp_mode="aft",
+def branch_law_prediction(
+    circuit: CircuitMatrices,
+    problem: FullPumpProblem,
+    state: np.ndarray,
+    wavenumber_rad_per_m: float,
+) -> dict[str, float]:
+    """Return the cubic branch-law prediction in the solver phasor convention."""
+    source_row = int(problem.source_row)
+    branch_coefficients = np.asarray(problem.BphiT @ state[source_row]).ravel()
+    peak_amplitude = 2.0 * np.abs(branch_coefficients)
+    mean_peak_squared = float(np.mean(peak_amplitude**2))
+    law = circuit.branch_law
+    equilibrium = np.asarray(law.equilibrium_flux, dtype=float)
+    phase_small = equilibrium / float(law.phi0)
+    phase_large = (equilibrium - law.phi_ext) / (3.0 * float(law.phi0))
+    g1 = float(
+        np.mean(
+            law.critical_current
+            / law.phi0
+            * (law.ratio * np.cos(phase_small) + np.cos(phase_large) / 3.0)
+        )
     )
-
-
-def solve_pump(circuit, pump_dbm: float) -> tuple[FullPumpProblem, np.ndarray]:
-    """Converged pump state at one drive power, with its problem."""
-    z0_ohm = float(circuit.metadata["port_impedance_ohm"])
-    omega_p = 2.0 * math.pi * PUMP_GHZ * 1e9
-    problem = FullPumpProblem(
-        C=circuit.C, G=circuit.G, K=circuit.K, Bphi=circuit.Bphi,
-        branch=circuit.branch_law,
-        grid=HarmonicGrid(
-            np.array(PUMP_MODES), nt=max(16, 2 * max(PUMP_MODES) + 2), omega=omega_p
-        ),
-        pump_node_index=circuit.port_to_index[1],
-        pump_current_a=math.sqrt(2.0 * 10.0 ** ((pump_dbm - 30.0) / 10.0) / z0_ohm),
+    g3 = float(
+        np.mean(
+            law.critical_current
+            / law.phi0**3
+            * (-law.ratio * np.cos(phase_small) - np.cos(phase_large) / 27.0)
+            / 6.0
+        )
     )
-    state, reports = HarmonicNewtonKrylovSolver(settings()).solve_continuation(
-        problem, continuation_steps=8
-    )
-    if not reports[-1].converged:
-        raise SystemExit(f"pump solve failed at {pump_dbm} dBm")
-    return problem, np.asarray(state)
-
-
-def effective_inductance(problem: FullPumpProblem, state: np.ndarray) -> np.ndarray:
-    """Per-branch inductance seen by the pump fundamental.
-
-    Uses the solver's own synthesis and positive-frequency projection, so no
-    phasor-normalisation convention is introduced here.
-    """
-    psi_t = problem.branch_flux_time(state)
-    total_t = psi_t + problem.dc_branch_flux[None, :]
-    current_t = problem.branch.current(total_t) - problem.branch.current(
-        problem.dc_branch_flux[None, :]
-    )
-    psi_coeffs = problem.grid.project_positive(psi_t)
-    current_coeffs = problem.grid.project_positive(current_t)
-    slope = current_coeffs[0] / psi_coeffs[0]
-    return 1.0 / slope.real
-
-
-def accumulated_phase(inductance: np.ndarray) -> float:
-    """Total pump phase along the line for a per-branch inductance profile."""
-    wavenumber = ladder_dispersion(
-        2.0 * math.pi * PUMP_GHZ * 1e9,
-        inductance_h=inductance,
-        snail_capacitance_f=SNAIL_CAPACITANCE_F,
-        ground_capacitance_f=GROUND_CAPACITANCE_F,
-        cell_length_m=CELL_LENGTH_M,
-    )
-    return float(np.sum(np.asarray(wavenumber) * CELL_LENGTH_M))
+    predicted = 3.0 / 8.0 * (g3 / g1) * mean_peak_squared * wavenumber_rad_per_m
+    return {
+        "g1_a_per_wb": g1,
+        "g3_a_per_wb3": g3,
+        "g3_over_g1_per_wb2": g3 / g1,
+        "mean_peak_branch_flux_squared_wb2": mean_peak_squared,
+        "dk_nl_analytic_rad_per_m": predicted,
+    }
 
 
 def main() -> int:
+    """Run the nominal-power self-consistency comparison."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--cells", type=int, default=700)
     parser.add_argument(
@@ -125,41 +79,82 @@ def main() -> int:
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
     circuit = build_effective_snail_line(
-        cells=args.cells, port_impedance_ohm=62.4,
+        cells=args.cells,
+        port_impedance_ohm=62.4,
         external_flux_on_small_junction=False,
     )
-    length_m = args.cells * CELL_LENGTH_M
-
-    problem_lo, state_lo = solve_pump(circuit, REFERENCE_PUMP_DBM)
-    problem_hi, state_hi = solve_pump(circuit, NOMINAL_PUMP_DBM)
-    inductance_lo = effective_inductance(problem_lo, state_lo)
-    inductance_hi = effective_inductance(problem_hi, state_hi)
-
-    phase_lo = accumulated_phase(inductance_lo)
-    phase_hi = accumulated_phase(inductance_hi)
-    predicted = phase_hi - phase_lo
-
-    relative_inductance_shift = float(
-        np.mean(inductance_hi / inductance_lo) - 1.0
+    reference_problem, reference_state = solve_pump(circuit, REFERENCE_PUMP_DBM)
+    _, pumped_state = solve_pump(circuit, NOMINAL_PUMP_DBM)
+    measurement = measure_pump_nonlinear_wavenumber(
+        reference_problem,
+        reference_state,
+        pumped_state,
+        cell_length_m=CELL_LENGTH_M,
+    )
+    bloch = float(
+        bloch_wavenumber(
+            circuit,
+            np.asarray([PUMP_GHZ * 1e9]),
+            CELL_LENGTH_M,
+        )[0]
+    )
+    analytic = branch_law_prediction(
+        circuit,
+        reference_problem,
+        pumped_state,
+        float(measurement["linear"]["wavenumber_rad_per_m"]),
+    )
+    measured = float(measurement["dk_nl_rad_per_m"])
+    predicted = float(analytic["dk_nl_analytic_rad_per_m"])
+    ratio = measured / predicted
+    pump_power_w = 10.0 ** ((NOMINAL_PUMP_DBM - 30.0) / 10.0)
+    cme_z0_ohm = math.sqrt(869.6e-12 / 223.5e-15)
+    cme_pump_coefficient_wb = math.sqrt(pump_power_w * cme_z0_ohm) / (
+        math.sqrt(2.0) * 2.0 * math.pi * PUMP_GHZ * 1e9
+    )
+    projection_denominator = (
+        float(analytic["g3_over_g1_per_wb2"])
+        * float(measurement["linear"]["wavenumber_rad_per_m"])
+        * cme_pump_coefficient_wb**2
+    )
+    implied_factor = measured / projection_denominator
+    unit_coefficients = np.zeros((3, 1), dtype=np.complex128)
+    unit_coefficients[reference_problem.source_row, 0] = 1.0
+    synthesized_peak = float(
+        np.max(np.abs(reference_problem.grid.synthesize(unit_coefficients)))
     )
     summary = {
         "cells": args.cells,
-        "length_m": length_m,
-        "linear_inductance_h_mean": float(np.mean(inductance_lo)),
-        "saturated_inductance_h_mean": float(np.mean(inductance_hi)),
-        "relative_inductance_shift": relative_inductance_shift,
-        "linear_phase_rad": phase_lo,
-        "saturated_phase_rad": phase_hi,
-        "predicted_kerr_phase_rad": predicted,
-        "predicted_dk_nl_rad_per_m": predicted / length_m,
-        "measured_kerr_phase_rad": MEASURED_KERR_PHASE_RAD,
-        "measured_dk_nl_rad_per_m": MEASURED_KERR_PHASE_RAD / length_m,
-        "ratio_predicted_over_measured": predicted / MEASURED_KERR_PHASE_RAD,
+        "pump_dbm": NOMINAL_PUMP_DBM,
+        "pump_ghz": PUMP_GHZ,
+        "bloch_wavenumber_rad_per_m": bloch,
+        "driven_linear_wavenumber_rad_per_m": float(
+            measurement["linear"]["wavenumber_rad_per_m"]
+        ),
+        "bloch_driven_relative_difference": abs(
+            float(measurement["linear"]["wavenumber_rad_per_m"]) - bloch
+        )
+        / bloch,
+        "measurement": measurement,
+        "analytic": analytic,
+        "measured_over_analytic": ratio,
+        "phasor_reconstruction": {
+            "convention": "x(t) = 2 Re sum_k X_k exp(+i k omega t)",
+            "unit_fundamental_coefficient_peak": synthesized_peak,
+            "branch_peak_amplitude_is": "2 * abs(branch_fundamental_coefficient)",
+            "cme_input_pump_coefficient_wb": cme_pump_coefficient_wb,
+        },
+        "hb_implied_projection_factor": implied_factor,
+        "projection_factor_over_one_eighth": implied_factor / (1.0 / 8.0),
+        "projection_factor_over_committed_old": (
+            implied_factor / 0.025510204081632654
+        ),
+        "agreement_percent": 100.0 * abs(measured - predicted) / abs(predicted),
     }
     (args.output_dir / "kerr_selfconsistency.json").write_text(
-        json.dumps(summary, indent=2), encoding="utf-8"
+        json.dumps(summary, indent=2) + "\n", encoding="utf-8"
     )
-    print("\n" + json.dumps(summary, indent=2))
+    print(json.dumps(summary, indent=2))
     return 0
 
 

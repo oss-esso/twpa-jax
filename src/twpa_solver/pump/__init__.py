@@ -9,6 +9,7 @@ from twpa_solver.pump.solver import (
     NewtonKrylovSettings,
     StepReport,
 )
+from twpa_solver.pump.wavenumber import measure_pump_nonlinear_wavenumber
 
 __all__ = [
     "PumpBasis",
@@ -19,4 +20,5 @@ __all__ = [
     "HarmonicNewtonKrylovSolver",
     "NewtonKrylovSettings",
     "StepReport",
+    "measure_pump_nonlinear_wavenumber",
 ]

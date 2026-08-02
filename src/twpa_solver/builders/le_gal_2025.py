@@ -93,7 +93,9 @@ def build_effective_snail_line(
     # Double precision evaluation of the two cancelling sine terms bottoms
     # out around 1e-17 A at the published half-flux point.
     if equilibrium_residual >= 1e-16 * critical_current_a:
-        raise ValueError(f"SNAIL equilibrium residual too large: {equilibrium_residual}")
+        raise ValueError(
+            f"SNAIL equilibrium residual too large: {equilibrium_residual}"
+        )
     if np.any(law.tangent(np.zeros((1, n))) <= 0.0):
         raise ValueError("SNAIL equilibrium is not on a stable branch")
     linear_inductance = 1.0 / law.tangent(np.zeros((1, n)))[0]
@@ -104,7 +106,10 @@ def build_effective_snail_line(
     bphi = bphi.tocsr()
     c = bphi @ sp.diags(np.full(n, snail_capacitance_f)) @ bphi.T
     c = c + sp.eye(node_count, format="csr") * ground_capacitance_f
-    k = (bphi @ sp.diags(1.0 / linear_inductance) @ bphi.T).tocsr()
+    # K contains only linear branches. The effective SNAIL stiffness enters
+    # through Bphi @ i_branch in every nonlinear residual and tangent. Stamping
+    # its small-signal slope here as well would count it twice.
+    k = sp.csr_matrix((node_count, node_count), dtype=float)
     g = sp.eye(node_count, format="csr") * shunt_conductance_s
     g = g.tolil()
     g[0, 0] += 1.0 / port_impedance_ohm

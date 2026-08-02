@@ -1,18 +1,17 @@
 """Scan the published physical degenerate-4WM CME oracle.
 
-The phase mismatch is recomputed for every signal frequency using the exact
-discrete ladder dispersion.  The nonlinear contribution is +591.34 rad/m,
-from ``(g3/g1) * k_p * |A_p|^2 / 8`` with the calibrated pump amplitude and
-the positive published ``g3/g1`` sign.  The emitted gain is the signal power
-gain, and ``photon_flux_rel_err`` is checked against the lossless invariant.
+The phase mismatch and nonlinear coefficients come from
+``published_cme_parameters`` with exp38's validated projection factor. The
+emitted gain is the signal power gain, and ``photon_flux_rel_err`` checks the
+lossless invariant.
 """
 
 from __future__ import annotations
 
 import argparse
 import csv
+import json
 import sys
-from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -25,10 +24,8 @@ from references.le_gal_2025_gain_compression.cme import (
     photon_flux,
     published_cme_parameters,
 )
-from twpa_solver.builders.le_gal_2025 import ladder_dispersion
-
-
 def main() -> int:
+    """Scan and write the validated CME oracle."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--output", type=Path, default=Path(
         "references/le_gal_2025_gain_compression/cme_gain_vs_frequency.csv"
@@ -37,32 +34,20 @@ def main() -> int:
     args = parser.parse_args()
 
     frequencies = np.linspace(4.0, 11.0, args.signal_points)
-    pump_hz = 7.5e9
     pump_power_w = 10.0 ** ((-78.4 - 30.0) / 10.0)
     signal_power_w = 10.0 ** ((-115.0 - 30.0) / 10.0)
-    nonlinear_mismatch = 591.34
+    verdict = json.loads(
+        Path(
+            "references/le_gal_2025_gain_compression/exp38_kerr_verdict.json"
+        ).read_text(encoding="utf-8")
+    )
+    nonlinear_mismatch = float(verdict["exp37_dk_nl_rad_per_m"])
     rows: list[dict[str, object]] = []
     for signal_ghz in frequencies:
         signal_hz = float(signal_ghz * 1e9)
         params = published_cme_parameters(signal_hz)
-        k = lambda hz: ladder_dispersion(
-            2.0 * np.pi * np.asarray(hz),
-            inductance_h=866.372e-12,
-            snail_capacitance_f=31e-15,
-            ground_capacitance_f=223.5e-15,
-            cell_length_m=8.7e-6,
-        )
-        kp = float(k(np.array([pump_hz]))[0])
-        ks, ki = k(np.array([signal_hz, 15.0e9 - signal_hz]))
-        dk_lin = 2.0 * kp - float(ks) - float(ki)
+        dk_lin = float(params.phase_mismatch)
         dk_total = dk_lin + nonlinear_mismatch
-        # ``dk_total`` already carries the calibrated pump Kerr phase shift;
-        # leave the envelope SPM/XPM slots off here to avoid counting it twice.
-        params = replace(
-            params, phase_mismatch=dk_total,
-            self_phase_p=0.0, self_phase_s=0.0, self_phase_i=0.0,
-            cross_phase_ps=0.0, cross_phase_pi=0.0, cross_phase_si=0.0,
-        )
         initial = envelopes_from_powers(pump_power_w, signal_power_w, params)
         try:
             _, envelopes = integrate_cme(initial, params, points=401)
