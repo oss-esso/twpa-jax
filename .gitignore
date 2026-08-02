@@ -1,9 +1,34 @@
+# Python
 __pycache__/
 *.py[cod]
-.pytest_cache/
-.pytest_tmp/
-pytest-of-*/
 *.egg-info/
-outputs/
-industrial_completion_outputs/
+
+# Test scratch
+.pytest_cache/
+.pytest_tmp*/
+pytest-of-*/
 references/**/__pycache__/
+
+# Generated run artifacts
+outputs/
+diagnostics/
+plots/
+logs/
+industrial_completion_outputs/
+
+# Scratch and temp run directories
+tmp*/
+*.tmp
+
+# Editor backups and pre-edit snapshots
+*.before_*
+*~
+* copy.*
+
+# LaTeX build artifacts
+*.aux
+*.toc
+*.out
+*.fls
+*.fdb_latexmk
+*.synctex.gz
