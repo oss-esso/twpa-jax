@@ -30,9 +30,23 @@ Best match **fp = 7.100 GHz, Ip = 7.2311 µA, rms 1.247 dB**, confirmed at
 0.02 GHz resolution. The pump frequency lands **0.156 GHz** from the measured
 one, at the production current.
 
-**The ~7.9 dB pump-power gap is real, not calibration.** The measured on-chip
-pump was confirmed to 0.7 dB by two independent routes (−65.98 dBm inferred
-from the compression data, −66.7 dBm from the line budget).
+> **Do not present the pump-power gap.** The often-quoted "~7.9 dB" is not
+> established. Two separate conventions are unresolved:
+>
+> 1. **Norton factor.** All four ports carry a 50 ohm shunt, so the drive is a
+>    Norton source and the available power is `I²Z₀/8`, not the `I²Z₀/2` the
+>    conversion uses. The solver's own observable agrees:
+>    `pump_outgoing_power_w` = 3.26795e-10 W = **−64.86 dBm**, exactly `I²Z₀/8`
+>    and **6.02 dB** below the quoted −58.84 dBm. Against the depletion-inferred
+>    −65.98 dBm the like-for-like gap would be **~1.1 dB**.
+> 2. **Line loss.** The Themis pump-line figure (45.7 dB) is undocumented and
+>    sits 11 dB from the repo's own measured `loss_A10` model (34.54 dB at
+>    7.1 GHz). It does not enter the key result — the depletion inversion
+>    derives the on-chip pump from the compression data itself — but it should
+>    not be quoted as a measurement.
+>
+> The measured on-chip pump of **−65.98 dBm** (depletion inversion) is solid and
+> depends only on the 72.5 dB signal-line loss.
 
 ### Gain band — `2c_gain_band.png` (`outputs/exp34_gain_band`)
 
@@ -52,10 +66,13 @@ measured 3.2 dB, so adjacent frequencies flip the sign of the comparison:
 −2.423 dB **below**. A 22 MHz grid offset moves model gain 0.5 dB. Always use
 the ripple-averaged envelope.
 
-### Compression — `2c_compression_vs_themis.png` (`outputs/exp32_themis_curve_match`)
+### Compression — `2c_compression_vs_themis.png`
 
-Full signal-power sweeps at the matched operating point, S=10, against the
-Themis 105C5 cuts.
+Seven frequencies at the matched operating point, S=10, against the Themis
+105C5 cuts. Long sweeps at 5.296 / 6.540 / 7.052 GHz (exp32), short probes at
+6.300 / 6.440 / 6.640 / 6.800 GHz (exp33), and the exp33 deep run that carried
+6.540 GHz past the continuation wall to −85 dBm. Solid = measurement,
+dashed with open circles = model, one colour per frequency.
 
 | fs GHz | model G0 | meas G0 | model P1dB | meas P1dB | ΔP1dB |
 | ---: | ---: | ---: | ---: | ---: | ---: |
@@ -124,8 +141,11 @@ along the line the compression is generated.
 
 ## 3. What is honestly still open
 
-- **7.9 dB pump gap on 2c.** Model needs that much more pump than hardware for
-  the same gain. Confirmed not to be calibration.
+- **Pump-power gap on 2c — size unknown.** Somewhere between ~1.1 and ~7.9 dB
+  depending on the Norton factor above. Needs settling before it is quoted.
+- **Model runs used no pump-line loss at all** (`--attenuation-db 0`). New runs
+  must use `default_loss_model()` (the measured `loss_A10` fit, 34.54 dB at
+  7.1 GHz), since all future measurements use the current cabling.
 - **Absolute gain 0.92 dB low on 2c**, band shape otherwise correct.
 - **Mean +2.86 dB late compression on 2c**, sign consistent with fabrication
   defects the ideal model does not carry.
