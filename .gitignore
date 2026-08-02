@@ -1,34 +1,102 @@
-# Python
+# =============================================================================
+# main-branch .gitignore
+#
+# main carries the production surface only: solver, designs, docs, workflows,
+# scripts, tests. Development material lives on the dev branch.
+#
+# Several rules below are allowlists (ignore a directory, then re-include the
+# specific paths main keeps). They exist because `git add -A` from a working
+# tree that also has dev content would otherwise silently re-commit ~270 files
+# that were deliberately removed. Ignoring never affects already-tracked files,
+# so checking out dev still works normally.
+# =============================================================================
+
+# --- Python ------------------------------------------------------------------
 __pycache__/
 *.py[cod]
 *.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+env/
+.ipynb_checkpoints/
 
-# Test scratch
+# --- Test scratch ------------------------------------------------------------
 .pytest_cache/
 .pytest_tmp*/
 pytest-of-*/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
 references/**/__pycache__/
 
-# Generated run artifacts
+# --- Generated run artifacts -------------------------------------------------
+# Solver output. Never commit these: an old output directory is not a design,
+# and treating one as such is how several campaigns ended up on a stale circuit.
 outputs/
 diagnostics/
 plots/
 logs/
 industrial_completion_outputs/
 
-# Scratch and temp run directories
+# --- Scratch and temp run directories ----------------------------------------
 tmp*/
+tmp_*
 *.tmp
 
-# Editor backups and pre-edit snapshots
+# --- Stray root-level data ---------------------------------------------------
+# Data belongs in docs/ or an output directory, never loose at the root.
+/*.csv
+/*.npz
+/*.npy
+/*.jl
+
+# --- Editor backups and pre-edit snapshots -----------------------------------
 *.before_*
+*.orig
+*.rej
 *~
 * copy.*
+*.swp
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
 
-# LaTeX build artifacts
+# --- LaTeX build artifacts ---------------------------------------------------
 *.aux
 *.toc
 *.out
 *.fls
 *.fdb_latexmk
 *.synctex.gz
+# Scoped to docs/ so it catches LaTeX build logs without shadowing the tracked
+# run logs kept as reference artifacts under references/.
+docs/**/*.log
+
+# --- experiments/ : allowlist ------------------------------------------------
+# main keeps only the modules the production drivers and tests actually import.
+# Everything else in this directory is history and lives on dev.
+experiments/*
+!experiments/pump_solvers/
+!experiments/TWPA_THEORY.pdf
+!experiments/exp07_python_ipm_design_builder.py
+!experiments/exp08_full_ipm_pump_solve.py
+!experiments/exp09_full_ipm_gain_from_pump.py
+!experiments/exp10_full_ipm_pump_map_warmstart.py
+!experiments/exp10_jc_doc_python_design_builders.py
+!experiments/exp20_multitone_compression.py
+!experiments/exp22_spatial_attribution.py
+!experiments/pump_basis.py
+!experiments/ripple_common.py
+
+# --- docs/development/ : data only -------------------------------------------
+# This directory holds measurement data (Themis .mat/.npy cubes) and figures.
+# The development write-ups that used to sit alongside them are dev-only, so
+# markdown here is ignored; user-facing documentation belongs in docs/ proper.
+docs/development/**/*.md
+docs/development/**/*.html
+docs/development/**/*.zip
