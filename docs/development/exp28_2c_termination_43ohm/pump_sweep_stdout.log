@@ -1,0 +1,83 @@
+=== continuation lambda=0.250000 ===
+step_status=VALID_CONVERGED coeff_rel=1.392e-11 newton=3 gmres_total=3 factor_s=0.509 runtime_s=0.731 reason=
+=== continuation lambda=0.500000 ===
+step_status=VALID_CONVERGED coeff_rel=7.326e-13 newton=4 gmres_total=4 factor_s=0.713 runtime_s=1.051 reason=
+=== continuation lambda=0.750000 ===
+step_status=VALID_CONVERGED coeff_rel=7.822e-13 newton=5 gmres_total=5 factor_s=0.894 runtime_s=1.261 reason=
+=== continuation lambda=1.000000 ===
+step_status=VALID_CONVERGED coeff_rel=7.020e-13 newton=6 gmres_total=6 factor_s=1.051 runtime_s=1.492 reason=
+=== adaptive continuation lambda=0.250000 step=0.250000 ===
+step_status=VALID_CONVERGED coeff_rel=1.390e-11 newton=3 gmres_total=3 factor_s=1.010 runtime_s=2.150 reason=
+=== adaptive continuation lambda=0.625000 step=0.375000 ===
+step_status=VALID_CONVERGED coeff_rel=5.380e-11 newton=4 gmres_total=4 factor_s=1.325 runtime_s=2.868 reason=
+=== adaptive continuation lambda=1.000000 step=0.375000 ===
+step_status=VALID_CONVERGED coeff_rel=3.439e-13 newton=6 gmres_total=6 factor_s=2.195 runtime_s=4.678 reason=
+[run_compression] pump depletion at P1dB: single-port=-6.69491 dB, all-port=-0.342475 dB, net_delta=2.40767e-11 W
+=== continuation lambda=0.250000 ===
+step_status=VALID_CONVERGED coeff_rel=6.972e-11 newton=3 gmres_total=3 factor_s=0.528 runtime_s=0.777 reason=
+=== continuation lambda=0.500000 ===
+step_status=VALID_CONVERGED coeff_rel=7.605e-13 newton=4 gmres_total=4 factor_s=0.746 runtime_s=1.039 reason=
+=== continuation lambda=0.750000 ===
+step_status=VALID_CONVERGED coeff_rel=7.855e-13 newton=5 gmres_total=5 factor_s=0.880 runtime_s=1.226 reason=
+=== continuation lambda=1.000000 ===
+step_status=VALID_CONVERGED coeff_rel=3.438e-11 newton=6 gmres_total=6 factor_s=1.089 runtime_s=1.516 reason=
+=== adaptive continuation lambda=0.250000 step=0.250000 ===
+step_status=VALID_CONVERGED coeff_rel=6.971e-11 newton=3 gmres_total=3 factor_s=1.110 runtime_s=2.579 reason=
+=== adaptive continuation lambda=0.625000 step=0.375000 ===
+step_status=VALID_CONVERGED coeff_rel=1.216e-14 newton=5 gmres_total=5 factor_s=1.873 runtime_s=4.173 reason=
+=== adaptive continuation lambda=1.000000 step=0.375000 ===
+step_status=VALID_CONVERGED coeff_rel=1.313e-11 newton=7 gmres_total=7 factor_s=2.502 runtime_s=6.089 reason=
+[run_compression] pump depletion at P1dB: single-port=-1.86311 dB, all-port=-0.12588 dB, net_delta=1.14582e-11 W
+=== continuation lambda=0.250000 ===
+step_status=VALID_CONVERGED coeff_rel=6.803e-13 newton=4 gmres_total=4 factor_s=0.651 runtime_s=0.919 reason=
+=== continuation lambda=0.500000 ===
+step_status=VALID_CONVERGED coeff_rel=3.165e-12 newton=4 gmres_total=4 factor_s=0.647 runtime_s=0.910 reason=
+=== continuation lambda=0.750000 ===
+step_status=VALID_CONVERGED coeff_rel=1.828e-11 newton=5 gmres_total=5 factor_s=0.809 runtime_s=1.146 reason=
+=== continuation lambda=1.000000 ===
+step_status=VALID_CONVERGED coeff_rel=6.556e-13 newton=10 gmres_total=10 factor_s=1.583 runtime_s=2.244 reason=
+=== adaptive continuation lambda=0.250000 step=0.250000 ===
+step_status=VALID_CONVERGED coeff_rel=1.103e-14 newton=4 gmres_total=4 factor_s=1.285 runtime_s=2.835 reason=
+=== adaptive continuation lambda=0.625000 step=0.375000 ===
+step_status=VALID_CONVERGED coeff_rel=7.198e-14 newton=5 gmres_total=5 factor_s=1.600 runtime_s=3.515 reason=
+=== adaptive continuation lambda=1.000000 step=0.375000 ===
+step_status=VALID_CONVERGED coeff_rel=1.393e-14 newton=9 gmres_total=9 factor_s=2.943 runtime_s=6.418 reason=
+=== adaptive continuation lambda=0.150000 step=0.150000 ===
+step_status=VALID_CONVERGED coeff_rel=3.515e-11 newton=7 gmres_total=7 factor_s=2.413 runtime_s=5.090 reason=
+=== adaptive continuation lambda=0.375000 step=0.225000 ===
+step_status=VALID_CONVERGED coeff_rel=1.816e-14 newton=8 gmres_total=8 factor_s=2.704 runtime_s=5.804 reason=
+=== adaptive continuation lambda=0.712500 step=0.337500 ===
+step_status=VALID_CONVERGED coeff_rel=2.088e-14 newton=8 gmres_total=8 factor_s=2.650 runtime_s=5.840 reason=
+=== adaptive continuation lambda=1.000000 step=0.287500 ===
+step_status=VALID_CONVERGED coeff_rel=1.907e-14 newton=6 gmres_total=6 factor_s=1.926 runtime_s=4.215 reason=
+[run_compression] pump depletion at P1dB: single-port=-1.21649 dB, all-port=-0.0937111 dB, net_delta=9.94751e-12 W
+=== continuation lambda=0.250000 ===
+step_status=VALID_CONVERGED coeff_rel=6.609e-13 newton=4 gmres_total=4 factor_s=0.654 runtime_s=0.918 reason=
+=== continuation lambda=0.500000 ===
+step_status=VALID_CONVERGED coeff_rel=9.008e-12 newton=4 gmres_total=4 factor_s=0.642 runtime_s=0.895 reason=
+=== continuation lambda=0.750000 ===
+step_status=VALID_CONVERGED coeff_rel=7.355e-13 newton=6 gmres_total=6 factor_s=0.965 runtime_s=1.333 reason=
+=== continuation lambda=1.000000 ===
+step_status=VALID_CONVERGED coeff_rel=8.905e-13 newton=8 gmres_total=8 factor_s=1.288 runtime_s=1.784 reason=
+=== adaptive continuation lambda=0.250000 step=0.250000 ===
+step_status=VALID_CONVERGED coeff_rel=1.130e-14 newton=4 gmres_total=4 factor_s=1.349 runtime_s=2.887 reason=
+=== adaptive continuation lambda=0.625000 step=0.375000 ===
+step_status=VALID_CONVERGED coeff_rel=7.067e-13 newton=5 gmres_total=5 factor_s=1.631 runtime_s=3.567 reason=
+=== adaptive continuation lambda=1.000000 step=0.375000 ===
+step_status=VALID_CONVERGED coeff_rel=1.391e-14 newton=10 gmres_total=10 factor_s=3.286 runtime_s=7.333 reason=
+[run_compression] pump depletion at P1dB: single-port=-1.03208 dB, all-port=-0.0853969 dB, net_delta=9.67941e-12 W
+=== continuation lambda=0.250000 ===
+step_status=VALID_CONVERGED coeff_rel=6.644e-13 newton=4 gmres_total=4 factor_s=0.641 runtime_s=0.907 reason=
+=== continuation lambda=0.500000 ===
+step_status=VALID_CONVERGED coeff_rel=1.933e-11 newton=4 gmres_total=4 factor_s=0.641 runtime_s=0.900 reason=
+=== continuation lambda=0.750000 ===
+step_status=VALID_CONVERGED coeff_rel=7.400e-13 newton=6 gmres_total=6 factor_s=0.978 runtime_s=1.369 reason=
+=== continuation lambda=1.000000 ===
+step_status=VALID_CONVERGED coeff_rel=6.590e-13 newton=9 gmres_total=9 factor_s=1.445 runtime_s=2.020 reason=
+=== adaptive continuation lambda=0.250000 step=0.250000 ===
+step_status=VALID_CONVERGED coeff_rel=1.112e-14 newton=4 gmres_total=4 factor_s=1.301 runtime_s=2.844 reason=
+=== adaptive continuation lambda=0.625000 step=0.375000 ===
+step_status=VALID_CONVERGED coeff_rel=3.534e-12 newton=5 gmres_total=5 factor_s=1.596 runtime_s=3.519 reason=
+=== adaptive continuation lambda=1.000000 step=0.375000 ===
+step_status=VALID_CONVERGED coeff_rel=1.421e-12 newton=9 gmres_total=9 factor_s=2.917 runtime_s=6.424 reason=
+[run_compression] pump depletion at P1dB: single-port=-0.919738 dB, all-port=-0.0817608 dB, net_delta=9.70122e-12 W
