@@ -665,3 +665,32 @@ The corrected Level-2 campaign currently measures a passive or weakly
 deamplifying effective line at the sampled points; it has not reproduced the
 paper's two gain lobes or a finite P1dB. This is a measured negative result,
 not evidence against the paper.
+
+## Component profiles and scatter
+
+The IPM builder supports ordered per-cell `Lj` and `Cg` profiles and
+independent multiplicative `Lj`, `Cj`, and `Cg` scatter, all on the JTL cell
+index (2508 on 2c). See `docs/development/component_profiles_and_scatter.md`
+for the shape catalogue, selection rules, Cg boundary-halving mapping, and the
+stable RNG stream contract.
+
+There is **no** `Cj` profile: nominal `Cj` is derived from the `Lj` profile so
+the plasma frequency stays constant. Independent `Cj` *scatter* intentionally
+breaks that, and must not be "corrected" to track `Lj`. Scatter sigma is a
+fraction of each cell's own nominal, and the `Lj` stream is bit-identical to
+the pre-profile `apply_lj_scatter` at the same seed.
+
+`sine`/`cosine` are the one place `start`/`end` are not the first and last
+values — for those two they bound the oscillation envelope, since periodic and
+endpoint-anchored are mutually exclusive.
+
+`build_variant_design` re-emits a stored design with a profile applied. Its
+topology gate (`assert_source_topology`) must run on a **nominal** rebuild;
+gating the profiled netlist against the source would reject every real variant.
+`designs/ipm_2c_fixed` passes at 16312/16312 elements, `C/G/K/Bphi` maxdiff
+0.0, with `--coupler-mode cached` (`ideal`/`optimize` do not reproduce it).
+Other design dirs must be checked before use as variant sources.
+
+Gates: `tests/test_component_profiles.py`, `test_component_scatter.py`,
+`test_ipm_role_tags.py`, `test_ipm_component_plan.py`, `test_variant_design.py`
+(95 tests, each verified by mutation).
