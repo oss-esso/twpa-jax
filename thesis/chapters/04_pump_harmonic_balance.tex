@@ -1,0 +1,1107 @@
+\chapter{The Pump Solve: Harmonic Balance}
+\label{chap:pumphb}
+
+This chapter specifies the nonlinear pump solve completely. Every nested loop
+is developed from the governing equation, and every formula is given in the
+form the implementation actually uses. Where the implementation departs from the
+idealised statement --- and there are three such places --- the departure is
+recorded in an \emph{Implementation} box with the coded form, its consequence,
+and the numerical evidence.
+
+\section{The harmonic-balance formulation}
+
+\subsection{Ansatz}
+
+The pump drives the circuit at a single frequency $\wp$, and we seek the
+\emph{periodic steady state} of period $T = 2\pi/\wp$. Expand the node fluxes in
+a finite set of positive harmonics $\modeset \subset \mathbb{Z}_{>0}$:
+
+\begin{convention}[positive-phasor reconstruction]
+\label{conv:phasor}
+\begin{equation}
+  \boxed{\;
+  \xvec(t) = 2\,\Real\!\left[\sum_{k\in\modeset} X_k\,e^{+ik\wp t}\right],
+  \qquad X_k\in\mathbb{C}^{n}.
+  \;}
+  \label{eq:synthesis}
+\end{equation}
+The unknown is the stacked array $\Xvec = \{X_k\}_{k\in\modeset}\in
+\mathbb{C}^{H\times n}$ with $H = |\modeset|$.
+\end{convention}
+
+The factor $2$ and the sign $+i$ are the entire content of the convention. Under
+it, a single mode $X_1 = \tfrac12 A$ reconstructs to $A\cos(\wp t)$, so the
+phasor is \emph{half} the physical amplitude. Every source coefficient, every
+power conversion, and every imported pump solution must respect this or the
+result is wrong by factors of two.
+
+\subsection{The residual}
+
+Substituting \eqref{eq:synthesis} into the governing
+equation~\eqref{eq:governing} and projecting onto $e^{-ik\wp t}$ yields, for
+each retained mode $k$,
+\begin{equation}
+  \boxed{\;
+  R_k(\Xvec;\lambda)
+  \;=\;
+  \Dmat_k X_k + N_k(\Xvec) - \lambda \Svec_k
+  \;=\; 0,
+  \;}
+  \label{eq:residual-k}
+\end{equation}
+where $\Dmat_k$ is the linear dynamic block (\cref{sec:freq-loop}), $N_k$ the
+projected nonlinear branch current (\cref{sec:residual-eval}), $\Svec_k$ the
+source coefficient (\cref{sec:power-loop}), and $\lambda\in[0,1]$ the
+continuation parameter (\cref{sec:continuation}).
+
+Stacking over modes,
+\begin{equation}
+  \Rvec(\Xvec;\lambda)
+  = \mathcal{D}\Xvec + \Nvec(\Xvec) - \lambda\Svec
+  = \vect{0},
+  \qquad
+  \mathcal{D} = \blockdiag(\Dmat_{k_1},\dots,\Dmat_{k_H}).
+  \label{eq:residual-stacked}
+\end{equation}
+
+This is the equation every layer below works toward solving. It is a nonlinear
+algebraic system in $2Hn$ real unknowns (real and imaginary parts of every
+phasor).
+
+\subsection{Loop hierarchy}
+
+The solve is organised as eight nested layers. Each answers one question:
+
+\begin{center}
+\begin{tabular}{@{}r l l@{}}
+\toprule
+& \textbf{Layer} & \textbf{Question} \\
+\midrule
+1 & Frequency      & Which pump frequency? \\
+2 & Power          & Which pump amplitude? \\
+3 & Continuation   & Can we reach the full drive gradually? \\
+4 & Newton         & Where is the nonlinear root? \\
+5 & \quad Residual & How wrong is the current guess? \\
+6 & \quad Preconditioner & What cheap $\Mmat\approx\Jmat$ can we build? \\
+7 & \quad Krylov (GMRES + JVP) & What correction solves the linearisation? \\
+8 & \quad Line search & How much of that correction is safe? \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\Cref{sec:hierarchy} collects the whole thing in one place.
+
+\section{Layer 1: the frequency loop}
+\label{sec:freq-loop}
+
+\subsection{The linear dynamic block}
+
+For a harmonic $k$, the ansatz \eqref{eq:synthesis} gives
+$\dot{\xvec}_k = ik\wp X_k$ and $\ddot{\xvec}_k = -(k\wp)^{2}X_k$, so the linear
+part of \eqref{eq:governing} contributes
+\begin{equation}
+  \Cmat\ddot{\xvec}_k + \Gmat\dot{\xvec}_k + \Kmat\xvec_k
+  = \Dmat_k X_k
+\end{equation}
+with
+\begin{equation}
+  \boxed{\;
+  \Dmat_k(\wp) \;=\; \Kmat \;-\; (k\wp)^{2}\,\Cmat \;+\; i\,k\wp\,\Gmat .
+  \;}
+  \label{eq:dynamic-block}
+\end{equation}
+
+Selecting a pump frequency therefore changes the entire family
+$\{\Dmat_k\}_{k\in\modeset}$ and hence produces a genuinely different
+harmonic-balance problem. The blocks are constant in $\Xvec$, so they are built
+once per frequency and reused beneath every inner loop.
+
+\begin{implnote}[\code{\_build\_linear\_blocks}]
+\begin{lstlisting}
+for k in self.grid.k:
+    wk = float(k) * self.grid.omega
+    Dk = Kc + (-wk * wk) * Cc + (1j * wk) * Gc
+    blocks.append(Dk.tocsc())
+\end{lstlisting}
+Exactly \eqref{eq:dynamic-block}. Verified against a directly assembled
+reference at $k\in\{1,3,5\}$: maximum relative deviation
+$\num{0.000e+00}$.
+\end{implnote}
+
+\subsection{The pump-mode basis}
+\label{sec:pump-basis}
+
+Which modes to retain is a physics decision, not a numerical one.
+
+For an \emph{unbiased} four-wave-mixing device the branch law is odd, so the
+pump waveform contains only odd harmonics: $X_k \equiv 0$ for even $k$. Using a
+dense basis $\{1,2,\dots,H\}$ therefore spends half the unknowns on modes that
+are identically zero while truncating the high odd harmonics that carry real
+amplitude. The correct basis is
+\begin{equation}
+  \modeset_{\mathrm{odd}} = \{1,3,5,\dots,2K-1\}.
+\end{equation}
+
+\begin{measured}[basis choice matters]
+Replacing the legacy dense basis $\{1,\dots,H\}$ with the odd basis reduced the
+gain discrepancy on a reference JTWPA from $\approx\SI{0.89}{\dB}$ RMS to
+$\approx\SI{0.0006}{\dB}$ RMS. The dense basis was truncating the high odd pump
+content.
+\end{measured}
+
+\begin{implnote}[\code{pump/basis.py} as single source of truth]
+\code{resolve\_pump\_basis} returns a \code{PumpBasis} under one of four
+policies:
+\begin{center}
+\begin{tabular}{@{}l l l@{}}
+\toprule
+Policy & Modes & Use for \\
+\midrule
+\code{positive\_odd\_jc} & $\{1,3,\dots,2K-1\}$ & unbiased 4WM \\
+\code{dense\_real} & $\{1,2,\dots,H\}$ & biased / DC / 3WM \\
+\code{positive\_phasor\_explicit} & user list & anything else \\
+\code{auto\_jc} & inferred & single-pump cases \\
+\bottomrule
+\end{tabular}
+\end{center}
+\code{PumpBasis.to\_metadata} writes \code{pump\_modes},
+\code{pump\_basis="positive\_phasor"}, \code{real\_reconstruction\_factor=2},
+\code{omega\_p} and \code{phase\_convention="exp\_plus\_i\_k\_omega\_t"} into the
+saved solution; \code{load\_pump\_basis\_from\_solution} reads them back. A gain
+solve therefore cannot silently disagree with the pump solve about what the
+stored phasors mean.
+\end{implnote}
+
+\subsection{The time grid}
+
+The nonlinearity is evaluated by alternating frequency--time (AFT): synthesise
+on a time grid, apply the branch law pointwise, transform back. The grid is
+\begin{equation}
+  \theta_r = \frac{2\pi r}{N_t},\qquad r = 0,\dots,N_t-1,
+  \qquad t_r = \frac{\theta_r}{\wp}.
+\end{equation}
+
+\begin{proposition}[alias-free sampling]
+To represent products up to $2\max(\modeset)$ without aliasing onto a retained
+mode, it is necessary that
+\begin{equation}
+  N_t \;\ge\; 2\max(\modeset) + 1 .
+  \label{eq:nt-bound}
+\end{equation}
+\end{proposition}
+
+\begin{implnote}[\code{HarmonicGrid}]
+\code{\_\_post\_init\_\_} enforces \eqref{eq:nt-bound} and additionally requires
+$N_t$ even. It precomputes the synthesis and analysis matrices
+\begin{lstlisting}
+self.E = np.exp(1j * self.omega * self.t[:, None] * self.k[None, :])
+self.E_conj_T_over_nt = self.E.conj().T / self.nt
+\end{lstlisting}
+so that synthesis is \code{2.0 * np.real(self.E @ X)} and projection is
+\code{self.E\_conj\_T\_over\_nt @ y\_t}. Note this is a dense
+$(N_t\times H)$ matrix product, not an FFT: $H$ is small (typically 10--20) and
+the mode list is not contiguous, so the general form is both simpler and
+competitive.
+\end{implnote}
+
+\section{Layer 2: the power loop}
+\label{sec:power-loop}
+
+\subsection{Power to current}
+
+The pump generator power is converted to an on-chip peak current by
+\eqref{eq:dbm-to-w}--\eqref{eq:w-to-i}, then scaled by the convention factor
+$s_{\mathrm{JC}}$ of \cref{sec:power-conversion}:
+\begin{equation}
+  I_{\mathrm{solver}} = s_{\mathrm{JC}}\,I_{\mathrm{peak}},
+  \qquad
+  I_{\mathrm{peak}} = \sqrt{\frac{2P_{\mathrm{device}}}{Z_0}} .
+\end{equation}
+
+\subsection{The source coefficient}
+
+Under \cref{conv:phasor}, a physical drive $I\cos(k_{\mathrm{src}}\wp t)$ at the
+pump node corresponds to a phasor of $\tfrac12 I$. Including the continuation
+scale,
+
+\begin{equation}
+  \boxed{\;
+  \Svec_k(\lambda)
+  = \tfrac{1}{2}\,\lambda\,I_{\mathrm{solver}}\;
+    \vect{e}_{p}\;\delta_{k,k_{\mathrm{src}}},
+  \;}
+  \label{eq:source-coeff}
+\end{equation}
+where $\vect{e}_p$ selects the pump node and $k_{\mathrm{src}}$ is the driven
+mode (normally the fundamental). The physical source waveform is then
+\begin{equation}
+  \isrc(t) = 2\,\Real\!\left[\Svec_{k_{\mathrm{src}}}
+             e^{ik_{\mathrm{src}}\wp t}\right].
+  \label{eq:source-time}
+\end{equation}
+
+\begin{implnote}[\code{source\_coeffs}]
+\begin{lstlisting}
+def source_coeffs(self, source_scale):
+    S = np.zeros((self.H, self.n), dtype=np.complex128)
+    source_value = 0.5 * source_scale * self.pump_current_a
+    S[self.source_row, self.pump_node_index] = source_value
+    return S
+\end{lstlisting}
+Exactly \eqref{eq:source-coeff}, with \code{source\_row} the position of
+$k_{\mathrm{src}}$ in the mode list.
+\end{implnote}
+
+\begin{implnote}[\code{source\_time} ignores $k_{\mathrm{src}}$ --- a latent defect]
+\label{impl:source-time}
+The companion time-domain routine does \emph{not} implement
+\eqref{eq:source-time}. It hardcodes the fundamental:
+\begin{lstlisting}
+def source_time(self, source_scale):
+    src = np.zeros((self.grid.nt, self.n), dtype=float)
+    src[:, self.pump_node_index] = (
+        source_scale * self.pump_current_a
+        * np.cos(self.grid.omega * self.grid.t))   # <-- no k_src factor
+    return src
+\end{lstlisting}
+Measured relative deviation between $2\Real[\Svec_k e^{ik\wp t}]$ and
+\code{source\_time()}:
+\begin{center}
+\begin{tabular}{@{}r r@{}}
+\toprule
+\code{source\_mode} & deviation \\
+\midrule
+1 & $\num{0.000e+00}$ \\
+3 & $\num{1.536}$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+\code{source\_time} is consumed only by \code{time\_residual}, an optional
+diagnostic gated on \code{compute\_time\_residual}. It never enters the Newton
+path, so no published result is affected. It is nonetheless wrong for any
+$k_{\mathrm{src}}\neq 1$ and is recorded here as a known defect.
+\end{implnote}
+
+\subsection{Warm-start prediction across the power axis}
+
+Consecutive power points are close, so the previous solution is an excellent
+initial guess and the previous \emph{two} are better still. Given converged
+states at injected currents $I_{j-1}, I_j$, predict at $I_{j+1}$ by linear
+extrapolation in the natural coordinate:
+\begin{equation}
+  \boxed{\;
+  \Xvec_{\mathrm{pred}}
+  = \Xvec_j
+  + \frac{I_{j+1}-I_j}{I_j - I_{j-1}}\left(\Xvec_j - \Xvec_{j-1}\right).
+  \;}
+  \label{eq:power-secant}
+\end{equation}
+
+The abscissa is the injected \emph{current}, not the power in \si{\dBm},
+because the source enters \eqref{eq:residual-k} linearly in current.
+
+\begin{implnote}[\code{axis\_secant}]
+\file{pump/predictors.py} implements \eqref{eq:power-secant} generically over an
+abscissa $t$:
+\begin{lstlisting}
+beta  = (t_target - t_prev1) / (t_prev1 - t_prev2)
+guess = x_prev1 + beta * (x_prev1 - x_prev2)
+\end{lstlisting}
+returning \code{None} on shape mismatch, missing abscissa, or
+$|t_{j}-t_{j-1}|<10^{-30}$. The same routine serves the frequency axis with
+$t=f_p$. Additional predictors --- \code{copy}, \code{corner}, \code{plane},
+and a residual-ranked \code{portfolio} --- are selectable per campaign.
+\end{implnote}
+
+\section{Layer 3: the continuation loop}
+\label{sec:continuation}
+
+\subsection{Natural-parameter continuation}
+
+A cold Newton solve at full pump power generally diverges: the initial guess is
+far outside the basin of attraction. The remedy is to embed the target problem
+in a homotopy,
+\begin{equation}
+  \boxed{\;
+  \Rvec(\Xvec;\lambda) = \mathcal{D}\Xvec + \Nvec(\Xvec) - \lambda\Svec = 0,
+  \qquad 0\le\lambda\le 1,
+  \;}
+  \label{eq:homotopy}
+\end{equation}
+and track the solution branch from $\lambda=0$ (no drive; $\Xvec=\vect{0}$ is an
+exact solution) to $\lambda=1$ (the physical problem). Since the source enters
+linearly, this is natural-parameter continuation in the source amplitude.
+
+\subsection{Fixed ladder}
+
+The simplest scheme takes $N_\lambda$ equal steps,
+\begin{equation}
+  \lambda_j = \frac{j}{N_\lambda},\qquad j=1,\dots,N_\lambda,
+\end{equation}
+solving $\Rvec(\Xvec_j;\lambda_j)=0$ with initial guess
+$\Xvec_j^{(0)} = \Xvec_{j-1}$.
+
+\begin{implnote}[resumable fixed ladder]
+\code{solve\_continuation} accepts \code{lambda\_start} (default $0.0$). This
+exists so the adaptive fallback below can \emph{resume} rather than restart; all
+other callers are unaffected.
+\end{implnote}
+
+\subsection{Adaptive stepping}
+
+A fixed ladder wastes effort in the easy low-$\lambda$ region and is too coarse
+near a fold. The adaptive scheme sets a target
+\begin{equation}
+  \lambda_{\mathrm{target}} = \min(1,\;\lambda + \Delta\lambda),
+\end{equation}
+attempts a Newton solve there, and updates the step by
+\begin{equation}
+  \Delta\lambda \leftarrow
+  \begin{cases}
+    \min(1,\;g\,\Delta\lambda), & \text{on success},\quad g \approx 1.5,\\[2pt]
+    s\,\Delta\lambda,           & \text{on failure},\quad s \approx 0.5 .
+  \end{cases}
+  \label{eq:adaptive-step}
+\end{equation}
+
+\begin{implnote}[step-control constants]
+\code{solve\_adaptive\_continuation} takes \code{growth} and \code{shrink} as
+arguments; the wrapper that campaigns use fixes them at
+\code{growth=1.5}, \code{shrink=0.5}, matching \eqref{eq:adaptive-step}. The
+step is additionally clamped by \code{step = min(step, 1.0 - lambda\_current)}
+so a target never overshoots $\lambda=1$, and floored at \code{min\_step}.
+\end{implnote}
+
+\subsection{Predictors along the branch}
+
+\paragraph{Secant.} With two converged points on the branch,
+\begin{equation}
+  \Xvec_{\mathrm{pred}}
+  = \Xvec_j
+  + \frac{\lambda_{\mathrm{target}}-\lambda_j}{\lambda_j-\lambda_{j-1}}
+    \left(\Xvec_j - \Xvec_{j-1}\right).
+  \label{eq:lambda-secant}
+\end{equation}
+Structurally identical to \eqref{eq:power-secant} with $t=\lambda$.
+
+\paragraph{Tangent.} Differentiating \eqref{eq:homotopy} along the branch,
+\begin{equation}
+  \Jmat(\Xvec)\frac{\mathrm{d}\Xvec}{\mathrm{d}\lambda}
+  + \frac{\partial\Rvec}{\partial\lambda} = 0,
+  \qquad
+  \frac{\partial\Rvec}{\partial\lambda} = -\Svec,
+\end{equation}
+so the branch tangent solves
+\begin{equation}
+  \boxed{\;\Jmat(\Xvec)\,\dot{\Xvec} = \Svec,\;}
+  \qquad
+  \Xvec_{\mathrm{pred}} = \Xvec + \Delta\lambda\,\dot{\Xvec}.
+  \label{eq:tangent-predictor}
+\end{equation}
+This is an Euler predictor along the solution curve and costs one extra linear
+solve per step.
+
+\begin{implnote}[\code{tangent\_predictor}]
+\begin{lstlisting}
+S = problem.source_coeffs(1.0) - problem.source_coeffs(0.0)
+\end{lstlisting}
+The difference form is used rather than \code{source\_coeffs(1.0)} alone, so
+that a problem with an affine (rather than purely linear) source path --- as in
+the multitone signal substep of \cref{sec:signal-substep} --- gives the correct
+$\partial\Rvec/\partial\lambda$ without modification.
+\end{implnote}
+
+\subsection{Fallback, and why it resumes}
+
+When adaptive bisection drives $\Delta\lambda$ below \code{min\_step} --- the
+signature of a genuine fold in source amplitude, where the reduction ratio
+stalls near $1.0$ at every attempt --- the solver falls back to a fixed ladder.
+
+\begin{implnote}[resume, do not restart]
+An earlier version passed the \emph{original} seed and $\lambda=0$ to the
+fallback, discarding every state the adaptive phase had already converged. On a
+real map column this burned the entire per-point deadline getting back only to
+$\lambda=0.75$ after adaptive stepping had already reached $\lambda=0.9375$
+converged.
+
+The fallback now resumes from $(\Xvec_{\mathrm{current}},
+\lambda_{\mathrm{current}})$ and sizes itself to the \emph{remaining} span at
+the original granularity:
+\begin{lstlisting}
+step_size = 1.0 / fallback_fixed_steps
+fallback_steps = max(1, math.ceil(remaining / step_size - 1e-9))
+\end{lstlisting}
+\end{implnote}
+
+\subsection{Advanced continuation}
+
+Two further schemes are available for stiff cases:
+
+\paragraph{Pseudo-arclength.} Near a fold, $\lambda$ ceases to parameterise the
+branch --- the curve turns back. Pseudo-arclength continuation augments the
+system with a normalisation constraint and solves for $(\Xvec,\lambda)$
+jointly via a bordered linear system, allowing the branch to be followed
+around the turning point. \code{solve\_arclength} implements this with a
+modified-Newton inner solve.
+
+\paragraph{Pseudo-transient.} \code{solve\_pseudo\_transient} solves
+\begin{equation}
+  \frac{\Xvec^{(n+1)} - \Xvec^{(n)}}{\delta} + \Rvec(\Xvec^{(n+1)}) = 0
+\end{equation}
+with a pseudo-timestep $\delta$ grown inversely with the residual drop (switched
+evolution relaxation). This damps very stiff starts at the cost of linear rather
+than quadratic asymptotic convergence.
+
+\begin{caveat}[experimental status]
+Arclength and fold-following are functional but experimental on the stiffest
+device studied: fold-following may report no fold in range, and the arclength
+target endpoint is linearly interpolated, so it is used as a warm guess rather
+than a polished root.
+\end{caveat}
+
+\subsection{When continuation is skipped}
+
+Warm-started cells --- the common case in a map, where a neighbouring point has
+already converged --- skip continuation entirely and solve directly at
+$\lambda=1$. Continuation is for cold, seeded, and recovery solves.
+
+\section{Layer 4: the Newton loop}
+
+\subsection{The correction equation}
+
+At Newton iteration $n$, expand the residual about the current iterate:
+\begin{equation}
+  \Rvec(\Xvec^{(n)} + \Delta\Xvec)
+  \approx
+  \Rvec(\Xvec^{(n)}) + \Jmat(\Xvec^{(n)})\,\Delta\Xvec .
+\end{equation}
+Setting the linearisation to zero gives
+\begin{equation}
+  \boxed{\;
+  \Jmat(\Xvec^{(n)})\,\Delta\Xvec^{(n)} = -\Rvec(\Xvec^{(n)}),
+  \;}
+  \label{eq:newton}
+\end{equation}
+and the update, with an accepted damping factor $\alpha_n$
+(\cref{sec:line-search}),
+\begin{equation}
+  \boxed{\;
+  \Xvec^{(n+1)} = \Xvec^{(n)} + \alpha_n\,\Delta\Xvec^{(n)} .
+  \;}
+  \label{eq:newton-update}
+\end{equation}
+
+\subsection{Real packing}
+
+$\Rvec$ is \emph{not} a complex-analytic function of $\Xvec$. The nonlinearity
+acts on the real waveform $\xvec(t)$, which by \eqref{eq:synthesis} depends on
+both $X_k$ and $\overline{X_k}$. There is therefore no complex Jacobian; the
+derivative exists only in real coordinates.
+
+\begin{convention}[real packing]
+\begin{equation}
+  \mathrm{pack}(\Xvec) =
+  \begin{bmatrix} \Real\Xvec \\ \Imag\Xvec \end{bmatrix}
+  \in\mathbb{R}^{2Hn},
+\end{equation}
+with the real part of the entire $(H,n)$ array first, then the imaginary part.
+\end{convention}
+
+This ordering is fixed by \code{pack\_complex} / \code{unpack\_complex} and is
+assumed by every real-packed matrix assembly in \cref{sec:real-coupled}.
+
+\subsection{Convergence criterion}
+
+The natural scale for the residual is the source that drives it. Define
+\begin{equation}
+  \boxed{\;
+  r_{\mathrm{coeff,rel}}
+  =
+  \frac{\bigl\|\mathrm{pack}\,\Rvec(\Xvec)\bigr\|_2/\sqrt{N}}
+       {\max\!\left(\bigl\|\mathrm{pack}\,\Svec\bigr\|_2/\sqrt{N},\;\epsilon\right)}
+  \;<\;
+  \varepsilon_{\mathrm{Newton}},
+  \;}
+  \label{eq:convergence}
+\end{equation}
+with $N = 2Hn$ for the full problem, or $N = 2Hm$ after Schur reduction to $m$
+retained nodes (\cref{sec:schur}). The $1/\sqrt{N}$ normalisation makes the
+criterion an RMS-per-unknown quantity, so it does not tighten spuriously as the
+circuit grows.
+
+\begin{implnote}[\code{norms}]
+\begin{lstlisting}
+coeff_abs = norm(R_flat) / sqrt(R_flat.size)
+src_abs   = norm(S_flat) / max(sqrt(S_flat.size), 1.0)
+coeff_rel = coeff_abs / max(src_abs, 1e-30)
+\end{lstlisting}
+so $\epsilon = 10^{-30}$. Verified against \eqref{eq:convergence} evaluated
+independently: agreement to twelve significant digits.
+
+An optional \code{time\_abs}/\code{time\_rel} pair evaluates the residual in the
+time domain instead; it is a diagnostic and is gated off by default (and see
+\cref{impl:source-time}).
+\end{implnote}
+
+\subsection{Guards}
+
+Before each Newton step the solver checks that the state and its residual are
+finite, and it enforces a wall-clock deadline. A non-finite state aborts
+immediately rather than propagating \code{NaN} through a factorisation.
+
+\section{Layer 5: residual evaluation}
+\label{sec:residual-eval}
+
+Evaluating $\Rvec$ is the alternating frequency--time cycle. Given $\Xvec$:
+
+\paragraph{Step 1 --- synthesise the node-flux waveform.}
+\begin{equation}
+  \boxed{\;
+  \xvec_r = 2\,\Real\!\left[\sum_{k\in\modeset} X_k e^{ik\theta_r}\right],
+  \qquad r=0,\dots,N_t-1 .
+  \;}
+  \label{eq:aft-1}
+\end{equation}
+
+\paragraph{Step 2 --- map to branch fluxes.}
+\begin{equation}
+  \boxed{\;\psi_r = \psi_{\mathrm{dc}} + \Bphi^{\mathsf T}\xvec_r .\;}
+  \label{eq:aft-2}
+\end{equation}
+
+\paragraph{Step 3 --- apply the branch law pointwise.}
+\begin{equation}
+  \boxed{\;
+  \iJ{}_{,r} = \Ic \hada \sin\!\left(\frac{\psi_r}{\rphi}\right)
+  \;-\;
+  \Ic \hada \sin\!\left(\frac{\psi_{\mathrm{dc}}}{\rphi}\right) .
+  \;}
+  \label{eq:aft-3}
+\end{equation}
+The second term is the static-current subtraction of
+\cref{impl:dc-subtraction}. It vanishes identically for
+$\psi_{\mathrm{dc}}=\vect{0}$.
+
+\paragraph{Step 4 --- map back to nodes.}
+\begin{equation}
+  \boxed{\;\vect{n}_r = \Bphi\,\iJ{}_{,r} .\;}
+  \label{eq:aft-4}
+\end{equation}
+
+\paragraph{Step 5 --- project onto harmonics.}
+\begin{equation}
+  \boxed{\;
+  N_k(\Xvec)
+  = \frac{1}{N_t}\sum_{r=0}^{N_t-1}\vect{n}_r\,e^{-ik\theta_r} .
+  \;}
+  \label{eq:aft-5}
+\end{equation}
+
+\paragraph{Step 6 --- form the residual.} Equation~\eqref{eq:residual-k}.
+
+Schematically,
+\begin{equation}
+  \Xvec
+  \xrightarrow{\ \text{synthesis}\ } \xvec(t)
+  \xrightarrow{\ \text{branch law}\ } \iJ(t)
+  \xrightarrow{\ \text{projection}\ } \Nvec(\Xvec)
+  \xrightarrow{\quad} \Rvec(\Xvec).
+\end{equation}
+
+The cost is dominated by two sparse products with $\Bphi$ and two dense
+$(N_t\times H)$ products, all $O(N_t \cdot \nnz)$ --- cheap compared with a
+factorisation.
+
+\section{Layer 6: the Jacobian and its action}
+\label{sec:jacobian}
+
+\subsection{The junction tangent}
+
+Differentiating \eqref{eq:aft-3} with respect to $\psi$ gives the time-domain
+tangent
+\begin{equation}
+  \boxed{\;
+  \gamma_b(t) = \frac{I_{c,b}}{\rphi}\,
+                \cos\!\left(\frac{\psi_b(t)}{\rphi}\right),
+  \;}
+  \label{eq:gamma-t}
+\end{equation}
+one value per branch per time sample, frozen at the current Newton iterate. Its
+Fourier coefficients are
+\begin{equation}
+  \ghat_\ell = \frac{1}{N_t}\sum_{r=0}^{N_t-1}\gamma(t_r)\,e^{-i\ell\theta_r},
+  \label{eq:gamma-hat}
+\end{equation}
+and the corresponding \emph{tangent-stiffness harmonics} are
+\begin{equation}
+  \boxed{\;
+  \Khat_\ell = \Bphi\,\diag(\ghat_\ell)\,\Bphi^{\mathsf T}
+  \;\in\;\mathbb{C}^{n\times n}.
+  \;}
+  \label{eq:khat}
+\end{equation}
+
+\begin{implnote}[verified]
+\code{spectral\_tangent\_state} computes \eqref{eq:gamma-hat} as
+\code{np.mean(gamma\_t * phase[:, None], axis=0)} --- identical to the
+$1/N_t$ sum --- and \eqref{eq:khat} as
+\code{Bphi @ sp.diags(gamma\_hat\_ell) @ BphiT}. Checked against a directly
+assembled reference at $\ell=2$: maximum deviation $\num{0.000e+00}$.
+
+The offsets assembled are exactly
+$\{k-q\}\cup\{k+q\}$ over all pairs $k,q\in\modeset$ --- the set that
+\eqref{eq:jacobian-action} below requires and no more.
+\end{implnote}
+
+\subsection{The exact harmonic Jacobian}
+
+Perturbing $\Xvec\to\Xvec+\epsilon\Vvec$ and linearising, the real waveform
+perturbation is $2\Real[\sum_q V_q e^{iq\wp t}]$, which contains \emph{both}
+$e^{+iq\wp t}$ and $e^{-iq\wp t}$. Multiplying by $\gamma(t)$ and projecting
+onto $e^{-ik\wp t}$ therefore picks up $\ghat_{k-q}$ from the first and
+$\ghat_{k+q}$ from the second:
+
+\begin{equation}
+  \boxed{\;
+  (\Jmat\Vvec)_k
+  = \Dmat_k V_k
+  + \sum_{q\in\modeset}
+    \left[\,\Khat_{k-q}\,V_q \;+\; \Khat_{k+q}\,\overline{V_q}\,\right].
+  \;}
+  \label{eq:jacobian-action}
+\end{equation}
+
+The second term is the \emph{conjugate coupling}. It is a direct consequence of
+$\Rvec$ not being complex-analytic, and dropping it --- as the conventional
+mode-coupled construction does --- is the single most consequential
+approximation available in this problem (\cref{sec:precond}).
+
+\subsection{Matrix-free evaluation}
+
+Equation~\eqref{eq:jacobian-action} need never be assembled. The same AFT cycle
+that evaluates the residual evaluates its directional derivative:
+
+\begin{align}
+  \vect{v}(t_r)      &= 2\,\Real\!\left[\sum_{q\in\modeset} V_q e^{iq\theta_r}\right],
+  \label{eq:jvp-1}\\
+  \delta\psi(t_r)    &= \Bphi^{\mathsf T}\vect{v}(t_r),
+  \label{eq:jvp-2}\\
+  \delta\iJ(t_r)     &= \gamma(t_r)\hada\delta\psi(t_r),
+  \label{eq:jvp-3}\\
+  \delta\vect{n}(t_r)&= \Bphi\,\delta\iJ(t_r),
+  \label{eq:jvp-4}\\
+  \delta N_k         &= \frac{1}{N_t}\sum_{r=0}^{N_t-1}
+                        \delta\vect{n}(t_r)\,e^{-ik\theta_r},
+  \label{eq:jvp-5}\\
+  (\Jmat\Vvec)_k     &= \Dmat_k V_k + \delta N_k .
+  \label{eq:jvp-6}
+\end{align}
+
+\begin{proposition}
+Equations \eqref{eq:jvp-1}--\eqref{eq:jvp-6} compute exactly
+\eqref{eq:jacobian-action}, and equal
+\begin{equation}
+  \Jmat\Vvec = \left.\frac{\mathrm{d}}{\mathrm{d}\epsilon}
+                \Rvec(\Xvec + \epsilon\Vvec)\right|_{\epsilon=0}
+\end{equation}
+analytically --- not by finite differences.
+\end{proposition}
+\begin{proof}[Sketch]
+The synthesis \eqref{eq:jvp-1} makes both $\pm q$ components explicit; the
+pointwise product \eqref{eq:jvp-3} convolves them with the spectrum of $\gamma$;
+the projection \eqref{eq:jvp-5} selects harmonic $k$, giving $\ghat_{k-q}$
+against the $+q$ component and $\ghat_{k+q}$ against the $-q$ component. The
+conjugate term is therefore included automatically, without ever forming
+$\Khat_{k+q}$.
+\end{proof}
+
+This is the crucial cost property of the method: one Jacobian-vector product
+costs one AFT cycle, the same as one residual evaluation, and requires no
+storage beyond the frozen $\gamma(t)$.
+
+\begin{implnote}[\code{jvp\_coeffs\_with\_tangent}]
+\begin{lstlisting}
+JV = [self._linear_blocks[h] @ V[h] for h in range(self.H)]
+v_t   = self.grid.synthesize(V)
+dpsi  = (self.BphiT @ v_t.T).T
+di    = tangent.gamma_t * dpsi
+dn    = (self.Bphi @ di.T).T
+return JV + self.grid.project_positive(dn)
+\end{lstlisting}
+Exactly \eqref{eq:jvp-1}--\eqref{eq:jvp-6}. The tangent is passed in rather than
+recomputed, so all GMRES iterations within one Newton step share it.
+\end{implnote}
+
+\section{Layer 7: preconditioning}
+\label{sec:precond}
+
+\subsection{The requirement}
+
+GMRES applied to \eqref{eq:newton} with the matrix-free operator converges
+slowly: the harmonic-balance Jacobian of a long chain is badly conditioned. A
+preconditioner $\Mmat\approx\Jmat$ is needed for which $\Mmat^{-1}\vect{v}$ is
+cheap. Four constructions are available, forming a clear accuracy/cost ladder.
+
+\subsection{Block-diagonal preconditioners}
+
+\paragraph{Linear.} Ignore the nonlinearity entirely:
+\begin{equation}
+  \Mmat^{\mathrm{linear}}_{kq} = \Dmat_k\,\delta_{kq}.
+  \label{eq:precond-linear}
+\end{equation}
+$H$ independent LU factorisations of the (banded) dynamic blocks. Cheapest,
+weakest; adequate only at very low drive.
+
+\paragraph{Mean tangent.} Retain the DC component of the junction tangent:
+\begin{equation}
+  \bar{\gamma} = \frac{1}{N_t}\sum_r \gamma(t_r),
+  \qquad
+  \Mmat^{\mathrm{mean}}_{kq}
+  = \left[\Dmat_k + \Bphi\,\diag(\bar\gamma)\,\Bphi^{\mathsf T}\right]\delta_{kq}.
+  \label{eq:precond-mean}
+\end{equation}
+Still block-diagonal --- still $H$ small factorisations --- but now aware that
+the pump has softened the junctions. This is the default.
+
+\subsection{Mode-coupled preconditioner}
+
+Retaining the $(k-q)$ coupling but dropping the conjugate term gives one large
+complex matrix:
+\begin{equation}
+  \Mmat^{\mathrm{spectral}}_{kq} = \Dmat_k\,\delta_{kq} + \Khat_{k-q}.
+  \label{eq:precond-spectral}
+\end{equation}
+One LU of dimension $Hn$ instead of $H$ of dimension $n$. Substantially
+stronger, and correct in the limit where the conjugate coupling is small.
+
+\subsection{Exact real-coupled preconditioner}
+\label{sec:real-coupled}
+
+The conjugate coupling is \emph{not} small for stiff DC and mutual-inductor
+designs. Retaining it requires working in real coordinates, because the map
+$V\mapsto \Khat_{k+q}\overline{V}$ is antilinear.
+
+Write the contribution to output mode $k$ from input mode $q$ as
+\begin{equation}
+  \mat{L}V_q + \mat{P}\overline{V_q},
+  \qquad
+  \mat{L} = \Khat_{k-q} + \Dmat_k\delta_{kq},
+  \qquad
+  \mat{P} = \Khat_{k+q}.
+\end{equation}
+Splitting $\mat{L} = \mat{L}_r + i\mat{L}_i$, $\mat{P} = \mat{P}_r + i\mat{P}_i$
+and $V = V_r + iV_i$, and collecting real and imaginary parts:
+
+\begin{equation}
+  \boxed{\;
+  \begin{bmatrix} \Real \\ \Imag \end{bmatrix}
+  \longleftarrow
+  \begin{bmatrix}
+    \mat{L}_r + \mat{P}_r & \mat{P}_i - \mat{L}_i \\[2pt]
+    \mat{L}_i + \mat{P}_i & \mat{L}_r - \mat{P}_r
+  \end{bmatrix}
+  \begin{bmatrix} V_r \\ V_i \end{bmatrix}.
+  \;}
+  \label{eq:real-superblock}
+\end{equation}
+
+Assembling \eqref{eq:real-superblock} over all $(k,q)$ gives a real matrix of
+dimension $2Hn$ that is the \emph{exact} Jacobian, not an approximation.
+
+\begin{implnote}[\code{\_build\_real\_coupled\_matrix}]
+The four quadrants are assembled separately and combined
+\code{sp.bmat([[jrr, jri], [jir, jii]])}, matching the \code{pack\_complex}
+ordering (all real parts, then all imaginary parts). Because
+$\Mmat = \Jmat$ exactly, GMRES converges in approximately one iteration.
+
+The correctness of this assembly is not observable from physics: a dropped sign
+would only make the preconditioner slower, and every physics gate would still
+pass. It is therefore tested directly, quadrant by quadrant, against
+\code{problem.real\_coupled\_matrix} in
+\file{tests/test\_fast\_coupled\_assembly.py}.
+\end{implnote}
+
+\begin{center}
+\begin{tabular}{@{}l l l l@{}}
+\toprule
+Name & Structure & Factorisations & Typical GMRES iterations \\
+\midrule
+\code{none}             & --- & 0 & many \\
+\code{linear}           & \eqref{eq:precond-linear} & $H\times(n)$ & many \\
+\code{mean\_tangent}    & \eqref{eq:precond-mean} & $H\times(n)$ & moderate \\
+\code{spectral\_coupled}& \eqref{eq:precond-spectral} & $1\times(Hn)$ & few \\
+\code{real\_coupled}    & \eqref{eq:real-superblock} & $1\times(2Hn)$ & $\approx 1$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\section{Layer 7b: factorisation}
+\label{sec:factorisation}
+
+Once $\Mmat$ is assembled, a sparse LU with row and column permutations is
+computed:
+\begin{equation}
+  \boxed{\;\mat{P}_r\,\Mmat\,\mat{P}_c = \mat{L}\mat{U}.\;}
+  \label{eq:lu}
+\end{equation}
+Applying $\Mmat^{-1}$ is then two triangular solves and two permutations:
+\begin{equation}
+  \tilde{\vect{v}} = \mat{P}_r\vect{v},\quad
+  \mat{L}\vect{y} = \tilde{\vect{v}},\quad
+  \mat{U}\vect{w} = \vect{y},\quad
+  \vect{z} = \mat{P}_c\vect{w},
+\end{equation}
+i.e.
+\begin{equation}
+  \vect{z} = \Mmat^{-1}\vect{v}
+           = \mat{P}_c\mat{U}^{-1}\mat{L}^{-1}\mat{P}_r\vect{v}.
+\end{equation}
+The expensive part is $\Mmat\to(\mat{L},\mat{U})$; the repeated part
+$\vect{v}\mapsto\Mmat^{-1}\vect{v}$ is cheap.
+
+\begin{remark}[two distinct LU factorisations]
+\label{rem:two-lus}
+In the default Schur-reduced pump solver there are \emph{two} unrelated LU
+factorisations, and conflating them is a common source of confusion:
+\begin{itemize}
+\item $\Dmat_{ee,k} = \mat{L}_{e,k}\mat{U}_{e,k}$, the eliminated linear-node
+      block. Constant in $\Xvec$, so factored \emph{once per frequency and
+      harmonic}, outside the power loop. See \cref{sec:schur}.
+\item $\Mmat(\Xvec) = \mat{L}_M\mat{U}_M$, the Newton preconditioner. Depends
+      on the current iterate, so it lives \emph{inside} the Newton loop.
+\end{itemize}
+\end{remark}
+
+Preconditioner reuse across Newton steps (modified Newton) is available but is
+measured to be a net loss; see \cref{sec:precond-reuse}.
+
+\section{Layer 7c: the Krylov solve}
+\label{sec:gmres}
+
+\subsection{Preconditioned GMRES}
+
+GMRES solves \eqref{eq:newton} by building a Krylov subspace
+\begin{equation}
+  \krylov_m(\mat{A},\vect{b})
+  = \spanof\{\vect{b},\mat{A}\vect{b},\mat{A}^{2}\vect{b},\dots,
+             \mat{A}^{m-1}\vect{b}\}
+\end{equation}
+and choosing the iterate that minimises the residual over it. After Arnoldi
+reduction $\mat{A}\mat{V}_m = \mat{V}_{m+1}\overline{\mat{H}}_m$, the
+minimisation becomes a small least-squares problem
+\begin{equation}
+  \vect{c}_m = \argmin_{\vect{c}}
+  \left\|\beta\vect{e}_1 - \overline{\mat{H}}_m\vect{c}\right\|_2 ,
+  \qquad \beta = \|\vect{b}\|_2 ,
+\end{equation}
+solved by Givens rotations at negligible cost.
+
+\subsection{Which side the preconditioner is applied}
+
+There are two placements. \emph{Right} preconditioning solves
+\begin{equation}
+  \Jmat\Mmat^{-1}\vect{y} = -\Rvec,
+  \qquad \Delta\Xvec = \Mmat^{-1}\vect{y},
+  \label{eq:right-precond}
+\end{equation}
+so the Krylov space is $\krylov_m(\Jmat\Mmat^{-1}, -\Rvec)$ and the residual
+GMRES minimises is the \emph{true} residual $\|-\Rvec-\Jmat\Delta\Xvec\|$.
+\emph{Left} preconditioning solves
+\begin{equation}
+  \Mmat^{-1}\Jmat\,\Delta\Xvec = -\Mmat^{-1}\Rvec,
+  \label{eq:left-precond}
+\end{equation}
+so the Krylov space is $\krylov_m(\Mmat^{-1}\Jmat, -\Mmat^{-1}\Rvec)$, the
+correction comes out directly with no recovery step, and the minimised
+quantity is the \emph{preconditioned} residual.
+
+\begin{implnote}[the implementation is left-preconditioned]
+\label{impl:left-precond}
+The solver calls
+\begin{lstlisting}
+delta_real, info = gmres_call(A=Aop, b=rhs, M=Mop, rtol=..., atol=...)
+Delta = unpack_complex(delta_real, shape)     # used directly
+\end{lstlisting}
+with \code{rhs = -pack\_complex(R)}. SciPy's \code{gmres} applies \code{M} on
+the \emph{left}; the docstring of the installed version (SciPy 1.18.0) states
+verbatim ``In this implementation, left preconditioning is used'', and the
+source applies \code{psolve} to both the initial residual and each Arnoldi
+vector. Consistently, no $\Mmat^{-1}$ is applied to the returned
+\code{delta\_real}.
+
+The system actually solved is therefore \eqref{eq:left-precond}, not
+\eqref{eq:right-precond}.
+
+\textbf{Consequence.} The convergence tolerance \code{gmres\_rtol} is tested
+against $\|\Mmat^{-1}(\vect{b}-\Jmat\Delta\Xvec)\|$ relative to
+$\|\Mmat^{-1}\vect{b}\|$, not against the true residual. With
+\code{real\_coupled}, where $\Mmat=\Jmat$ exactly, both converge in about one
+iteration and the distinction is operationally invisible. With the weaker
+block-diagonal preconditioners it is not: a reported GMRES residual is a
+statement about the preconditioned system, and should be read as such.
+\end{implnote}
+
+\subsection{Mid-solve deadline}
+
+A pathological GMRES call can grind to \code{maxiter} long past any per-point
+time budget.
+
+\begin{implnote}[per-iteration abort]
+\code{gmres\_call} wraps the user callback and checks elapsed wall time on
+\emph{every} GMRES iteration, using \code{callback\_type="pr\_norm"} (which
+fires per iteration, not per restart cycle), raising
+\code{GmresDeadlineExceeded} from inside the callback. SciPy does not catch
+callback exceptions, so this aborts the single call immediately. The previous
+scheme, which checked only between Newton iterations, let one call run
+$\sim\SI{200}{\second}$ past a \SI{14}{\second} budget.
+\end{implnote}
+
+\section{Layer 8: the line search}
+\label{sec:line-search}
+
+A full Newton step can overshoot badly when far from the root. The solver
+therefore damps the step by backtracking.
+
+Starting from $\alpha_0=1$, generate
+\begin{equation}
+  \boxed{\;\alpha_j = 2^{-j},\qquad j=0,1,2,\dots\;}
+\end{equation}
+and for each trial state $\Xvec_{\mathrm{trial},j} = \Xvec + \alpha_j\Delta\Xvec$
+recompute the \emph{full nonlinear} residual. Accept the first $\alpha_j$ with
+\begin{equation}
+  \boxed{\;
+  \left\|\Rvec(\Xvec + \alpha_j\Delta\Xvec;\lambda)\right\|
+  <
+  \left\|\Rvec(\Xvec;\lambda)\right\| ,
+  \;}
+  \label{eq:armijo}
+\end{equation}
+and set $\Xvec \leftarrow \Xvec + \alpha_j\Delta\Xvec$. If $\alpha_j$ falls
+below $\alpha_{\min}$ without acceptance, the Newton iteration reports a
+line-search failure.
+
+\begin{implnote}[simple decrease, in the relative norm]
+\begin{lstlisting}
+alpha = 1.0
+while alpha >= s.min_alpha:
+    Xtrial = X + alpha * Delta
+    trial_nrm = problem.norms(Xtrial, source_scale, s.compute_time_residual)
+    if trial_nrm["coeff_rel"] < nrm["coeff_rel"]:
+        accepted = True; break
+    alpha *= 0.5
+\end{lstlisting}
+Two points of detail. First, the acceptance test uses
+$r_{\mathrm{coeff,rel}}$ of \eqref{eq:convergence} rather than the bare
+$\|\Rvec\|$; since \code{source\_scale} is fixed within one Newton solve, the
+two differ by a positive constant and the tests are equivalent. Second, this is
+a \emph{simple-decrease} condition, not an Armijo condition with a sufficient-
+decrease constant. Simple decrease can in principle stall; in practice, combined
+with the exact preconditioner and continuation, it has not been observed to.
+\end{implnote}
+
+\section{The complete hierarchy}
+\label{sec:hierarchy}
+
+\begin{center}
+\begin{minipage}{0.95\textwidth}
+\small\ttfamily
+\begin{tabbing}
+xx\=xx\=xx\=xx\=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\=\kill
+Frequency loop --- select $f_p$, form the linear operators \\
+\> $\omega_p = 2\pi f_p$ \\
+\> $D_k(\omega_p) = K - (k\omega_p)^2 C + i k\omega_p G$ \\
+\> [Schur:] $\mathcal{S}_k = D_{nn,k} - D_{ne,k}D_{ee,k}^{-1}D_{en,k}$,\quad
+   $P_r D_{ee,k} P_c = L_{e,k}U_{e,k}$ \\[4pt]
+\> Power loop --- convert source power to pump forcing \\
+\>\> $I_p = \sqrt{2P_{\mathrm{device}}/Z_0}$ \\
+\>\> $S_k = \tfrac12 I_{\mathrm{solver}}\,e_p\,\delta_{k,k_{\mathrm{src}}}$ \\
+\>\> warm start: $X_{\mathrm{pred}} = X_j + \frac{I_{j+1}-I_j}{I_j-I_{j-1}}(X_j-X_{j-1})$ \\[4pt]
+\>\> Continuation loop --- scale the source from easy to physical \\
+\>\>\> $R(X;\lambda) = \mathcal{D}X + N(X) - \lambda S = 0$,\quad $\lambda: 0\to1$ \\
+\>\>\> success: $\Delta\lambda \leftarrow \min(1, 1.5\,\Delta\lambda)$;\quad
+       failure: $\Delta\lambda \leftarrow 0.5\,\Delta\lambda$ \\
+\>\>\> tangent: $J\dot{X} = S$,\quad $X_{\mathrm{pred}} = X + \Delta\lambda\,\dot{X}$ \\[4pt]
+\>\>\> Newton loop --- linearise and seek the root \\
+\>\>\>\> $J(X^{(n)})\Delta X^{(n)} = -R(X^{(n)})$ \\
+\>\>\>\> $X^{(n+1)} = X^{(n)} + \alpha_n \Delta X^{(n)}$ \\
+\>\>\>\> stop when $r_{\mathrm{coeff,rel}} < \varepsilon$ \\[4pt]
+\>\>\>\> $\vdash$ Residual: $x_r = 2\Real[\sum_k X_k e^{ik\theta_r}]$;\quad
+         $\psi_r = \psi_{\mathrm{dc}} + B_\phi^{\mathsf T}x_r$ \\
+\>\>\>\> \phantom{$\vdash$} $i_{J,r} = I_c\odot\sin(\psi_r/\varphi_0) - I_c\odot\sin(\psi_{\mathrm{dc}}/\varphi_0)$ \\
+\>\>\>\> \phantom{$\vdash$} $N_k = \frac{1}{N_t}\sum_r B_\phi i_{J,r} e^{-ik\theta_r}$;\quad
+         $R_k = D_kX_k + N_k - \lambda S_k$ \\[3pt]
+\>\>\>\> $\vdash$ Preconditioner: $\gamma(t) = \frac{I_c}{\varphi_0}\odot\cos(\psi(t)/\varphi_0)$ \\
+\>\>\>\> \phantom{$\vdash$} $\widehat{K}_\ell = B_\phi\diag(\hat\gamma_\ell)B_\phi^{\mathsf T}$ \\
+\>\>\>\> \phantom{$\vdash$} $(MV)_k = D_kV_k + \sum_q[\widehat{K}_{k-q}V_q + \widehat{K}_{k+q}\overline{V_q}]$ \\[3pt]
+\>\>\>\> $\vdash$ Factorisation: $P_r M P_c = LU$;\quad
+         $M^{-1}v = P_c U^{-1}L^{-1}P_r v$ \\[3pt]
+\>\>\>\> $\vdash$ GMRES (LEFT preconditioned): $M^{-1}J\,\Delta X = -M^{-1}R$ \\
+\>\>\>\> \phantom{$\vdash$} $\mathcal{K}_m = \spanof\{b, Ab, \dots, A^{m-1}b\}$,\quad
+         $A = M^{-1}J$ \\[3pt]
+\>\>\>\> $\vdash$ JVP: $v(t) = 2\Real[\sum_q V_q e^{iq\omega_p t}]$;\quad
+         $\delta\psi = B_\phi^{\mathsf T}v$ \\
+\>\>\>\> \phantom{$\vdash$} $\delta i_J = \gamma\odot\delta\psi$;\quad
+         $(JV)_k = D_kV_k + \mathcal{F}_k[B_\phi\,\delta i_J]$ \\[3pt]
+\>\>\>\> $\vdash$ Line search: $\alpha_j = 2^{-j}$;\quad accept if
+         $\|R(X+\alpha_j\Delta X)\| < \|R(X)\|$
+\end{tabbing}
+\end{minipage}
+\end{center}
+
+\medskip
+The whole numerical process is the chain
+\begin{equation}
+  f_p \to \Dmat_k
+  \;\to\;
+  P_p \to \Svec
+  \;\to\;
+  \lambda \to \Rvec(\Xvec;\lambda)
+  \;\to\;
+  \Jmat\Delta\Xvec = -\Rvec
+  \;\to\;
+  \Mmat\to\mat{L}\mat{U}
+  \;\to\;
+  \text{GMRES}\to\Delta\Xvec
+  \;\to\;
+  \alpha \to \Xvec_{\mathrm{new}},
+\end{equation}
+iterated until $\|\Rvec(\Xvec_{\mathrm{new}})\|\to 0$.
+
+\section{Summary of implementation departures}
+
+Three places where the running code differs from the idealised specification
+above, collected for reference:
+
+\begin{center}
+\begin{tabular}{@{}p{0.20\textwidth} p{0.34\textwidth} p{0.36\textwidth}@{}}
+\toprule
+\textbf{Item} & \textbf{Specification} & \textbf{Implementation} \\
+\midrule
+Preconditioner side
+& Right: $\Jmat\Mmat^{-1}\vect{y}=-\Rvec$, then $\Delta\Xvec=\Mmat^{-1}\vect{y}$
+& \textbf{Left}: $\Mmat^{-1}\Jmat\Delta\Xvec = -\Mmat^{-1}\Rvec$. SciPy
+  \code{gmres} preconditions on the left; the returned vector is used directly.
+  \code{rtol} therefore measures the preconditioned residual.
+  (\cref{impl:left-precond}) \\
+\addlinespace
+Branch current
+& $\iJ = \Ic\hada\sin(\psi/\rphi)$ with $\psi = \psi_{\mathrm{dc}}+\Bphi^{\mathsf T}\xvec$
+& The static current $\Ic\hada\sin(\psi_{\mathrm{dc}}/\rphi)$ is
+  \textbf{subtracted}. Identically zero for unbiased 4WM. Verified:
+  $\num{2.647e-23}$ against the subtracted form, $\num{1.384e-7}$ against the
+  literal one. (\cref{impl:dc-subtraction}) \\
+\addlinespace
+Time-domain source
+& $\isrc(t)=2\Real[\Svec_{k_{\mathrm{src}}}e^{ik_{\mathrm{src}}\wp t}]$
+& \code{source\_time} hardcodes $\cos(\wp t)$, ignoring $k_{\mathrm{src}}$.
+  Deviation $\num{1.536}$ at $k_{\mathrm{src}}=3$. Diagnostic-only path;
+  never enters Newton. (\cref{impl:source-time}) \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Everything else in this chapter --- $\Dmat_k$, the source coefficient, the
+residual, the convergence criterion, $\ghat_\ell$, $\Khat_\ell$, the four
+preconditioners, the secant and tangent predictors, the adaptive constants
+$1.5/0.5$, and the $2^{-j}$ line search --- was verified against the running
+code, in several cases to machine precision.

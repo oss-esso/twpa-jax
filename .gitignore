@@ -7,3 +7,23 @@ pytest-of-*/
 outputs/
 industrial_completion_outputs/
 references/**/__pycache__/
+
+# --- LaTeX build artifacts ---------------------------------------------------
+# Every rule is scoped to thesis/, never blanket. Blanket *.aux/*.out/*.toc
+# would shadow the tracked build products of the reports under
+# docs/development/reports/, and a blanket *.log would shadow the run logs kept
+# as reference artifacts under references/.
+# The sources are tracked; everything a compiler regenerates is not. main.pdf
+# is excluded too -- committing a build product makes every rebuild a diff.
+thesis/*.aux
+thesis/*.bbl
+thesis/*.blg
+thesis/*.fdb_latexmk
+thesis/*.fls
+thesis/*.lof
+thesis/*.log
+thesis/*.lot
+thesis/*.out
+thesis/*.pdf
+thesis/*.synctex.gz
+thesis/*.toc

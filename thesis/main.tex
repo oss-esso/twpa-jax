@@ -1,0 +1,49 @@
+% ============================================================================
+% Thesis: Harmonic-balance simulation of travelling-wave parametric amplifiers
+%
+% Build:  latexmk -pdf main.tex
+%
+% This file is a scaffold. The institutional template replaces \documentclass,
+% the geometry block in preamble.tex, and the front matter below; the chapter
+% files are template-independent.
+% ============================================================================
+
+\documentclass[11pt,a4paper,twoside,openright]{report}
+
+\input{preamble}
+
+\title{Harmonic-Balance Simulation of Josephson Travelling-Wave\\
+       Parametric Amplifiers:\\
+       Theory, Numerical Method, and the Saturation Regime}
+\author{Edoardo}
+\date{\today}
+
+\begin{document}
+
+\maketitle
+
+\tableofcontents
+
+\chapter*{Notation}
+\addcontentsline{toc}{chapter}{Notation}
+\input{chapters/00_notation}
+
+\input{chapters/01_introduction}
+\input{chapters/02_twpa_theory}
+\input{chapters/03_circuit_model}
+\input{chapters/04_pump_harmonic_balance}
+\input{chapters/05_numerical_methods}
+\input{chapters/06_small_signal_floquet}
+\input{chapters/07_saturation}
+\input{chapters/08_validation_and_limits}
+
+\appendix
+\input{chapters/A1_conventions_and_pitfalls}
+
+% The chapters do not yet carry \cite keys -- \nocite{*} renders the starter
+% bibliography so the entries are visible while citing them is done.
+\nocite{*}
+\bibliographystyle{plain}
+\bibliography{bibliography}
+
+\end{document}
