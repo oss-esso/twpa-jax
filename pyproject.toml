@@ -13,16 +13,20 @@ dependencies = [
   "scipy",
   "matplotlib",
   "pytest",
-  "pypardiso",
 ]
 
-[project.scripts]
-twpa = "twpa.cli:main"
+[project.optional-dependencies]
+# PARDISO is the default sparse factorization backend and is a large speedup
+# on the multitone problems, but SuperLU works via the automatic fallback.
+fast = ["pypardiso"]
 
 [tool.setuptools.packages.find]
-where = ["src", "."]
-include = ["twpa*", "twpa_solver*"]
+where = ["src"]
+include = ["twpa_solver*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra"
+markers = [
+  "slow: dense harmonic-balance smoke tests, enabled with --run-slow",
+]

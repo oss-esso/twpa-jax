@@ -73,10 +73,68 @@ Generated S-parameter files are:
 
 The gain-map portion additionally produces `map_points.csv`, `map_arrays.npz`, `map_spectrum.npz` when enabled, `map_summary.json`, and the standard plot tree.
 
+## 4. Measure compression (P1dB)
+
+`scripts/run_compression.py` holds the pump fixed and sweeps signal power until the gain drops 1 dB below its small-signal value. Unlike the gain map, the signal is not a perturbation here: the sidebands act back on the pump, so the pump and signal are solved together on a multitone basis.
+
+Against a built-in reference device, which needs no circuit directory:
+
+```powershell
+python scripts/run_compression.py `
+  --fixture jtwpa `
+  --signal-ghz 6.6 `
+  --output-dir outputs/compression_jtwpa
+```
+
+Against a real design:
+
+```powershell
+python scripts/run_compression.py `
+  --circuit-dir designs/ipm_2c_fixed `
+  --signal-ghz 7.44 `
+  --pump-freq-ghz 7.1 `
+  --pump-port 4 `
+  --multitone-backend schur_cpu_mt `
+  --output-dir outputs/compression_2c
+```
+
+Signal frequency is mandatory for a single run. Fixtures default to zero line attenuation; loaded circuits use the measured loss model unless `--attenuation-db` is given explicitly.
+
+### Choosing a basis
+
+`--multitone-basis` selects how the tone set is built:
+
+- `matched` (default) retains the pump harmonics alongside the signal sidebands. Use this.
+- `three_tone` is only valid with a fundamental-only pump basis. The driver raises rather than silently dropping a pump harmonic.
+- `lattice` is the convergence-study basis.
+
+`--multitone-sidebands` sets the basis size. Memory scales as `(n_pump_modes + 2S + 1)^2`, not as the packed dimension, because the coupled Jacobian is block-dense in tone index. Roughly 2.8 GB per worker at S=10, 1.6 GB at S=6, 0.9 GB at S=2. `--signal-workers` is capped automatically against both `--resource-budget-gb` and actual free memory.
+
+### Reading the output
+
+The driver emits both a refined `p1db` and an interpolated `p1db_interpolated_dbm` from the same sweep, so the difference between the two methods is a single-variable comparison. `--p1db-power-tol-db 0` falls back to interpolation only.
+
+Two diagnostics need care. `manley_rowe_rel_err` is meaningful only in the conversion scope (pump/signal/idler); the all-tone variant is not a valid invariant and must never be used as a gate. `stability_status` stays `NOT_CHECKED` unless you pass `--check-stability` — a deep-saturation solution without it is not a stability claim, and any exponent it does report should be quoted against `omega_p` rather than in bare s^-1.
+
+## 5. Compare a map against measurement
+
+The Themis measurement cubes ship under `docs/development/`. Two scripts consume them.
+
+`compare_map_to_measurement.py` overlays a simulated map on the measured peak-gain and collapse-power envelope, aligned by hand-supplied calibration offsets.
+
+`align_map_to_measurement.py` instead *fits* those offsets as nuisance parameters. The model is `G_meas(f,P) ~= G_sim(f-df, P-dP) + dG`; for weighted least squares `dG` is analytic per `(df,dP)`, so only a two-dimensional grid search over frequency and power shift remains. It masks non-overlapping and failed cells, weights the amplified ridge above the flat background, and writes JSON plus a four-panel figure: measurement, aligned simulation, residual, and the loss surface itself.
+
+```powershell
+python scripts/align_map_to_measurement.py --help
+```
+
+Fit one band at a time with `--fit-freq-ghz` / `--fit-power-dbm`. A whole-map fit has to compromise between comb lobes and produces a frequency-elongated, weakly identified basin; per-section fits give a compact single minimum. `--min-overlap-frac` (default 0.25) rejects tiny-overlap corner fits, which would otherwise win on local residual alone.
+
 ## Shared conventions
 
 - Frequencies on the command line are in GHz unless the option says otherwise.
 - Pump powers are in dBm.
 - Circuit directories are normally under `designs/`; computational runs are normally under `outputs/`.
 - Use `--help` on each workflow for the workflow-specific options. IPM and gain-map options are intentionally forwarded to their existing parsers.
+- Long campaigns should be pruned before archiving: `python scripts/prune_map_solutions.py <run-dir> --top-k 100 --purge-point-dirs --apply`.
 
