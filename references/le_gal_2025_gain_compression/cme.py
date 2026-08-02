@@ -58,7 +58,7 @@ def published_cme_parameters(
 
     The derivation uses the small-signal branch slope and cubic Taylor
     coefficient of the half-flux SNAIL, and the exact discrete ladder
-    dispersion ``2 asin(omega sqrt(L C)/2) / dx``.  The resulting coefficients
+    dispersion stamped by the assembled circuit.  The resulting coefficients
     are inferred model quantities, not digitized paper data.
     """
     phi0 = 2.067833848e-15 / (2.0 * np.pi)
@@ -71,10 +71,11 @@ def published_cme_parameters(
     cubic_current = critical_current_a * (ratio / 6.0 - 1.0 / 162.0) / phi0**3
     z0 = float(np.sqrt(inductance_h / ground_capacitance_f))
     def wave_number(omega: float) -> float:
-        argument = omega * np.sqrt((inductance_h + snail_capacitance_f / (ground_capacitance_f / inductance_h)) * ground_capacitance_f)
-        argument = np.clip(argument * 0.5, -0.999999999, 0.999999999)
+        argument = omega * np.sqrt(inductance_h * ground_capacitance_f)
+        argument /= 2.0 * np.sqrt(1.0 - omega**2 * inductance_h * snail_capacitance_f)
+        argument = np.clip(argument, -0.999999999, 0.999999999)
         return 2.0 * np.arcsin(argument) / cell_length_m
-    mismatch = wave_number(omega_s) + wave_number(omega_i) - 2.0 * wave_number(omega_p)
+    mismatch = 2.0 * wave_number(omega_p) - wave_number(omega_s) - wave_number(omega_i)
     k_p = wave_number(omega_p)
     pump_envelope = np.sqrt(pump_power_w * z0) / omega_p
     # A 3/4 factor applies to a cosine amplitude and 1/8 to a different

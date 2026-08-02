@@ -1,0 +1,33 @@
+{
+  "method": "single-cell Bloch extraction from stamped interior C/K entries",
+  "builder_max_relative_error": 1.0940395822272829e-15,
+  "builder_rms_relative_error": 3.822702844780847e-16,
+  "cme_max_relative_error": 0.06067484111760348,
+  "cme_rms_relative_error": 0.039733888515170235,
+  "dk_total_zero_crossings_GHz": [
+    6.427250493442289,
+    8.572749506557708
+  ],
+  "phase_budget": [
+    {
+      "f_s_GHz": 5.0,
+      "dk_total_rad_per_m": -2680.311040620636,
+      "abs_dk_total_length_rad": 16.323094237379674
+    },
+    {
+      "f_s_GHz": 6.0,
+      "dk_total_rad_per_m": -568.9074745367217,
+      "abs_dk_total_length_rad": 3.464646519928635
+    },
+    {
+      "f_s_GHz": 8.0,
+      "dk_total_rad_per_m": 463.3718202013441,
+      "abs_dk_total_length_rad": 2.8219343850261853
+    },
+    {
+      "f_s_GHz": 8.6,
+      "dk_total_rad_per_m": -30.21843393561369,
+      "abs_dk_total_length_rad": 0.18403026266788736
+    }
+  ]
+}
