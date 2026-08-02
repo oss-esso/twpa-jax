@@ -61,12 +61,23 @@ import json
 import math
 import os
 import re
+import shutil
 from dataclasses import asdict, dataclass
-from typing import Any
+from pathlib import Path
+from typing import Any, Sequence
 
 import numpy as np
 import scipy.sparse as sp
 from scipy.optimize import minimize
+
+from twpa_solver.builders.profiles import (
+    Segment,
+    evaluate_profile,
+    parse_profile_json,
+    parse_profile_shorthand,
+    segments_to_json,
+)
+from twpa_solver.builders.scatter import ScatterSpec, apply_scatter, component_rng
 
 
 C_LIGHT = 299_792_458.0
@@ -85,6 +96,19 @@ class Element:
     n2: Any
     value: float | int | str
     kind: str
+    role: str = ""
+    cell_index: int | None = None
+
+
+@dataclass(frozen=True)
+class ComponentPlan:
+    lj: np.ndarray
+    cj: np.ndarray
+    cg: np.ndarray
+    metadata: dict[str, Any]
+    lj_nominal: np.ndarray | None = None
+    cj_nominal: np.ndarray | None = None
+    cg_nominal: np.ndarray | None = None
 
 
 @dataclass
@@ -501,8 +525,17 @@ def make_ideal_coupler(
 # Netlist construction
 # =============================================================================
 
-def add(circuit: list[Element], name: str, n1: Any, n2: Any, value: Any, kind: str) -> None:
-    circuit.append(Element(name=name, n1=n1, n2=n2, value=value, kind=kind))
+def add(
+    circuit: list[Element], name: str, n1: Any, n2: Any, value: Any, kind: str,
+    *, role: str | None = None, cell_index: int | None = None,
+) -> None:
+    inferred = {
+        "josephson_inductor": "jj_lj", "capacitor": "capacitor",
+        "linear_inductor": "tl_l", "coupling_capacitor": "coupling_cap",
+        "mutual_inductor_k": "mutual_k", "port": "port", "resistor": "resistor",
+    }[kind]
+    circuit.append(Element(name=name, n1=n1, n2=n2, value=value, kind=kind,
+                           role=role or inferred, cell_index=cell_index))
 
 
 def add_jj(
@@ -512,11 +545,13 @@ def add_jj(
     Lj: float,
     Cj: float,
     mod_factor: float = 1.0,
+    *, cell_index: int | None = None, explicit: tuple[float, float] | None = None,
 ) -> None:
-    Lj_mod = Lj / mod_factor
-    Cj_mod = Cj * mod_factor
-    add(circuit, f"Lj{node_j}_{node_jj}", node_j, node_jj, Lj_mod, "josephson_inductor")
-    add(circuit, f"C{node_j}_{node_jj}", node_j, node_jj, Cj_mod, "capacitor")
+    Lj_mod, Cj_mod = explicit if explicit is not None else (Lj / mod_factor, Cj * mod_factor)
+    add(circuit, f"Lj{node_j}_{node_jj}", node_j, node_jj, Lj_mod,
+        "josephson_inductor", role="jj_lj", cell_index=cell_index)
+    add(circuit, f"C{node_j}_{node_jj}", node_j, node_jj, Cj_mod,
+        "capacitor", role="jj_cj", cell_index=cell_index)
 
 
 def add_tl_element(
@@ -538,9 +573,17 @@ def add_jtl_element(
     Lj: float,
     Cj: float,
     mod_factor: float = 1.0,
+    *, cell_index: int | None = None, explicit: tuple[float, float, float] | None = None,
 ) -> None:
-    add(circuit, f"C{node_j}_{ground}", node_j, ground, Cg, "capacitor")
-    add_jj(circuit, node_j, node_j + 1, Lj, Cj, mod_factor=mod_factor)
+    if explicit is None:
+        cg_value, lj_value, cj_value = Cg, Lj, Cj
+    else:
+        cg_value, lj_value, cj_value = explicit
+    add(circuit, f"C{node_j}_{ground}", node_j, ground, cg_value,
+        "capacitor", role="jtl_cg", cell_index=cell_index)
+    add_jj(circuit, node_j, node_j + 1, lj_value, cj_value,
+           mod_factor=mod_factor, cell_index=cell_index,
+           explicit=None if explicit is None else (lj_value, cj_value))
 
 
 def add_tl(
@@ -568,13 +611,19 @@ def add_jtl(
     N_cell: int,
     mod_array: np.ndarray | None = None,
     mod_start_idx: int = 0,
+    plan: ComponentPlan | None = None,
 ) -> tuple[int, int]:
     n_curr = n_start
     curr_mod_idx = mod_start_idx
 
     for _ in range(N_cell):
         mf = float(mod_array[curr_mod_idx]) if mod_array is not None else 1.0
-        add_jtl_element(circuit, n_curr, ground, Cg, Lj, Cj, mod_factor=mf)
+        explicit = None
+        if plan is not None:
+            explicit = (float(plan.cg[curr_mod_idx]), float(plan.lj[curr_mod_idx]),
+                        float(plan.cj[curr_mod_idx]))
+        add_jtl_element(circuit, n_curr, ground, Cg, Lj, Cj,
+                        mod_factor=mf, cell_index=curr_mod_idx, explicit=explicit)
         n_curr += 1
 
         if mod_array is not None:
@@ -679,11 +728,76 @@ def generate_and_append_coupler(
     return add_edge_coupled_directional_coupler(circuit, n_t, n_b, ground, discrete)
 
 
+def build_component_plan(
+    params: IPMParams, *, lj_segments: Sequence[Segment] = (),
+    cg_segments: Sequence[Segment] = (), lj_scatter: ScatterSpec = ScatterSpec(),
+    cj_scatter: ScatterSpec = ScatterSpec(), cg_scatter: ScatterSpec = ScatterSpec(),
+    seed: int = 1,
+) -> ComponentPlan:
+    """Build nominal and independently scattered per-cell component arrays."""
+    n_cells = params.num_rows * params.array_length
+    lj_nominal = evaluate_profile(lj_segments, n_cells=n_cells,
+                                  cells_per_row=params.array_length,
+                                  base_value=params.Lj)
+    cj_nominal = params.Cj * (params.Lj / lj_nominal)
+    cg_nominal = evaluate_profile(cg_segments, n_cells=n_cells,
+                                  cells_per_row=params.array_length,
+                                  base_value=params.Cg)
+    lj, lj_meta = apply_scatter(lj_nominal, lj_scatter, component_rng(seed, "Lj"))
+    cj, cj_meta = apply_scatter(cj_nominal, cj_scatter, component_rng(seed, "Cj"))
+    cg, cg_meta = apply_scatter(cg_nominal, cg_scatter, component_rng(seed, "Cg"))
+    # The per-cell arrays live in ipm_arrays.npz; the summary carries only what
+    # is needed to regenerate them, so it stays small enough to load per solve.
+    metadata = {
+        "seed": int(seed),
+        "n_cells": int(n_cells),
+        "cells_per_row": int(params.array_length),
+        "segments": {"Lj": segments_to_json(lj_segments),
+                     "Cg": segments_to_json(cg_segments)},
+        "scatter": {"Lj": lj_meta, "Cj": cj_meta, "Cg": cg_meta},
+        "scatter_specs": {"Lj": asdict(lj_scatter), "Cj": asdict(cj_scatter),
+                          "Cg": asdict(cg_scatter)},
+    }
+    return ComponentPlan(lj=lj, cj=cj, cg=cg, metadata=metadata,
+                         lj_nominal=lj_nominal, cj_nominal=cj_nominal,
+                         cg_nominal=cg_nominal)
+
+
+def legacy_scatter_summary(plan: ComponentPlan) -> dict[str, Any]:
+    """Re-emit the pre-profile ``lj_scatter_*`` summary keys.
+
+    Every design under ``designs/`` carries these, so consumers that read them
+    keep working against newly built artifacts.
+    """
+    spec = plan.metadata["scatter_specs"]["Lj"]
+    stats = plan.metadata["scatter"]["Lj"]
+    nominal = plan.lj if plan.lj_nominal is None else plan.lj_nominal
+    return {
+        "lj_scatter_enabled": bool(spec["sigma"] > 0.0),
+        "lj_scatter_sigma": float(spec["sigma"]),
+        "lj_scatter_seed": int(plan.metadata["seed"]),
+        "lj_scatter_count": int(plan.lj.size),
+        "lj_scatter_clip_min": float(spec["clip_min"]),
+        "lj_scatter_clip_max": float(spec["clip_max"]),
+        "lj_scatter_factor_min": stats["factor_min"],
+        "lj_scatter_factor_max": stats["factor_max"],
+        "lj_scatter_factor_mean": stats["factor_mean"],
+        "lj_scatter_factor_std": stats["factor_std"],
+        "lj_base_min_h": float(np.min(nominal)) if nominal.size else None,
+        "lj_base_max_h": float(np.max(nominal)) if nominal.size else None,
+        "lj_scattered_min_h": float(np.min(plan.lj)) if plan.lj.size else None,
+        "lj_scattered_max_h": float(np.max(plan.lj)) if plan.lj.size else None,
+    }
+
+
 def make_ipm(
     params: IPMParams,
     coupler: CouplerDiscrete,
     mod_array: np.ndarray | None = None,
+    *, plan: ComponentPlan | None = None,
 ) -> tuple[list[Element], dict[str, int]]:
+    if mod_array is not None and plan is not None:
+        raise ValueError("make_ipm accepts either mod_array or plan, not both")
     circuit: list[Element] = []
 
     start_node_top = params.start_node_top
@@ -718,6 +832,9 @@ def make_ipm(
 
     for i in range(1, params.num_rows):
         mf = float(mod_array[curr_mod_idx])
+        explicit = None if plan is None else (
+            float(plan.cg[curr_mod_idx]) / 2.0, float(plan.lj[curr_mod_idx]),
+            float(plan.cj[curr_mod_idx]))
         add_jtl_element(
             circuit,
             j_top,
@@ -725,7 +842,7 @@ def make_ipm(
             params.Cg / 2.0,
             params.Lj,
             params.Cj,
-            mod_factor=mf,
+            mod_factor=mf, cell_index=curr_mod_idx, explicit=explicit,
         )
         j_top += 1
         curr_mod_idx += 1
@@ -740,9 +857,12 @@ def make_ipm(
             params.array_length - 1,
             mod_array=mod_array,
             mod_start_idx=curr_mod_idx,
+            plan=plan,
         )
 
-        add(circuit, f"C{j_top}_{ground}_JTL_end", j_top, ground, params.Cg / 2.0, "capacitor")
+        end_cg = params.Cg / 2.0 if plan is None else float(plan.cg[curr_mod_idx - 1]) / 2.0
+        add(circuit, f"C{j_top}_{ground}_JTL_end", j_top, ground, end_cg,
+            "capacitor", role="jtl_cg", cell_index=curr_mod_idx - 1)
 
         if i % params.arrays_per_dc == 0:
             j_top = add_tl(circuit, j_top, ground, params.Ll, params.Cl, ll2)
@@ -765,6 +885,9 @@ def make_ipm(
             j_top = add_tl(circuit, j_top, ground, params.Ll, params.Cl, ll)
 
     mf = float(mod_array[curr_mod_idx])
+    explicit = None if plan is None else (
+        float(plan.cg[curr_mod_idx]) / 2.0, float(plan.lj[curr_mod_idx]),
+        float(plan.cj[curr_mod_idx]))
     add_jtl_element(
         circuit,
         j_top,
@@ -772,7 +895,7 @@ def make_ipm(
         params.Cg / 2.0,
         params.Lj,
         params.Cj,
-        mod_factor=mf,
+        mod_factor=mf, cell_index=curr_mod_idx, explicit=explicit,
     )
     j_top += 1
     curr_mod_idx += 1
@@ -787,9 +910,12 @@ def make_ipm(
         params.array_length - 1,
         mod_array=mod_array,
         mod_start_idx=curr_mod_idx,
+        plan=plan,
     )
 
-    add(circuit, f"C{j_top}_{ground}_JTL_end", j_top, ground, params.Cg / 2.0, "capacitor")
+    end_cg = params.Cg / 2.0 if plan is None else float(plan.cg[curr_mod_idx - 1]) / 2.0
+    add(circuit, f"C{j_top}_{ground}_JTL_end", j_top, ground, end_cg,
+        "capacitor", role="jtl_cg", cell_index=curr_mod_idx - 1)
 
     j_top = add_tl(circuit, j_top, ground, params.Ll, params.Cl, params.len2)
     add(circuit, f"R{j_top}_{ground}", j_top, ground, params.Rright, "resistor")
@@ -1054,14 +1180,15 @@ def write_outputs(
     ends: dict[str, int],
     mats: dict[str, Any] | None,
     extra_summary: dict[str, Any] | None = None,
+    plan: ComponentPlan | None = None,
 ) -> dict[str, Any]:
     os.makedirs(outdir, exist_ok=True)
 
     with open(os.path.join(outdir, "ipm_elements.csv"), "w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
-        w.writerow(["idx", "name", "node1", "node2", "value", "kind"])
+        w.writerow(["idx", "name", "node1", "node2", "value", "kind", "role", "cell_index"])
         for i, e in enumerate(circuit, 1):
-            w.writerow([i, e.name, e.n1, e.n2, e.value, e.kind])
+            w.writerow([i, e.name, e.n1, e.n2, e.value, e.kind, e.role, e.cell_index])
 
     ports = [e for e in circuit if e.kind == "port"]
     with open(os.path.join(outdir, "ipm_ports.csv"), "w", newline="", encoding="utf-8") as f:
@@ -1117,6 +1244,21 @@ def write_outputs(
         sp.save_npz(os.path.join(outdir, "Bphi.npz"), mats["Bphi"])
 
         ordered_ports = sorted(mats["port_vectors"].keys())
+        # Every per-cell array is indexed by JTL cell (n_cells), never by
+        # element, so Cg here is one value per cell and not one per stamped cap.
+        plan_arrays: dict[str, np.ndarray] = {}
+        if plan is not None:
+            plan_arrays = {
+                "Cj": np.asarray(plan.cj, dtype=float),
+                "Cg": np.asarray(plan.cg, dtype=float),
+                "cell_index": np.arange(plan.lj.size, dtype=np.int64),
+                "Lj_nominal": np.asarray(
+                    plan.lj if plan.lj_nominal is None else plan.lj_nominal, dtype=float),
+                "Cj_nominal": np.asarray(
+                    plan.cj if plan.cj_nominal is None else plan.cj_nominal, dtype=float),
+                "Cg_nominal": np.asarray(
+                    plan.cg if plan.cg_nominal is None else plan.cg_nominal, dtype=float),
+            }
         np.savez(
             os.path.join(outdir, "ipm_arrays.npz"),
             nodes=mats["nodes"],
@@ -1125,6 +1267,7 @@ def write_outputs(
             phi0_reduced=np.array([PHI0_REDUCED]),
             port_numbers=np.array(ordered_ports, dtype=np.int64),
             port_indices=np.array([mats["port_vectors"][p] for p in ordered_ports], dtype=np.int64),
+            **plan_arrays,
         )
 
     with open(os.path.join(outdir, "ipm_summary.json"), "w", encoding="utf-8") as f:
@@ -1211,6 +1354,92 @@ def draw_schematics(outdir: str) -> None:
     print(f"wrote={os.path.join(outdir, 'ipm_block_diagram.svg')}")
 
 
+COUPLER_MODES = ("cached", "ideal", "optimize")
+
+
+def _topology_mismatch(
+    params: IPMParams, coupler_mode: str, source_rows: list[dict[str, str]]
+) -> str | None:
+    """Return a description of the first mismatch, or None when identical."""
+    coupler = make_coupler_discrete(params, coupler_mode)
+    nominal, _ = make_ipm(params, coupler)
+    if len(source_rows) != len(nominal):
+        return (
+            f"rebuilt netlist has {len(nominal)} elements, "
+            f"source has {len(source_rows)}"
+        )
+    fields = ("name", "node1", "node2", "kind")
+    for index, (row, element) in enumerate(zip(source_rows, nominal), start=1):
+        actual = (element.name, str(element.n1), str(element.n2), element.kind)
+        expected = tuple(row[field] for field in fields)
+        if actual != expected or float(element.value) != float(row["value"]):
+            return (
+                f"element {index}: expected {(*expected, row['value'])}, "
+                f"got {(*actual, element.value)}"
+            )
+    return None
+
+
+def assert_source_topology(
+    source_dir: str | os.PathLike[str], *, coupler_mode: str = "auto"
+) -> tuple[IPMParams, str]:
+    """Check a stored design is exactly reproduced by its own stored params.
+
+    The gate must run against a *nominal* rebuild. Comparing a profiled or
+    scattered netlist to the source would reject every real variant, since
+    changing component values is the whole point.
+
+    The coupler mode is not recorded in the summary, so ``auto`` tries each in
+    turn; a design built with ``ideal`` is not reproduced by ``cached``.
+    """
+    source = os.fspath(source_dir)
+    with open(os.path.join(source, "ipm_summary.json"), encoding="utf-8") as handle:
+        params = IPMParams(**json.load(handle)["params"])
+    with open(os.path.join(source, "ipm_elements.csv"), newline="", encoding="utf-8") as handle:
+        source_rows = list(csv.DictReader(handle))
+
+    modes = COUPLER_MODES if coupler_mode == "auto" else (coupler_mode,)
+    reasons: list[str] = []
+    for mode in modes:
+        reason = _topology_mismatch(params, mode, source_rows)
+        if reason is None:
+            return params, mode
+        reasons.append(f"{mode}: {reason}")
+    raise ValueError(
+        "source topology mismatch; stored params do not reproduce the artifact\n  "
+        + "\n  ".join(reasons)
+    )
+
+
+def build_variant_design(
+    source_dir: str | os.PathLike[str], outdir: str | os.PathLike[str], *,
+    lj_segments: Sequence[Segment] = (), cg_segments: Sequence[Segment] = (),
+    lj_scatter: ScatterSpec = ScatterSpec(), cj_scatter: ScatterSpec = ScatterSpec(),
+    cg_scatter: ScatterSpec = ScatterSpec(), seed: int = 1,
+    overwrite: bool = False, coupler_mode: str = "auto",
+) -> dict[str, Any]:
+    """Rebuild a stored design, gate its topology, and emit a variant."""
+    source = os.fspath(source_dir)
+    destination = os.fspath(outdir)
+    if os.path.exists(destination):
+        if not overwrite:
+            raise FileExistsError(f"{destination} exists; pass overwrite=True")
+        shutil.rmtree(destination)
+    params, resolved_mode = assert_source_topology(source, coupler_mode=coupler_mode)
+    coupler = make_coupler_discrete(params, resolved_mode)
+    plan = build_component_plan(params, lj_segments=lj_segments, cg_segments=cg_segments,
+                                lj_scatter=lj_scatter, cj_scatter=cj_scatter,
+                                cg_scatter=cg_scatter, seed=seed)
+    circuit, ends = make_ipm(params, coupler, plan=plan)
+    return write_outputs(destination, circuit, params, coupler, ends,
+                         build_matrices(circuit),
+                         extra_summary={"component_plan": plan.metadata,
+                                        "source_ipm_dir": source,
+                                        "source_coupler_mode": resolved_mode,
+                                        **legacy_scatter_summary(plan)},
+                         plan=plan)
+
+
 # =============================================================================
 # CLI
 # =============================================================================
@@ -1266,10 +1495,37 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     _add_optional_argument(p, "--cached-coupler-length-um", type=float)
 
     p.add_argument("--lj-scatter-sigma", type=float, default=0.0)
-    p.add_argument("--lj-scatter-seed", type=int, default=1)
+    p.add_argument("--lj-scatter-seed", type=int, default=None)
+    # default None so an explicit --scatter-seed 1 is distinguishable from the
+    # unset case when reconciling against the deprecated --lj-scatter-seed.
+    p.add_argument("--scatter-seed", type=int, default=None)
+    p.add_argument("--cj-scatter-sigma", type=float, default=0.0)
+    p.add_argument("--cg-scatter-sigma", type=float, default=0.0)
+    p.add_argument("--scatter-distribution", choices=["normal", "uniform"], default="normal")
     p.add_argument("--lj-scatter-clip-min", type=float, default=0.5)
     p.add_argument("--lj-scatter-clip-max", type=float, default=1.5)
+    p.add_argument("--cj-scatter-clip-min", type=float, default=0.5)
+    p.add_argument("--cj-scatter-clip-max", type=float, default=1.5)
+    p.add_argument("--cg-scatter-clip-min", type=float, default=0.5)
+    p.add_argument("--cg-scatter-clip-max", type=float, default=1.5)
+    p.add_argument("--profile-json", type=str, default=None)
+    p.add_argument("--lj-profile", action="append", default=[])
+    p.add_argument("--cg-profile", action="append", default=[])
     return p.parse_args(argv)
+
+
+def resolve_scatter_seed(scatter_seed: int | None, lj_scatter_seed: int | None) -> int:
+    """Reconcile --scatter-seed with the deprecated --lj-scatter-seed alias."""
+    if scatter_seed is not None and lj_scatter_seed is not None:
+        if scatter_seed != lj_scatter_seed:
+            raise ValueError(
+                f"--scatter-seed {scatter_seed} and --lj-scatter-seed "
+                f"{lj_scatter_seed} disagree; pass only one"
+            )
+        return int(scatter_seed)
+    if lj_scatter_seed is not None:
+        return int(lj_scatter_seed)
+    return 1 if scatter_seed is None else int(scatter_seed)
 
 
 def params_from_args(args: argparse.Namespace) -> IPMParams:
@@ -1325,14 +1581,24 @@ def main(argv: list[str] | None = None) -> None:
 
     params = params_from_args(args)
     coupler = make_coupler_discrete(params, args.coupler_mode)
-    circuit, ends = make_ipm(params, coupler)
-    scatter_meta = apply_lj_scatter(
-        circuit,
-        sigma=args.lj_scatter_sigma,
-        seed=args.lj_scatter_seed,
-        clip_min=args.lj_scatter_clip_min,
-        clip_max=args.lj_scatter_clip_max,
+    json_segments = (
+        parse_profile_json(Path(args.profile_json)) if args.profile_json
+        else {"Lj": [], "Cg": []}
     )
+    lj_segments = json_segments["Lj"] + [parse_profile_shorthand(text) for text in args.lj_profile]
+    cg_segments = json_segments["Cg"] + [parse_profile_shorthand(text) for text in args.cg_profile]
+    seed = resolve_scatter_seed(args.scatter_seed, args.lj_scatter_seed)
+    plan = build_component_plan(
+        params, lj_segments=lj_segments, cg_segments=cg_segments,
+        lj_scatter=ScatterSpec(args.lj_scatter_sigma, args.scatter_distribution,
+                               args.lj_scatter_clip_min, args.lj_scatter_clip_max),
+        cj_scatter=ScatterSpec(args.cj_scatter_sigma, args.scatter_distribution,
+                               args.cj_scatter_clip_min, args.cj_scatter_clip_max),
+        cg_scatter=ScatterSpec(args.cg_scatter_sigma, args.scatter_distribution,
+                               args.cg_scatter_clip_min, args.cg_scatter_clip_max),
+        seed=seed,
+    )
+    circuit, ends = make_ipm(params, coupler, plan=plan)
 
     mats = build_matrices(circuit) if args.write_matrices else None
 
@@ -1343,7 +1609,8 @@ def main(argv: list[str] | None = None) -> None:
         coupler=coupler,
         ends=ends,
         mats=mats,
-        extra_summary=scatter_meta,
+        extra_summary={"component_plan": plan.metadata, **legacy_scatter_summary(plan)},
+        plan=plan,
     )
     print_summary(summary)
 

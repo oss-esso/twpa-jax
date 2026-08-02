@@ -116,8 +116,9 @@ def _scatter_elements_csv(ipm_dir: Path, factors: np.ndarray) -> None:
     with elements_path.open("r", newline="", encoding="utf-8") as f:
         rows = list(csv.DictReader(f))
 
-    # csv.DictReader consumes the header, so preserve the canonical schema.
-    header = ["idx", "name", "node1", "node2", "value", "kind"]
+    # csv.DictReader consumes the header; preserve whichever additive schema
+    # the source design uses.
+    header = list(rows[0].keys()) if rows else []
     jj_idx = 0
     for row in rows:
         if row.get("kind") == "josephson_inductor":
