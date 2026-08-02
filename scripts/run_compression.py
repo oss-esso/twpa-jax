@@ -69,6 +69,18 @@ from twpa_solver.multitone.seed import promote_pump_solution
 
 logger = logging.getLogger(__name__)
 
+
+class P1dbRefinementFailed(RuntimeError):
+    """A bracketed P1dB refinement solve did not converge.
+
+    Carries the failing point's status so the caller can record why refinement
+    was skipped, instead of losing an otherwise complete sweep.
+    """
+
+    def __init__(self, status: str) -> None:
+        super().__init__(f"P1dB refinement solve failed: {status}")
+        self.status = status
+
 # Physical memory deliberately left unallocated when sizing worker concurrency.
 # Sized as a fraction of one worker rather than a flat figure: a flat 2.0 GB was
 # calibrated when a worker peaked at 3.04 GB and machines had ~15 GB free, and
@@ -817,6 +829,7 @@ def _solve_compression(
     # run-to-run variation into a comparison that has none.
     p1db_interpolated_current_a = p1db_current_a
     p1db_method = "interpolated"
+    p1db_refinement_failure: str | None = None
     adjacent_valid = (
         (left, right)
         for left, right in zip(points, points[1:])
@@ -860,12 +873,15 @@ def _solve_compression(
                         signal_current_prev_a=nearest,
                         recovery="ladder",
                         pump_seed=pump_seed_solve,
+                        signal_substep_init_db=args.signal_substep_init_db,
+                        signal_substep_min_db=args.signal_substep_min_db,
+                        continuation_deadline_s=(
+                            args.signal_continuation_deadline_s
+                        ),
+                        arclength_recovery=args.signal_arclength_recovery,
                     )
                     if candidate.status != "VALID_SOLVED":
-                        raise RuntimeError(
-                            "P1dB refinement solve failed: "
-                            f"{candidate.status}"
-                        )
+                        raise P1dbRefinementFailed(candidate.status)
                     trial_state = observable_state(trial_problem, candidate.state)
                     trial_gain_vs_off_db = gain_vs_off(
                         trial_state, current_trial
@@ -874,17 +890,30 @@ def _solve_compression(
                         reference_gain - trial_gain_vs_off_db
                     )
 
-                p1db_dbm_refined = refine_p1db(
-                    evaluate,
-                    bracket,
-                    tolerance_db=args.p1db_power_tol_db,
-                )
-                p1db_current_a = math.sqrt(
-                    2.0 * 1.0e-3
-                    * 10.0 ** ((p1db_dbm_refined - attenuation_db) / 10.0)
-                    / args.z0_ohm
-                )
-                p1db_method = "refined"
+                # A refinement solve that will not converge is a statement
+                # about one mid-bracket power, not about the sweep that
+                # bracketed it.  Degrading to the interpolated P1dB keeps every
+                # solved point; raising here discarded the whole run's
+                # artifacts after the sweep had already succeeded.
+                try:
+                    p1db_dbm_refined = refine_p1db(
+                        evaluate,
+                        bracket,
+                        tolerance_db=args.p1db_power_tol_db,
+                    )
+                except (P1dbRefinementFailed, ValueError) as exc:
+                    p1db_refinement_failure = f"{type(exc).__name__}: {exc}"
+                    logger.warning(
+                        "P1dB refinement degraded to interpolation (%s)",
+                        p1db_refinement_failure,
+                    )
+                else:
+                    p1db_current_a = math.sqrt(
+                        2.0 * 1.0e-3
+                        * 10.0 ** ((p1db_dbm_refined - attenuation_db) / 10.0)
+                        / args.z0_ohm
+                    )
+                    p1db_method = "refined"
             break
     p1db_dbm = (
         _current_to_dbm(p1db_current_a, args.z0_ohm, attenuation_db)
@@ -1012,6 +1041,7 @@ def _solve_compression(
             or not np.isfinite(float(point["compression_db"]))
         ],
         "p1db_degraded": bool(curve.failed_signal_power_dbm),
+        "p1db_refinement_failure": p1db_refinement_failure,
         "nonmonotonic_compression": curve.nonmonotonic_compression,
         "compression_model_depletion_only_description": (
             "dB gain from the linear-gain depletion trend; not an acceptance oracle"

@@ -17,6 +17,10 @@ from twpa_solver.multitone.compression_curve import (
 )
 
 
+# Fixed-step count for the continuation fallback, matching the cold-start path.
+_FALLBACK_FIXED_STEPS = 20
+
+
 @dataclass
 class SignalPowerPoint:
     signal_current_a: float
@@ -154,7 +158,11 @@ def solve_signal_power_point(
         min_step=min_step,
         growth=1.5,
         shrink=0.5,
-        fallback_fixed_steps=max(2, math.ceil(span_db / signal_substep_min_db)),
+        # Sized like the cold-start path, NOT as span_db / min_step: the latter
+        # makes the fallback finest exactly when adaptive stepping has already
+        # failed, scheduling thousands of micro-steps that only the wall-clock
+        # deadline ever stops (measured: 6881 steps, ~29 h, for one power point).
+        fallback_fixed_steps=_FALLBACK_FIXED_STEPS,
         max_wall_s=continuation_deadline_s,
     )
     report = reports[-1]
