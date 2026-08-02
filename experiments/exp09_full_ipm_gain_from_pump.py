@@ -1115,7 +1115,7 @@ def main() -> None:
 
     t_all = time.perf_counter()
 
-    resolved_ipm_dir = args.ipm_dir or infer_ipm_dir_from_pump_report(Path(args.pump_dir)) or "outputs/ipm_python_design"
+    resolved_ipm_dir = args.ipm_dir or infer_ipm_dir_from_pump_report(Path(args.pump_dir)) or "designs/ipm_2c_fixed"
     ipm = load_ipm(resolved_ipm_dir)
     loss_model = args.loss_linearization_model
     if args.real_capacitance:

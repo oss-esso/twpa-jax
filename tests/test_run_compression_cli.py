@@ -293,6 +293,58 @@ def test_p1db_refinement_can_be_disabled_to_reach_interpolation_fallback() -> No
     assert _interpolate_p1db_current(points) == pytest.approx(10.0 ** -8.5)
 
 
+def _jpa_gain_args(tmp_path, n_points: int) -> list[str]:
+    """The exp20 jpa operating point, which really does compress.
+
+    The default fixture point has no gain, so it can never exercise the
+    refinement branch -- P1dB is suppressed there.
+    """
+    return [
+        "--output-dir", str(tmp_path),
+        "--fixture", "jpa",
+        "--pump-freq-ghz", "4.75001",
+        "--pump-current-a", "1.13e-08",
+        "--pump-current-jc-scale", "1.0",
+        "--signal-ghz", "4.75",
+        "--source-port", "1", "--pump-port", "1", "--out-port", "1",
+        "--n-signal-power", str(n_points),
+        "--signal-current-min-a", "1e-12",
+        "--signal-current-max-a", "3e-08",
+        "--attenuation-db", "0",
+        "--multitone-basis", "matched", "--multitone-sidebands", "2",
+        "--recovery", "ladder",
+    ]
+
+
+def test_refined_run_also_reports_the_interpolated_p1db(tmp_path) -> None:
+    """Both numbers must come out of one sweep.
+
+    The refined-versus-interpolated delta decides whether published sweeps
+    need re-running. Reading the two halves off two separate runs would fold
+    run-to-run variation into a comparison that has none, so the driver keeps
+    the interpolated value after refinement overwrites the reported P1dB.
+    """
+    assert main(_jpa_gain_args(tmp_path, 9) + ["--p1db-power-tol-db", "0.1"]) == 0
+    summary = json.loads((tmp_path / "compression_summary.json").read_text())
+
+    assert summary["p1db_method"] == "refined"
+    assert summary["p1db_interpolated_dbm"] is not None
+    # The refined value is a real solve, the interpolated one a log-linear
+    # guess between grid points ~11 dB apart; they must not be the same number.
+    assert summary["p1db"] != pytest.approx(summary["p1db_interpolated_dbm"])
+
+
+def test_interpolated_p1db_is_the_reported_one_when_refinement_is_off(
+    tmp_path,
+) -> None:
+    """With refinement disabled the two fields must agree exactly."""
+    assert main(_jpa_gain_args(tmp_path, 9) + ["--p1db-power-tol-db", "0"]) == 0
+    summary = json.loads((tmp_path / "compression_summary.json").read_text())
+
+    assert summary["p1db_method"] == "interpolated"
+    assert summary["p1db"] == pytest.approx(summary["p1db_interpolated_dbm"])
+
+
 def test_no_gain_operating_point_suppresses_compression(tmp_path) -> None:
     assert main(
         [
@@ -397,9 +449,11 @@ def test_run_compression_smoke_writes_artifacts(tmp_path) -> None:
     assert "pump_depletion_db" in points
     assert "compression_model_depletion_only" in points
     assert "power_balance_rel_err" in points
+    assert "hb_residual_rel" in points
     assert "max_power_balance_rel_err" in summary
     assert "manley_rowe_photon_flux" in points
     assert "manley_rowe_rel_err" in points
+    assert "external_manley_rowe_rel_err" in points
     assert "max_manley_rowe_rel_err" in summary
     assert "p1db_method" in summary
     assert "signal_s21_real" in points

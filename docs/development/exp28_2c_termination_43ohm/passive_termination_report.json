@@ -1,0 +1,17 @@
+{
+  "termination_ohm": 43.32750543560899,
+  "port_indices": [
+    0,
+    3787,
+    3786,
+    6445
+  ],
+  "frequency_start_ghz": 5.5,
+  "frequency_stop_ghz": 8.999999999999615,
+  "frequency_step_ghz": 0.0019999999999997797,
+  "s21_min_db": -3.7661513335013046,
+  "s21_max_db": -1.2512834208397767,
+  "s21_peak_to_peak_db": 2.514867912661528,
+  "dominant_ripple_period_ghz": 0.1843157894736639,
+  "n_local_peaks": 29
+}

@@ -83,7 +83,7 @@ FAIL_POINT = rgm.GridPoint(
 # measurement_match_debug_02_col3_trim_fixed (see CLAUDE.md / prior session).
 ARGV = [
     "--executor", "inprocess", "--mode", "warmstart",
-    "--circuit-dir", "outputs/ipm_python_design",
+    "--circuit-dir", "designs/ipm_2c_fixed",
     "--outdir", str(OUT_DIR),
     "--n-power", "1", "--n-frequency", "1",
     "--pump-power-min-dbm", "-28.253164556962027",

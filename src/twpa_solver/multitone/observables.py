@@ -9,6 +9,7 @@ from typing import Any
 import numpy as np
 
 from twpa_solver.core import CircuitMatrices
+from twpa_solver.core.nonlinear import make_branch_law
 from twpa_solver.core.linear import (
     dynamic_block,
     port_s_from_unit_current_response,
@@ -29,9 +30,7 @@ def _port_current_coefficients(
     """Return physical port currents from the multitone KCL residual."""
     waveform = basis.synthesize(X_full)
     phase = (circuit.Bphi.T @ waveform.T).T
-    nonlinear_time = circuit.Bphi @ (
-        circuit.Ic[None, :] * np.sin(phase / circuit.phi0)
-    ).T
+    nonlinear_time = circuit.Bphi @ make_branch_law(circuit).current(phase).T
     nonlinear = basis.project(nonlinear_time.T)
     currents = np.empty_like(X_full)
     for row, omega in enumerate(basis.omegas):
@@ -119,9 +118,25 @@ def junction_diagnostics(
 
 
 def power_balance(
-    X_full: np.ndarray, basis: MultiToneBasis, circuit: CircuitMatrices
-) -> dict[str, float]:
-    """Compute real-power and photon-flux balance diagnostics."""
+    X_full: np.ndarray,
+    basis: MultiToneBasis,
+    circuit: CircuitMatrices,
+    *,
+    reference_X_full: np.ndarray | None = None,
+    z0_ohm: float = 50.0,
+) -> dict[str, Any]:
+    """Compute real-power and incremental photon-flux diagnostics.
+
+    ``reference_X_full`` is the pump-only operating point.  When supplied,
+    the external Manley--Rowe quantity is formed from the change in port
+    power caused by turning on the signal.  This removes pump-harmonic power
+    conversion already present without a signal, which is not part of the
+    signal/idler saturation invariant.  The returned ``pump_net_power_delta_w``
+    is the all-port net pump-power change; ``pump_depletion_all_port_db`` is
+    the corresponding all-port outgoing-pump power ratio in dB.  The two are
+    emitted separately because the design contract is defined in net power,
+    while dB depletion is conventionally reported from outgoing power.
+    """
     waveform = basis.synthesize(X_full)
     derivative = np.zeros_like(waveform)
     for row, tone in enumerate(basis.tones):
@@ -134,25 +149,163 @@ def power_balance(
         coefficient[row] = -(basis.omegas[row] ** 2) * X_full[row]
         acceleration += basis.synthesize(coefficient)
     phase = (circuit.Bphi.T @ waveform.T).T
-    nonlinear = circuit.Bphi @ (
-        circuit.Ic[None, :] * np.sin(phase / circuit.phi0)
-    ).T
+    nonlinear = circuit.Bphi @ make_branch_law(circuit).current(phase).T
     internal = (
         (circuit.C @ acceleration.T).T
         + (circuit.G @ derivative.T).T
         + (circuit.K @ waveform.T).T
         + nonlinear.T
     )
-    supplied_power = float(np.mean(np.sum(derivative * internal, axis=1)))
+    internal_supplied_power = float(np.mean(np.sum(derivative * internal, axis=1)))
     dissipation = float(
         np.mean(np.sum(derivative * (circuit.G @ derivative.T).T, axis=1))
     )
+    reference_dissipation = 0.0
+    port_resistor_dissipation = 0.0
+    reference_port_resistor_dissipation = 0.0
+    if reference_X_full is not None:
+        reference_waveform = basis.synthesize(reference_X_full)
+        reference_derivative = np.zeros_like(reference_waveform)
+        for row in range(len(basis.tones)):
+            coefficient = np.zeros_like(reference_X_full)
+            coefficient[row] = 1j * basis.omegas[row] * reference_X_full[row]
+            reference_derivative += basis.synthesize(coefficient)
+        reference_dissipation = float(
+            np.mean(
+                np.sum(
+                    reference_derivative
+                    * (circuit.G @ reference_derivative.T).T,
+                    axis=1,
+                )
+            )
+        )
+    port_indices = np.asarray(
+        [circuit.port_to_index[int(port)] for port in circuit.port_to_index],
+        dtype=int,
+    )
+    if port_indices.size:
+        port_resistor_dissipation = float(
+            np.mean(np.sum(derivative[:, port_indices] ** 2, axis=1) / z0_ohm)
+        )
+        if reference_X_full is not None:
+            reference_port_resistor_dissipation = float(
+                np.mean(
+                    np.sum(
+                        reference_derivative[:, port_indices] ** 2,
+                        axis=1,
+                    )
+                    / z0_ohm
+                )
+            )
+    waves = extract_port_waves(
+        X_full,
+        basis,
+        circuit,
+        tuple(circuit.port_to_index),
+        z0_ohm=z0_ohm,
+    )
+    reference_waves = (
+        extract_port_waves(
+            reference_X_full,
+            basis,
+            circuit,
+            tuple(circuit.port_to_index),
+            z0_ohm=z0_ohm,
+        )
+        if reference_X_full is not None
+        else None
+    )
+    port_power_by_tone: dict[ToneIndex, float] = {}
+    for row, tone in enumerate(basis.tones):
+        power = float(
+            0.5
+            * sum(
+                waves["a_power"][(tone, port)]
+                - waves["b_power"][(tone, port)]
+                for port in circuit.port_to_index
+            )
+        )
+        if reference_waves is not None:
+            power -= float(
+                0.5
+                * sum(
+                    reference_waves["a_power"][(tone, port)]
+                    - reference_waves["b_power"][(tone, port)]
+                    for port in circuit.port_to_index
+                )
+            )
+        port_power_by_tone[tone] = power
+    external_supplied_power = float(sum(port_power_by_tone.values()))
+    # ``extract_port_waves`` deliberately removes the explicit V/Z0 shunt
+    # current before forming a/b.  The corresponding shunt loss must therefore
+    # be removed from the dissipation side as well; otherwise the two sides
+    # describe different boundaries and the balance can be O(1) wrong.
+    external_dissipated_power = float(
+        dissipation
+        - reference_dissipation
+        - port_resistor_dissipation
+        + reference_port_resistor_dissipation
+    )
+    external_power_scale = max(
+        abs(external_supplied_power), abs(external_dissipated_power)
+    )
+    external_power_balance_relative = (
+        0.0
+        if external_power_scale == 0.0
+        else abs(external_supplied_power - external_dissipated_power)
+        / external_power_scale
+    )
+    supplied_power = internal_supplied_power
     real_power_scale = max(abs(supplied_power), abs(dissipation))
     relative = (
         0.0
         if real_power_scale == 0.0
         else abs(supplied_power - dissipation) / real_power_scale
     )
+    pump_tone = basis.pump_tone
+    pump_net_power = float(
+        0.5
+        * sum(
+            waves["a_power"][(pump_tone, port)]
+            - waves["b_power"][(pump_tone, port)]
+            for port in circuit.port_to_index
+        )
+    )
+    pump_reference_net_power = None
+    pump_net_power_delta = None
+    pump_depletion_all_port_db = None
+    pump_outgoing_power = float(
+        0.5
+        * sum(
+            waves["b_power"][(pump_tone, port)]
+            for port in circuit.port_to_index
+        )
+    )
+    pump_reference_outgoing_power = None
+    if reference_waves is not None:
+        pump_reference_net_power = float(
+            0.5
+            * sum(
+                reference_waves["a_power"][(pump_tone, port)]
+                - reference_waves["b_power"][(pump_tone, port)]
+                for port in circuit.port_to_index
+            )
+        )
+        pump_net_power_delta = pump_net_power - pump_reference_net_power
+        pump_reference_outgoing_power = float(
+            0.5
+            * sum(
+                reference_waves["b_power"][(pump_tone, port)]
+                for port in circuit.port_to_index
+            )
+        )
+        pump_depletion_all_port_db = float(
+            10.0
+            * np.log10(
+                max(pump_outgoing_power, 1e-300)
+                / max(pump_reference_outgoing_power, 1e-300)
+            )
+        )
     nonlinear_coeffs = basis.project(nonlinear.T)
     photon_terms = []
     for row, omega in enumerate(basis.omegas):
@@ -162,12 +315,74 @@ def power_balance(
         photon_terms.append(float(np.sum(power) / omega))
     photon_flux = float(np.sum(photon_terms))
     photon_scale = float(np.sum(np.abs(photon_terms)))
+    # Below this scale the quotient is dominated by cancellation/roundoff;
+    # exposing it as a false 0.5--style physical error is misleading.
+    manley_evaluable = photon_scale > 1e-28
+    manley_relative = (
+        abs(photon_flux) / photon_scale if manley_evaluable else 0.0
+    )
+    # The finite-signal Manley--Rowe invariant is the three-wave conversion
+    # channel, not the raw photon sum over every retained pump harmonic.  A
+    # pump-only solution can contain harmonic generation (for example the
+    # h=1 -> h=3 conversion), which is conservative in energy but is not part
+    # of signal/idler saturation and gives a spurious ~1/2 photon residual.
+    conversion_tones = (basis.pump_tone, basis.signal_tone, basis.idler_tone)
+    external_photon_terms = [
+        float(port_power_by_tone[tone] / tone.omega(basis.omega_p, basis.delta))
+        for tone in conversion_tones
+    ]
+    external_photon_flux = float(np.sum(external_photon_terms))
+    external_photon_scale = float(np.sum(np.abs(external_photon_terms)))
+    external_manley_evaluable = external_photon_scale > 1e-30
     return {
         "supplied_power": supplied_power,
+        "internal_supplied_power": internal_supplied_power,
+        "external_supplied_power": external_supplied_power,
+        "external_dissipated_power": external_dissipated_power,
+        "port_resistor_dissipated_power": port_resistor_dissipation,
+        "reference_port_resistor_dissipated_power": reference_port_resistor_dissipation,
+        "external_power_balance_rel_err": external_power_balance_relative,
         "dissipated_power": dissipation,
         "power_balance_rel_err": relative,
         "manley_rowe_photon_flux": photon_flux,
-        "manley_rowe_rel_err": abs(photon_flux) / max(photon_scale, 1e-30),
+        "manley_rowe_photon_scale": photon_scale,
+        "manley_rowe_evaluable": float(manley_evaluable),
+        "manley_rowe_rel_err": manley_relative,
+        "external_manley_rowe_photon_flux": external_photon_flux,
+        "external_manley_rowe_photon_scale": external_photon_scale,
+        "external_manley_rowe_evaluable": float(external_manley_evaluable),
+        "external_manley_rowe_rel_err": (
+            abs(external_photon_flux) / external_photon_scale
+            if external_manley_evaluable
+            else 0.0
+        ),
+        # Explicit names for the two scopes.  The legacy keys above remain
+        # readable by existing experiment consumers.
+        "conversion_manley_rowe_photon_flux": external_photon_flux,
+        "conversion_manley_rowe_photon_scale": external_photon_scale,
+        "conversion_manley_rowe_evaluable": float(external_manley_evaluable),
+        "conversion_manley_rowe_rel_err": (
+            abs(external_photon_flux) / external_photon_scale
+            if external_manley_evaluable
+            else 0.0
+        ),
+        "all_tone_manley_rowe_photon_flux": photon_flux,
+        "all_tone_manley_rowe_photon_scale": photon_scale,
+        "all_tone_manley_rowe_evaluable": float(manley_evaluable),
+        "all_tone_manley_rowe_rel_err": manley_relative,
+        # The net pump quantity is the design-contract all-port observable.
+        # The outgoing-power ratio is retained as a convenient dB presentation;
+        # it is not substituted for the net-power field.
+        "pump_net_power_w": pump_net_power,
+        "pump_reference_net_power_w": pump_reference_net_power,
+        "pump_net_power_delta_w": pump_net_power_delta,
+        "pump_outgoing_power_w": pump_outgoing_power,
+        "pump_reference_outgoing_power_w": pump_reference_outgoing_power,
+        "pump_depletion_all_port_db": pump_depletion_all_port_db,
+        "port_power_by_tone_w": {
+            f"h{tone.h}_q{tone.q}": float(power)
+            for tone, power in port_power_by_tone.items()
+        },
     }
 
 
@@ -286,11 +501,41 @@ def spatial_profiles(
             "pump_flux_abs": float(abs(pump[branch])),
             "signal_flux_abs": float(abs(signal[branch])),
             "idler_flux_abs": float(abs(idler[branch])),
+            "pump_intensity_normalized": float(
+                abs(pump[branch]) ** 2 / max(np.max(np.abs(pump) ** 2), 1e-300)
+            ),
+            "signal_intensity_normalized": float(
+                abs(signal[branch]) ** 2 / max(np.max(np.abs(signal) ** 2), 1e-300)
+            ),
             "theta_rad": float(theta[branch]),
             "delta_k_eff_rad_per_cell": float(delta_k[branch]),
         }
         for branch in range(circuit.branch_count)
     ]
+
+
+def spatial_profile_summary(
+    rows: list[dict[str, float | int]],
+) -> dict[str, float | int | list[int] | None]:
+    """Summarize pump/signal/idler spatial overlap for profile rows."""
+    pump = np.asarray([float(row["pump_flux_abs"]) for row in rows])
+    signal = np.asarray([float(row["signal_flux_abs"]) for row in rows])
+    idler = np.asarray([float(row["idler_flux_abs"]) for row in rows])
+    denominator = np.linalg.norm(pump) * np.linalg.norm(signal) * np.linalg.norm(idler)
+    overlap = float(np.sum(pump * signal * idler) / max(denominator, 1e-300))
+    threshold = 0.1 * float(np.max(pump))
+    above = np.flatnonzero(pump >= threshold)
+    branch_range = (
+        [int(rows[int(above[0])]["branch_index"]), int(rows[int(above[-1])]["branch_index"])]
+        if above.size
+        else None
+    )
+    return {
+        "overlap_integral": overlap,
+        "pump_above_10pct_branch_range": branch_range,
+        "pump_above_10pct_count": int(above.size),
+        "pump_above_10pct_fraction": float(above.size / max(len(rows), 1)),
+    }
 
 
 def reference_states(

@@ -10,6 +10,7 @@ import numpy as np
 import scipy.sparse as sp
 
 from twpa_solver.core.constants import PHI0_REDUCED
+from twpa_solver.core.nonlinear import EffectiveSnailBranchLaw
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +37,7 @@ class CircuitMatrices:
     port_to_index: dict[int, int] = field(default_factory=dict)
     Lj: np.ndarray | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+    branch_law: Any | None = None
 
     def __post_init__(self) -> None:
         self.C = self.C.tocsr()
@@ -152,6 +154,26 @@ def load_circuit(circuit_dir: str | Path) -> CircuitMatrices:
                 metadata = {}
             break
 
+    branch_law = None
+    law_metadata = metadata.get("metadata", metadata)
+    if law_metadata.get("branch_law", {}).get("type") == "effective_snail":
+        if "snail_ratio" in arrays.files and "phi_ext" in arrays.files:
+            branch_law = EffectiveSnailBranchLaw(
+                Ic,
+                np.asarray(arrays["snail_ratio"], dtype=float),
+                np.asarray(arrays["phi_ext"], dtype=float),
+                phi0,
+                equilibrium_flux=(
+                    np.asarray(arrays["equilibrium_flux"], dtype=float)
+                    if "equilibrium_flux" in arrays.files
+                    else None
+                ),
+                external_flux_on_small_junction=bool(
+                    metadata.get("metadata", metadata)
+                    .get("branch_law", {})
+                    .get("external_flux_on_small_junction", False)
+                ),
+            )
     circuit = CircuitMatrices(
         C=C,
         G=G,
@@ -163,6 +185,7 @@ def load_circuit(circuit_dir: str | Path) -> CircuitMatrices:
         nodes=nodes,
         port_to_index=port_to_index,
         metadata=metadata,
+        branch_law=branch_law,
     )
     logger.debug("circuit_load_complete path=%s summary=%r", d, circuit.summary)
     return circuit
@@ -188,6 +211,17 @@ def save_circuit(circuit: CircuitMatrices, outdir: str | Path) -> None:
     if Lj is None:
         Lj = np.asarray([], dtype=np.float64)
 
+    branch_arrays: dict[str, np.ndarray] = {}
+    if isinstance(circuit.branch_law, EffectiveSnailBranchLaw):
+        branch_arrays = {
+            "snail_ratio": np.asarray(circuit.branch_law.ratio),
+            "phi_ext": np.asarray(circuit.branch_law.phi_ext),
+            "equilibrium_flux": np.asarray(
+                circuit.branch_law.equilibrium_flux
+                if circuit.branch_law.equilibrium_flux is not None
+                else np.zeros(circuit.branch_law.ratio.size)
+            ),
+        }
     np.savez(
         d / "ipm_arrays.npz",
         nodes=np.asarray(circuit.nodes),
@@ -197,6 +231,7 @@ def save_circuit(circuit: CircuitMatrices, outdir: str | Path) -> None:
         Ic=np.asarray(circuit.Ic, dtype=np.float64),
         Lj=np.asarray(Lj, dtype=np.float64),
         phi0_reduced=np.asarray([circuit.phi0], dtype=np.float64),
+        **branch_arrays,
     )
 
     summary = {

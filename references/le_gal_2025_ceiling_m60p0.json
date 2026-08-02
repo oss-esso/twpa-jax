@@ -1,0 +1,9 @@
+[
+  {
+    "cells": 700,
+    "signal_GHz": 8.3,
+    "signal_dBm": -115.0,
+    "status": "PUMP_FAILED",
+    "runtime_s": 0.4979401000018697
+  }
+]

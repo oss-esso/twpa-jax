@@ -1,0 +1,13 @@
+[
+  {
+    "cells": 20,
+    "signal_GHz": 6.0,
+    "signal_dBm": -110.0,
+    "status": "SOLVED",
+    "residual_norm": 1.2543367538263874e-16,
+    "signal_coefficient_abs": 0.0,
+    "cme_endpoint_gain_dB": 0.17257187951569194,
+    "depletion_model_gain_dB": 19.437180098821653,
+    "runtime_s": 0.33648859999993874
+  }
+]

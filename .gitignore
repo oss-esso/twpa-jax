@@ -6,4 +6,4 @@ pytest-of-*/
 *.egg-info/
 outputs/
 industrial_completion_outputs/
-
+references/**/__pycache__/

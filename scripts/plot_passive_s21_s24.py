@@ -4,7 +4,7 @@
 Examples
 --------
     python scripts/plot_passive_s21_s24.py \
-        --ipm-dir outputs/ipm_python_design \
+        --ipm-dir designs/ipm_2c_fixed \
         --outdir outputs/passive_2c_s21_s24
 
 The port convention is the IPM convention: S21 is signal input port 1 to

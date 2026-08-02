@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import csv
-import math
 import subprocess
 import sys
 from pathlib import Path
@@ -52,10 +51,7 @@ def plot(outdir: Path) -> None:
     gain = [float(row["gain_db"]) for row in points]
     try:
         depletion_only = [
-            10.0 * math.log10(
-                float(row["compression_model_depletion_only"])
-            )
-            for row in points
+            float(row["compression_model_depletion_only"]) for row in points
         ]
     except KeyError as exc:
         raise ValueError(

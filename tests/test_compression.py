@@ -14,6 +14,7 @@ from twpa_solver.multitone.observables import (
     reference_states,
     spatial_depletion_null,
     spatial_profiles,
+    spatial_profile_summary,
     tone_s21,
 )
 from twpa_solver.multitone.problem import FullMultiToneProblem
@@ -21,6 +22,7 @@ from twpa_solver.multitone.source import AffineSourcePath, MultiToneDrive
 from twpa_solver.pump import HarmonicNewtonKrylovSolver
 from twpa_solver.multitone.compression_curve import (
     build_compression_curve,
+    depletion_only_gain_db,
     depletion_only_model,
     refine_p1db,
 )
@@ -46,6 +48,14 @@ def test_refine_p1db_and_depletion_model() -> None:
     crossing = refine_p1db(lambda power: power + 40.0, (-40.0, -30.0))
     assert crossing == pytest.approx(-39.0, abs=0.01)
     assert depletion_only_model(10.0, 1.0, 100.0) == pytest.approx(10.0 / 1.2)
+
+
+def test_depletion_only_gain_is_converted_to_db() -> None:
+    model = depletion_only_model(10.0, 1.0, 100.0)
+    expected = 10.0 * math.log10(model)
+    assert depletion_only_gain_db(10.0, 1.0, 100.0) == pytest.approx(
+        expected, abs=1e-12
+    )
 
 
 def test_spatial_depletion_null_matches_small_signal_profile() -> None:
@@ -80,6 +90,16 @@ def test_curve_reports_nonmonotonic_compression() -> None:
     assert curve.first_1db_crossing_dbm == -39
     assert curve.number_of_crossings == 2
     assert curve.nonmonotonic_compression
+
+
+def test_curve_does_not_bridge_a_failed_interior_point() -> None:
+    curve = build_compression_curve(
+        [-90.0, -85.0, -80.0],
+        [20.0, float("nan"), 18.0],
+        20.0,
+    )
+    assert curve.p1db_dbm is None
+    assert curve.number_of_crossings == 0
 
 
 def test_spatial_profiles_validate_chain_and_unwrap_phase() -> None:
@@ -139,6 +159,26 @@ def test_spatial_profiles_validate_chain_and_unwrap_phase() -> None:
         (0, 1),
         (3, 4),
     ]
+
+
+def test_spatial_profiles_report_normalized_overlap() -> None:
+    basis = build_three_tone_basis(10.0, 1.0)
+    incidence = sp.csr_matrix(
+        np.array([[1.0, 0.0], [-1.0, 1.0], [0.0, -1.0]])
+    )
+    circuit = CircuitMatrices(
+        C=sp.eye(3, format="csr"),
+        G=sp.csr_matrix((3, 3)),
+        K=sp.eye(3, format="csr"),
+        Bphi=incidence,
+        Ic=np.ones(2),
+    )
+    state = np.tile(np.array([[0.0, 1.0, 2.0]], dtype=np.complex128), (basis.n_tones, 1))
+    profiles = spatial_profiles(state, basis, circuit)
+    assert profiles[0]["pump_intensity_normalized"] == pytest.approx(1.0)
+    summary = spatial_profile_summary(profiles)
+    assert summary["overlap_integral"] > 0.0
+    assert summary["pump_above_10pct_fraction"] == pytest.approx(1.0)
 
 
 def test_reference_states_execute_all_four_solve_paths() -> None:

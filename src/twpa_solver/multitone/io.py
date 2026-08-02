@@ -45,8 +45,11 @@ def write_compression_outputs(
             value = np.asarray(state)
             np.savez_compressed(
                 destination / f"multitone_solution_{name}.npz",
-                X_real=np.asarray(value.real, dtype=np.float32),
-                X_imag=np.asarray(value.imag, dtype=np.float32),
+                # Validation and continuation diagnostics need the converged
+                # state at the solver's precision; float32 quantizes tiny
+                # signal sectors enough to spoil JVP finite differences.
+                X_real=np.asarray(value.real, dtype=np.float64),
+                X_imag=np.asarray(value.imag, dtype=np.float64),
             )
     if spatial_rows is not None:
         columns = sorted({key for row in spatial_rows for key in row})

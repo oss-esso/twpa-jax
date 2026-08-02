@@ -292,7 +292,7 @@ def write_summary(
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--output-dir", type=Path, default=Path("outputs/ipm_exp08_exp09_gain_map_5x5"))
-    parser.add_argument("--ipm-dir", type=Path, default=Path("outputs/ipm_python_design"))
+    parser.add_argument("--ipm-dir", type=Path, default=Path("designs/ipm_2c_fixed"))
     parser.add_argument("--n-power", type=int, default=5)
     parser.add_argument("--n-frequency", type=int, default=5)
     parser.add_argument("--pump-power-start-dbm", type=float, default=-30.0)
