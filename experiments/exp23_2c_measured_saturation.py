@@ -28,7 +28,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-CIRCUIT_DIR = "outputs/ipm_python_design"
+CIRCUIT_DIR = "designs/ipm_2c_fixed"
 PUMP_PORT, SOURCE_PORT, OUT_PORT = 4, 1, 2
 SIDEBANDS = 10
 

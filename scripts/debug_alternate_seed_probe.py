@@ -154,7 +154,7 @@ def main() -> None:
                          help="The target cell's own real converged solution "
                               "(for an x_norm_diff_vs_prod sanity column).")
     parser.add_argument("--out-dir", type=Path, default=None)
-    parser.add_argument("--circuit-dir", type=str, default="outputs/ipm_python_design")
+    parser.add_argument("--circuit-dir", type=str, default="designs/ipm_2c_fixed")
     args_cli = parser.parse_args()
 
     out_dir = args_cli.out_dir or (

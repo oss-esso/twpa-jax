@@ -127,7 +127,7 @@ def slope_rows(rows: list[dict[str, object]]) -> list[dict[str, object]]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--source", type=Path, default=Path("outputs/ipm_python_design"))
+    parser.add_argument("--source", type=Path, default=Path("designs/ipm_2c_fixed"))
     parser.add_argument("--circuit-root", type=Path, default=Path("outputs"))
     parser.add_argument("--output-dir", type=Path, default=Path("outputs/exp25_track5_loss"))
     args = parser.parse_args()

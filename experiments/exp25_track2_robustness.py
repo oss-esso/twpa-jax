@@ -21,7 +21,7 @@ def command(output_dir: Path, frequency_ghz: float, include_debug_flag: bool) ->
         sys.executable,
         "scripts/run_compression.py",
         "--output-dir", str(output_dir),
-        "--circuit-dir", "outputs/ipm_python_design",
+        "--circuit-dir", "designs/ipm_2c_fixed",
         "--pump-freq-ghz", "7.540816326531111",
         "--pump-current-a", "7.231074707853736e-06",
         "--pump-current-jc-scale", "1.0",

@@ -54,7 +54,7 @@ METHODS = ["adaptive_secant", "adaptive_tangent", "affine", "ptc", "arclength"]
 
 ARGV = [
     "--executor", "inprocess", "--mode", "warmstart",
-    "--circuit-dir", "outputs/ipm_python_design",
+    "--circuit-dir", "designs/ipm_2c_fixed",
     "--outdir", str(OUT_DIR),
     "--n-power", "1", "--n-frequency", "1",
     "--pump-power-min-dbm", str(P7_DBM),

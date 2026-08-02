@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 
-CIRCUIT_DIR = Path("outputs/ipm_python_design")
+CIRCUIT_DIR = Path("designs/ipm_2c_fixed")
 PUMP_FREQ_GHZ = 7.540816326531111
 PUMP_CURRENT_A = 7.231074707853736e-06
 MATRIX_FREQUENCIES_GHZ = (5.8, 6.03, 6.257, 6.49, 6.71, 6.943, 7.29, 7.629)

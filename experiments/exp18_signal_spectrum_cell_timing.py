@@ -7,7 +7,7 @@ trailing point ``fs = fp - 100 MHz``.
 
 Example:
     python experiments/exp18_signal_spectrum_cell_timing.py \
-        --ipm-dir outputs/ipm_python_design \
+        --ipm-dir designs/ipm_2c_fixed \
         --pump-power-dbm -26 --pump-freq-ghz 7.5 --overwrite
 """
 

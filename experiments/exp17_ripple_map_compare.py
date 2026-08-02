@@ -19,7 +19,7 @@ S21 / S24 ripple is saved for the plotter's context panel.
 
 Usage:
     python experiments/exp17_ripple_map_compare.py \
-        --design 2c --ipm-dir outputs/ipm_python_design \
+        --design 2c --ipm-dir designs/ipm_2c_fixed \
         --map-dir outputs/exp10_pump_map_trailing_50x50_m30_m20 --top-n 3
 """
 

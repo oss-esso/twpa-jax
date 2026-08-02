@@ -31,7 +31,7 @@ CASES = (
     Case("fqjtwpa", ("--fixture", "fqjtwpa"), "outputs/exp14_fqjtwpa_odd10_scale2/pump", 7.9, 2.2e-6, 7.4, 1, 2, 3e-7, 6, 28.534877, 28.5367),
     Case(
         "2c",
-        ("--circuit-dir", "outputs/ipm_python_design"),
+        ("--circuit-dir", "designs/ipm_2c_fixed"),
         "outputs/solver_spectrum_2c_recover_m35_m23_7p5_8p5_50x50_s20_sb10/chunks/chunk_000_cols_000_009/warm/points/point_0212_p_m29p8571dbm_fp_7p54082ghz/pump",
         7.540816326531111,
         7.231074707853736e-6,

@@ -15,7 +15,7 @@ def main() -> None:
         sys.executable,
         "scripts/run_compression.py",
         "--circuit-dir",
-        "outputs/ipm_python_design",
+        "designs/ipm_2c_fixed",
         "--pump-freq-ghz",
         "7.540816326531111",
         "--signal-ghz",
