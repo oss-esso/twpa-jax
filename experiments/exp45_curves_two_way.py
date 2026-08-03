@@ -1,15 +1,24 @@
 """Plot the 2c compression curves paired with measurement two ways.
 
-Left panel pairs each model curve with the measured column at the **same signal
-frequency**. Right panel pairs it with the measured column whose **small-signal
-gain matches**, which generally sits at a different frequency because the
-model's gain band is offset and rippled relative to the device.
+Four panels. The top row pairs each model curve with a measured one: at the
+**same signal frequency** on the left, and at **matched small-signal gain** on
+the right. The gain-matched partner generally sits at a different frequency,
+because the model's gain band is offset and rippled relative to the device.
 
 The same-frequency pairing charges the model for its gain-band error twice:
 P1dB depends on gain, so comparing a 9.5 dB model trace against an 11.8 dB
 measured trace reports a saturation difference that is really a gain
 difference. The gain-matched pairing removes that, and is the comparison to
 read.
+
+The bottom row shows each family alone, both at the **same 18 frequencies**, so
+the colour scale means the same thing in both and the two devices' own
+behaviour can be read without the other overlaid.
+
+Measured traces are Savitzky-Golay smoothed. The window is wide enough to
+suppress the ripple that dominates single columns, and the polynomial order is
+cubic rather than quadratic so the compression knee is not flattened along with
+it.
 """
 
 from __future__ import annotations
@@ -40,15 +49,21 @@ MEAS_PUMP_GHZ = 7.256
 MODEL_PUMP_GHZ = 7.100
 PUMP_EXCLUSION_GHZ = 0.15
 POWER_LIMITS = (-112.0, -74.0)
+SAVGOL_WINDOW = 21
+SAVGOL_ORDER = 3
 
 
-def measured_cube() -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+def measured_cube(
+    window: int = SAVGOL_WINDOW, order: int = SAVGOL_ORDER
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Return (frequency GHz, device power dBm, smoothed response, G0)."""
     data = np.load(CUBE, allow_pickle=True).item()
     frequency = np.asarray(data["Frequency"], dtype=float) / 1e9
     power = np.asarray(data["SignalPower"], dtype=float) - SIGNAL_LINE_LOSS_DB
     response = np.asarray(data["Response"], dtype=float)
-    smooth = savgol_filter(response, 11, 2, axis=0)
+    smooth = savgol_filter(response, window, order, axis=0)
+    # G0 is taken from the raw plateau, not the smoothed trace: a wide window
+    # bleeds the compression knee back into the low-power end.
     return frequency, power, smooth, np.median(response[:10, :], axis=0)
 
 
@@ -101,7 +116,8 @@ def main() -> int:
     norm = Normalize(vmin=ghz.min(), vmax=ghz.max())
     colormap = plt.get_cmap("viridis")
 
-    fig, axes = plt.subplots(1, 2, figsize=(16.0, 6.4), sharey=True)
+    fig, grid = plt.subplots(2, 2, figsize=(16.0, 12.0), sharex=True, sharey=True)
+    axes = grid.ravel()
     pairing: list[dict[str, float]] = []
     for curve in curves:
         color = colormap(norm(curve["signal_ghz"]))
@@ -115,6 +131,9 @@ def main() -> int:
             ax.plot(power, smooth[:, index], lw=1.6, color=color, alpha=0.85)
             ax.plot(curve["power_dbm"], curve["gain_db"], lw=1.4, ls="--",
                     color=color, marker="o", ms=3.5, mfc="white", mew=1.0)
+        axes[2].plot(curve["power_dbm"], curve["gain_db"], lw=1.6, ls="--",
+                     color=color, marker="o", ms=4.0, mfc="white", mew=1.1)
+        axes[3].plot(power, smooth[:, same_index], lw=1.8, color=color)
 
         pairing.append({
             "model_ghz": float(curve["signal_ghz"]),
@@ -134,20 +153,27 @@ def main() -> int:
         p["gain_match_residual_db"] for p in pairing
     ]))
     axes[0].set_title(
-        "paired at the SAME FREQUENCY\n"
-        f"measured $G_0$ exceeds model by {mean_same:.2f} dB on average — "
-        "the curves start apart"
+        "both — paired at the SAME FREQUENCY\n"
+        f"measured $G_0$ exceeds model by {mean_same:.2f} dB on average, "
+        "so the curves start apart"
     )
     axes[1].set_title(
-        "paired at MATCHED $G_0$\n"
-        f"gain matched to {mean_matched:.3f} dB — "
-        "the comparison that isolates saturation"
+        "both — paired at MATCHED $G_0$\n"
+        f"gain matched to {mean_matched:.3f} dB; "
+        "this is the comparison that isolates saturation"
+    )
+    axes[2].set_title("model alone — 18 solved frequencies")
+    axes[3].set_title(
+        "Themis alone — the same 18 frequencies\n"
+        f"Savitzky-Golay, {SAVGOL_WINDOW}-point window, order {SAVGOL_ORDER}"
     )
     for ax in axes:
         ax.set_xlim(*POWER_LIMITS)
-        ax.set_xlabel("signal power at device (dBm)")
         ax.grid(alpha=0.3)
-    axes[0].set_ylabel("gain (dB)")
+    for ax in axes[2:]:
+        ax.set_xlabel("signal power at device (dBm)")
+    for ax in (axes[0], axes[2]):
+        ax.set_ylabel("gain (dB)")
     axes[0].set_ylim(0.0, 14.0)
 
     solid = plt.Line2D([], [], color="0.3", lw=1.6, label="Themis measurement")
