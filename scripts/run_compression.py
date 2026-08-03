@@ -1460,12 +1460,29 @@ def _estimate_worker_footprint(
             explicit_modes=args.pump_modes,
             design_meta=metadata,
         )
-    # The tone count is frequency-independent; any in-band signal frequency
-    # gives the same basis size, so the sweep midpoint is representative.
+    # The tone count is frequency-independent, so any one sweep frequency sizes
+    # the basis -- but it must not be the pump. The sweep midpoint is degenerate
+    # whenever the range is centred on the pump (5.2-9.0 GHz against a 7.1 GHz
+    # pump lands exactly on it), which made the basis builder refuse a DC tone
+    # and silently cost the run every worker but one. Pick the sweep frequency
+    # furthest from the pump instead; it is a real frequency the sweep will
+    # solve, so the estimate stays representative.
     signal_ghz = args.signal_ghz
     if signal_ghz is None:
-        signal_ghz = 0.5 * (float(args.signal_ghz_min) + float(args.signal_ghz_max))
+        candidates = np.linspace(
+            float(args.signal_ghz_min),
+            float(args.signal_ghz_max),
+            max(int(args.n_signal_freq), 1),
+        )
+        signal_ghz = float(
+            candidates[int(np.argmax(np.abs(candidates - args.pump_freq_ghz)))]
+        )
     delta = omega_p - 2.0 * math.pi * float(signal_ghz) * 1e9
+    if delta == 0.0:
+        raise ValueError(
+            f"signal frequency {signal_ghz} GHz coincides with the pump; "
+            "cannot size a multitone basis at zero detuning"
+        )
     basis = _build_multitone_basis(args, pump_basis.modes, omega_p, delta)
     # The Schur backend retains the nonlinear nodes and ports; the full backend
     # keeps every node. Use the full node count, the conservative bound.
