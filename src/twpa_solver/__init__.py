@@ -2,9 +2,18 @@
 
 from twpa_solver.core import (
     CircuitMatrices,
+    default_loss_model_for,
     load_circuit,
     save_circuit,
     solve_linear_scattering,
+    KI_MODEL_PRESETS,
+    KineticInductorBranchLaw,
+    KineticInductorAltBranchLaw,
+    CompositeBranchLaw,
+    kinetic_validity,
+    kinetic_dc_branch_flux,
+    resolve_ki_model,
+    PortEnvironment,
 )
 from twpa_solver.loss import (
     InsertionLossModel,
@@ -29,9 +38,18 @@ from twpa_solver.signal import (
 
 __all__ = [
     "CircuitMatrices",
+    "default_loss_model_for",
     "load_circuit",
     "save_circuit",
     "solve_linear_scattering",
+    "KI_MODEL_PRESETS",
+    "KineticInductorBranchLaw",
+    "KineticInductorAltBranchLaw",
+    "CompositeBranchLaw",
+    "kinetic_validity",
+    "kinetic_dc_branch_flux",
+    "resolve_ki_model",
+    "PortEnvironment",
     "InsertionLossModel",
     "default_loss_model",
     "PumpBasis",

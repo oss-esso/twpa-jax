@@ -25,8 +25,14 @@ For a large warm-only map, ``--gate-spotcheck N`` recomputes ``N`` points cold
 after the warm pass and folds their gain drift into the gate, so the big run is
 still guarded without paying for a full cold map.
 
-Pump current is derived from delivered power with the JC-style convention
-``I_peak = sqrt(2 * P_W / Z0)``, after subtracting the line loss. The loss
+Pump current is derived from delivered power after subtracting the line
+loss. Every drive port is an ideal current source in parallel with Z0
+(Norton), so the default ``--power-convention norton`` inverts
+``P_avail = I_peak^2 * Z0 / 8``, i.e. ``I_peak = sqrt(8 * P_W / Z0)`` (see
+``twpa_solver.ports``). ``--power-convention legacy_traveling_wave`` restores
+the old ``I_peak = sqrt(2 * P_W / Z0)`` convention -- for a fixed dBm the
+Norton current is 2x the legacy one, so a map regenerated with the same dBm
+bounds under a different convention is a different physical sweep. The loss
 defaults to the measured ``loss_A10`` model ``c + a*sqrt(f) + b*f`` (dB, f in
 GHz); pass a flat ``--attenuation-db`` to override it.
 """
@@ -62,7 +68,14 @@ EXP08 = "experiments/exp08_full_ipm_pump_solve.py"
 EXP09 = "experiments/exp09_full_ipm_gain_from_pump.py"
 
 from twpa_solver import default_loss_model  # noqa: E402
-from twpa_solver.core import load_circuit  # noqa: E402
+from twpa_solver.loss import signal_loss_model  # noqa: E402
+from twpa_solver.core import (  # noqa: E402
+    default_loss_model_for,
+    kinetic_dc_branch_flux,
+    load_circuit,
+)
+from twpa_solver.core.nonlinear import make_branch_law  # noqa: E402
+from twpa_solver.signal.gamma import load_dc_branch_flux  # noqa: E402
 import twpa_solver.pump.hb as exp08  # noqa: E402
 import twpa_solver.signal as exp09  # noqa: E402
 import twpa_solver.pump.basis as pump_basis  # noqa: E402
@@ -70,22 +83,29 @@ from twpa_solver.pump.backends.schur_operators import (  # noqa: E402
     SchurReducedProblem,
     build_schur_problem,
 )
+from twpa_solver.ports import (  # noqa: E402
+    port_available_power_w,
+    port_current_from_power_a,
+)
 
 
 # =============================================================================
 # Units / helpers
 # =============================================================================
 
-def dbm_to_peak_current_a(power_dbm: float, *, attenuation_db: float, z0_ohm: float) -> float:
+def dbm_to_peak_current_a(
+    power_dbm: float, *, attenuation_db: float, z0_ohm: float,
+    convention: str = "norton",
+) -> float:
     logger.debug(
-        "dbm_to_peak_current_a_start power_dbm=%s attenuation_db=%s z0_ohm=%s",
-        power_dbm, attenuation_db, z0_ohm,
+        "dbm_to_peak_current_a_start power_dbm=%s attenuation_db=%s z0_ohm=%s convention=%s",
+        power_dbm, attenuation_db, z0_ohm, convention,
     )
     if z0_ohm <= 0.0:
         raise ValueError("z0_ohm must be positive")
     source_dbm = float(power_dbm) - float(attenuation_db)
     power_w = 1.0e-3 * 10.0 ** (source_dbm / 10.0)
-    current_a = math.sqrt(2.0 * power_w / float(z0_ohm))
+    current_a = port_current_from_power_a(power_w, z0_ohm, convention=convention)
     logger.debug(
         "dbm_to_peak_current_a_result source_dbm=%s power_w=%s current_a=%s",
         source_dbm, power_w, current_a,
@@ -96,12 +116,14 @@ def dbm_to_peak_current_a(power_dbm: float, *, attenuation_db: float, z0_ohm: fl
 def peak_current_to_power_dbm(current_a: float, freq_ghz: float, args: argparse.Namespace) -> float:
     """Inverse of ``dbm_to_peak_current_a``: on-chip peak current -> pump dBm.
 
-    ``I = sqrt(2 P_W / Z0)`` with ``P_W = 1e-3 * 10^((dBm - att)/10)``, so
-    ``dBm = 10*log10((I^2 Z0 / 2) / 1e-3) + att(freq)``.
+    Available power follows ``args.power_convention`` (Norton default:
+    ``P_avail = I^2 Z0 / 8``); see ``twpa_solver.ports``.
     """
     if current_a <= 0.0:
         return float("-inf")
-    power_w = current_a * current_a * float(args.z0_ohm) / 2.0
+    power_w = port_available_power_w(
+        current_a, float(args.z0_ohm), convention=args.power_convention
+    )
     source_dbm = 10.0 * math.log10(power_w / 1.0e-3)
     result = source_dbm + attenuation_db_for(freq_ghz, args)
     logger.debug(
@@ -130,6 +152,14 @@ def attenuation_db_for(freq_ghz: float, args: argparse.Namespace) -> float:
     return att
 
 
+def signal_attenuation_db_for(freq_ghz: float, args: argparse.Namespace) -> float:
+    """Signal-line attenuation used when referring measured signal powers."""
+    override = getattr(args, "signal_attenuation_db", None)
+    if override is not None:
+        return float(override)
+    return float(signal_loss_model().attenuation_db(float(freq_ghz)))
+
+
 def signal_ghz_for(pump_freq_ghz: float, args: argparse.Namespace) -> float:
     """Readout signal frequency for a map cell.
 
@@ -143,10 +173,10 @@ def signal_ghz_for(pump_freq_ghz: float, args: argparse.Namespace) -> float:
             pump_freq_ghz, args.signal_ghz,
         )
         return float(args.signal_ghz)
-    result = float(pump_freq_ghz) - float(args.signal_detuning_mhz) / 1000.0
+    result = float(pump_freq_ghz) - float(getattr(args, "signal_detuning_mhz", 100.0)) / 1000.0
     logger.debug(
         "signal_ghz_for pump_freq_ghz=%s detuning_mhz=%s -> signal_ghz=%s",
-        pump_freq_ghz, args.signal_detuning_mhz, result,
+        pump_freq_ghz, getattr(args, "signal_detuning_mhz", 100.0), result,
     )
     return result
 
@@ -471,6 +501,12 @@ def run_point(
     }
     row.update(pump_metrics(pump_report))
     row.update(gain_metrics(gain_report))
+    signal_frequency = row.get("signal_ghz")
+    row["signal_attenuation_db"] = signal_attenuation_db_for(
+        float(signal_frequency) if signal_frequency is not None
+        else signal_ghz_for(point.pump_freq_ghz, args),
+        args,
+    )
     return row
 
 
@@ -614,7 +650,17 @@ class InProcessEngine:
         self.args = args
         self.ipm08 = load_circuit(args.circuit_dir)
         self.ipm09 = load_circuit(args.circuit_dir)
-        self.branch = exp08.JosephsonBranchArray(Ic=self.ipm08.Ic, phi0=self.ipm08.phi0)
+        if args.loss_model == "auto":
+            args.loss_model = default_loss_model_for(self.ipm09)
+        self.branch = make_branch_law(self.ipm08)
+        if getattr(args, "dc_solution", None):
+            self.dc_branch_flux = load_dc_branch_flux(args.dc_solution, self.ipm08)
+        else:
+            self.dc_branch_flux = kinetic_dc_branch_flux(
+                self.ipm08, getattr(args, "dc_current_a", 0.0)
+            )
+        if self.dc_branch_flux is None:
+            self.dc_branch_flux = np.zeros(self.ipm08.branch_count, dtype=float)
         self.pump_idx = self.ipm08.port_to_index[args.pump_port]
         self.source_idx = self.ipm09.port_to_index[args.source_port]
         self.out_idx = self.ipm09.port_to_index[args.out_port]
@@ -686,6 +732,8 @@ class InProcessEngine:
             C=self.ipm08.C, G=self.ipm08.G, K=self.ipm08.K, Bphi=self.ipm08.Bphi,
             branch=self.branch, grid=grid, pump_node_index=self.pump_idx,
             pump_current_a=current_a, source_mode=basis.source_mode,
+            loss_model=default_loss_model_for(self.ipm08),
+            dc_branch_flux=self.dc_branch_flux,
         )
         logger.debug(
             "engine_build_problem_complete freq_ghz=%s omega=%s modes=%r "
@@ -1003,6 +1051,12 @@ class InProcessEngine:
         else:
             logger.debug("engine_solve_point_gain_skipped point=%s pump_not_converged", point.index)
 
+        row["signal_attenuation_db"] = signal_attenuation_db_for(
+            float(row["signal_ghz"])
+            if row.get("signal_ghz") is not None
+            else signal_ghz_for(point.pump_freq_ghz, a),
+            a,
+        )
         row["status"] = "PASS" if (row["pump_status"] == "VALID_CONVERGED"
                                    and row["gain_status"] == "VALID_SOLVED") else "ERROR"
         row["elapsed_s"] = time.perf_counter() - t0
@@ -1199,7 +1253,7 @@ class InProcessEngine:
         t0 = time.perf_counter()
         gamma_hat = exp09.compute_gamma_hat(
             circuit=self.ipm09, pump=pump, max_ell=max_ell, gamma_nt=a.gamma_nt,
-            dc_branch_flux=None,
+            dc_branch_flux=self.dc_branch_flux,
         )
         gamma_runtime_s = time.perf_counter() - t0
         logger.debug("gain_gamma_hat_complete n_coeffs=%d runtime_s=%.6f", len(gamma_hat), gamma_runtime_s)
@@ -1208,7 +1262,7 @@ class InProcessEngine:
         khat_runtime_s = time.perf_counter() - t0
         logger.debug("gain_khat_complete n_blocks=%d runtime_s=%.6f", len(khat), khat_runtime_s)
         t0 = time.perf_counter()
-        gamma_off = self.ipm09.Ic / self.ipm09.phi0
+        gamma_off = self.branch.tangent(self.dc_branch_flux[None, :])[0]
         khat_off_0 = (
             self.ipm09.Bphi @ sp.diags(gamma_off, offsets=0, format="csr") @ self.ipm09.Bphi.T
         ).astype(np.complex128).tocsr()
@@ -1302,7 +1356,7 @@ class InProcessEngine:
                 int(a.sidebands),
                 int(self.source_idx),
                 int(self.out_idx),
-                "current_complex_c",
+                a.loss_model,
             )
             schur_part = self._signal_schur_part_cache.get(key)
             logger.debug("signal_schur_cache_lookup hit=%s key=%r", schur_part is not None, key)
@@ -1310,7 +1364,7 @@ class InProcessEngine:
                 schur_part = exp09.build_signal_schur_partition(
                     self.ipm09, omega_p, signal_ghz, a.sidebands,
                     self.source_idx, self.out_idx,
-                    loss_model="current_complex_c",
+                    loss_model=a.loss_model,
                 )
                 self._signal_schur_part_cache[key] = schur_part
                 if len(self._signal_schur_part_cache) > self._signal_schur_cache_max:
@@ -1323,7 +1377,7 @@ class InProcessEngine:
             sidebands=a.sidebands, signal_m=0, idler_m=-2,
             source_index=self.source_idx, out_index=self.out_idx,
             source_current_a=1.0, source_port=a.source_port, out_port=a.out_port,
-            z0_ohm=a.z0_ohm, loss_model="current_complex_c",
+            z0_ohm=a.z0_ohm, loss_model=a.loss_model,
             linear_solver=a.signal_solver,
         )
         if a.signal_backend == "schur":
@@ -1513,6 +1567,7 @@ def run_warm_pass_inprocess(
                         column[0].pump_freq_ghz, engine.args
                     ),
                     z0_ohm=engine.args.z0_ohm,
+                    convention=engine.args.power_convention,
                 ) * scale
                 print(
                     f"[warm] fp={column[0].pump_freq_ghz:.6g} GHz "
@@ -1993,7 +2048,7 @@ def run_fold_follow(engine: InProcessEngine, freqs: np.ndarray, outdir: Path,
         f = float(f)
         ref_phys = dbm_to_peak_current_a(
             args.pump_power_max_dbm, attenuation_db=attenuation_db_for(f, args),
-            z0_ohm=args.z0_ohm)
+            z0_ohm=args.z0_ohm, convention=args.power_convention)
         ref_injected = ref_phys * scale
         full_problem, _basis, _omega = engine._build_problem(f, ref_injected)
         # Solve on the Schur-reduced problem for speed (constant retained shape).
@@ -2210,7 +2265,7 @@ def write_points_csv(path: Path, rows: list[dict[str, Any]]) -> None:
         "gain_status", "warm_started", "warm_retry_reseed", "pump_predictor",
         "pump_failure_reason", "gain_failure_reason",
         "gain_db", "gain_vs_off_db",
-        "gain_vs_pumpdiag_db", "signal_ghz", "linear_rel_residual",
+        "gain_vs_pumpdiag_db", "signal_ghz", "signal_attenuation_db", "linear_rel_residual",
         "pump_runtime_s", "pump_wall_runtime_s", "pump_setup_runtime_s",
         "pump_schur_setup_runtime_s", "pump_solve_wall_runtime_s",
         "pump_write_runtime_s", "pump_factor_runtime_s",
@@ -2337,9 +2392,20 @@ def write_summary(
         "z0_ohm": args.z0_ohm,
         "signal_ghz": args.signal_ghz,
         "signal_detuning_mhz": args.signal_detuning_mhz,
+        "signal_attenuation_db": args.signal_attenuation_db,
+        "signal_attenuation_model": (
+            "flat" if args.signal_attenuation_db is not None else "loss_B1 c + a*sqrt(f) + b*f"
+        ),
+        "dc_current_a": args.dc_current_a,
+        "dc_solution": str(args.dc_solution) if args.dc_solution is not None else None,
         "signal_convention": ("fixed" if args.signal_ghz is not None
                               else f"ws = wp - {args.signal_detuning_mhz} MHz"),
-        "current_convention": "I_peak = sqrt(2 * P_W / Z0), P = P_dbm - attenuation_db",
+        "power_convention": args.power_convention,
+        "current_convention": (
+            "I_peak = sqrt(8 * P_W / Z0), P = P_dbm - attenuation_db"
+            if args.power_convention == "norton"
+            else "I_peak = sqrt(2 * P_W / Z0), P = P_dbm - attenuation_db"
+        ),
         "cold_status_counts": counts(cold_rows),
         "warm_status_counts": counts(warm_rows),
         "cold_pump_runtime_s": total_pump_runtime(cold_rows) if cold_rows else None,
@@ -2411,6 +2477,10 @@ def write_summary(
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--mode", choices=["cold", "warmstart", "both"], default="warmstart")
+    p.add_argument("--loss-model", choices=["auto", "current_complex_c", "real_capacitance",
+                                              "conjugate_complex_c", "complex_c_sign_omega",
+                                              "conductance_signed_omega", "conductance_abs_omega",
+                                              "conductance_abs_omega_opposite"], default="auto")
     p.add_argument("--executor", choices=["subprocess", "inprocess"], default="inprocess",
                    help="inprocess runs pump+gain in this process (no per-point import "
                    "tax); numerics are identical to the subprocess path.")
@@ -2652,7 +2722,32 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--attenuation-db", type=float, default=None,
                    help="Flat line attenuation (dB). If omitted, use the measured "
                    "loss_A10 frequency-dependent model c + a*sqrt(f) + b*f.")
+    p.add_argument(
+        "--dc-current-a", type=float, default=0.0,
+        help="Uniform DC current through kinetic branches; zero preserves the legacy path.",
+    )
+    p.add_argument(
+        "--dc-solution", type=Path, default=None,
+        help="Optional dc_solution.npz (or directory) providing psi_dc/x_dc; overrides --dc-current-a.",
+    )
+    p.add_argument(
+        "--signal-attenuation-db", type=float, default=None,
+        help="Flat signal-line attenuation for signal-spectrum referral; defaults to loss_B1.",
+    )
     p.add_argument("--z0-ohm", type=float, default=50.0)
+    p.add_argument(
+        "--power-convention",
+        choices=("norton", "legacy_traveling_wave"),
+        default="norton",
+        help=(
+            "Port drive current -> available power relation. Every drive "
+            "port in the production netlists is an ideal current source in "
+            "parallel with Z0 (Norton), so available power is I^2*Z0/8, not "
+            "the traveling-wave I^2*Z0/2. Maps produced before this flag "
+            "existed used legacy_traveling_wave and are relabeled -6.0206 dB "
+            "at read time (power_convention key absent = legacy)."
+        ),
+    )
     # Signal readout frequency. Default: track the pump at a fixed detuning
     # ws = wp - 100 MHz per cell (the physically correct choice for a map that
     # sweeps pump frequency). Pass --signal-ghz to force a fixed absolute signal.
@@ -2774,6 +2869,7 @@ def build_points(args: argparse.Namespace) -> tuple[list[GridPoint], np.ndarray,
                 float(power_dbm),
                 attenuation_db=attenuation_db_for(float(freq), args),
                 z0_ohm=args.z0_ohm,
+                convention=args.power_convention,
             )
             points.append(GridPoint(index, i, j, float(power_dbm), float(freq), current))
             index += 1

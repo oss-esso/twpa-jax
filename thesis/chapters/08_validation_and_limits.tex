@@ -304,6 +304,14 @@ of \cref{chap:circuit} gives \SI{34.54}{\dB} at \SI{7.1}{\giga\hertz}; omitting
 it is not a small correction. All future work uses the measured model.
 \end{caveat}
 
+\begin{implnote}[on-chip dielectric-loss gate]
+With the pump off, the on-chip tangent is checked independently of another
+simulator: $\ln|S_{21}|$ must scale linearly with $\tan\delta$ and
+$|S_{21}|$ must decrease monotonically. This is the analytic
+$\exp(-\alpha L)$ attenuation check, separate from measured input-line loss.
+It does not make saturation an externally validated result.
+\end{implnote}
+
 \section{Two structural findings}
 
 \subsection{The device is not travelling-wave}

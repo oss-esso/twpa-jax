@@ -8,13 +8,32 @@ from twpa_solver.multitone.resources import ResourceLimitExceeded
 
 from scripts import run_compression
 from scripts.run_compression import (
+    SMALL_SIGNAL_FLOOR_TOL_DB,
     _build_multitone_basis,
+    _effective_p1db_current,
     _frequency_worker_limit,
+    _first_kinetic_threshold_current,
     _interpolate_p1db_current,
     _resolve_attenuation,
+    _small_signal_floor_delta_db,
     build_parser,
     main,
 )
+
+
+def test_effective_p1db_prefers_kinetic_threshold() -> None:
+    assert _effective_p1db_current(2.0e-6, 1.5e-6) == (None, "THRESHOLD_CROSSED")
+    assert _effective_p1db_current(2.0e-6, None) == (2.0e-6, "SMOOTH_COMPRESSION")
+    assert _effective_p1db_current(None, None) == (None, "NOT_REACHED")
+
+
+def test_first_kinetic_threshold_ignores_failed_points() -> None:
+    points = [
+        {"status": "SOLVER_FAILED", "max_current_over_ic": 2.0, "signal_current_a": 1.0e-6},
+        {"status": "VALID_SOLVED", "max_current_over_ic": 0.9, "signal_current_a": 2.0e-6},
+        {"status": "VALID_SOLVED", "max_current_over_ic": 1.1, "signal_current_a": 3.0e-6},
+    ]
+    assert _first_kinetic_threshold_current(points) == pytest.approx(3.0e-6)
 
 
 def test_multitone_preconditioner_defaults_exact_and_accepts_sector() -> None:
@@ -293,6 +312,85 @@ def test_p1db_refinement_can_be_disabled_to_reach_interpolation_fallback() -> No
     assert _interpolate_p1db_current(points) == pytest.approx(10.0 ** -8.5)
 
 
+def test_small_signal_floor_delta_flags_non_flat_grid() -> None:
+    """A synthetic already-compressed grid: gain already dropping between the
+    two lowest currents means the sweep never reached the flat small-signal
+    region, so G0 (read from points[0]) is biased high.
+    """
+    points = [
+        {"status": "VALID_SOLVED", "gain_vs_off_db": 10.0},
+        {"status": "VALID_SOLVED", "gain_vs_off_db": 9.5},
+        {"status": "VALID_SOLVED", "gain_vs_off_db": 8.0},
+    ]
+    delta = _small_signal_floor_delta_db(points)
+    assert delta == pytest.approx(0.5)
+    assert delta >= SMALL_SIGNAL_FLOOR_TOL_DB
+
+
+def test_small_signal_floor_delta_passes_flat_grid() -> None:
+    points = [
+        {"status": "VALID_SOLVED", "gain_vs_off_db": 10.000},
+        {"status": "VALID_SOLVED", "gain_vs_off_db": 9.980},
+        {"status": "VALID_SOLVED", "gain_vs_off_db": 6.000},
+    ]
+    delta = _small_signal_floor_delta_db(points)
+    assert delta == pytest.approx(0.02, abs=1e-9)
+    assert delta < SMALL_SIGNAL_FLOOR_TOL_DB
+
+
+def test_small_signal_floor_delta_none_with_insufficient_points() -> None:
+    assert _small_signal_floor_delta_db([]) is None
+    assert _small_signal_floor_delta_db(
+        [{"status": "VALID_SOLVED", "gain_vs_off_db": 10.0}]
+    ) is None
+    assert _small_signal_floor_delta_db(
+        [{"status": "FAIL", "gain_vs_off_db": float("nan")},
+         {"status": "VALID_SOLVED", "gain_vs_off_db": 10.0}]
+    ) is None
+
+
+def test_small_signal_floor_delta_skips_failed_points() -> None:
+    """Only VALID_SOLVED points count -- a failed point in between must not
+    be compared against."""
+    points = [
+        {"status": "VALID_SOLVED", "gain_vs_off_db": 10.0},
+        {"status": "FAIL", "gain_vs_off_db": float("nan")},
+        {"status": "VALID_SOLVED", "gain_vs_off_db": 9.99},
+    ]
+    delta = _small_signal_floor_delta_db(points)
+    assert delta == pytest.approx(0.01, abs=1e-9)
+
+
+def test_non_flat_starting_grid_reports_g0_grid_not_flat(tmp_path) -> None:
+    """Real solve, not a synthetic points list: the JPA fixture's gain vs.
+    signal current is non-monotone (rises from ~7.40 dB at very low current
+    to a ~12 dB peak before collapsing into compression), so a sweep that
+    starts at 4e-11 A instead of near-zero begins already on the rising
+    flank -- the grid never reaches the flat small-signal region, and the
+    guard must catch that rather than reporting a P1dB read off a biased G0.
+    """
+    assert main([
+        "--output-dir", str(tmp_path),
+        "--fixture", "jpa",
+        "--pump-freq-ghz", "4.75001",
+        "--pump-current-a", "1.13e-08",
+        "--pump-current-jc-scale", "1.0",
+        "--signal-ghz", "4.75",
+        "--source-port", "1", "--pump-port", "1", "--out-port", "1",
+        "--n-signal-power", "3",
+        "--signal-current-min-a", "4e-11",
+        "--signal-current-max-a", "2e-10",
+        "--attenuation-db", "0",
+        "--multitone-basis", "matched", "--multitone-sidebands", "2",
+        "--recovery", "ladder",
+    ]) == 0
+    summary = json.loads((tmp_path / "compression_summary.json").read_text())
+    assert summary["status"] == "G0_GRID_NOT_FLAT"
+    assert summary["small_signal_floor_flat"] is False
+    assert summary["small_signal_floor_delta_db"] >= SMALL_SIGNAL_FLOOR_TOL_DB
+    assert summary["p1db"] is None
+
+
 def _jpa_gain_args(tmp_path, n_points: int) -> list[str]:
     """The exp20 jpa operating point, which really does compress.
 
@@ -343,6 +441,69 @@ def test_interpolated_p1db_is_the_reported_one_when_refinement_is_off(
 
     assert summary["p1db_method"] == "interpolated"
     assert summary["p1db"] == pytest.approx(summary["p1db_interpolated_dbm"])
+
+
+def test_power_convention_defaults_to_norton() -> None:
+    args = build_parser().parse_args(["--output-dir", "unused", "--signal-ghz", "4.5"])
+    assert args.power_convention == "norton"
+
+
+def test_legacy_power_convention_shifts_p1db_by_exactly_6p02_db(tmp_path) -> None:
+    """Norton vs legacy differ only by the fixed 6.0206 dB relabel.
+
+    Gain is a ratio of ratios (pump-on over pump-off), so it is invariant
+    under the power convention; only the reported dBm axis moves.
+    """
+    norton_dir = tmp_path / "norton"
+    legacy_dir = tmp_path / "legacy"
+    args = _jpa_gain_args(norton_dir, 5) + ["--p1db-power-tol-db", "0"]
+    assert main(args) == 0
+    assert main(
+        [a if a != str(norton_dir) else str(legacy_dir) for a in args]
+        + ["--power-convention", "legacy_traveling_wave"]
+    ) == 0
+
+    norton_summary = json.loads((norton_dir / "compression_summary.json").read_text())
+    legacy_summary = json.loads((legacy_dir / "compression_summary.json").read_text())
+
+    assert norton_summary["power_convention"] == "norton"
+    assert legacy_summary["power_convention"] == "legacy_traveling_wave"
+    assert legacy_summary["p1db"] == pytest.approx(
+        norton_summary["p1db"] + 6.0205999133, abs=1e-6
+    )
+    assert norton_summary["small_signal_gain_vs_off_db"] == pytest.approx(
+        legacy_summary["small_signal_gain_vs_off_db"]
+    )
+
+
+def test_stop_after_p1db_matches_the_full_sweep_but_skips_the_tail(
+    tmp_path,
+) -> None:
+    """Stopping right after the 1 dB crossing must not change the P1dB.
+
+    Both the interpolated and refined values only ever need the two points
+    straddling the crossing -- everything past it is deep-saturation tail
+    that the full sweep also solves but neither P1dB path reads.
+    """
+    full_dir = tmp_path / "full"
+    early_dir = tmp_path / "early"
+    full_args = _jpa_gain_args(full_dir, 9)
+    early_args = _jpa_gain_args(early_dir, 9)
+
+    assert main(full_args + ["--p1db-power-tol-db", "0.1"]) == 0
+    assert main(
+        early_args + ["--p1db-power-tol-db", "0.1", "--stop-after-p1db"]
+    ) == 0
+
+    full_summary = json.loads((full_dir / "compression_summary.json").read_text())
+    early_summary = json.loads((early_dir / "compression_summary.json").read_text())
+
+    assert full_summary["p1db_method"] == "refined"
+    assert early_summary["p1db_method"] == "refined"
+    assert early_summary["p1db"] == pytest.approx(full_summary["p1db"])
+    assert early_summary["n_requested_power_points"] < full_summary[
+        "n_requested_power_points"
+    ]
 
 
 def test_no_gain_operating_point_suppresses_compression(tmp_path) -> None:
@@ -404,7 +565,7 @@ def test_fixture_and_circuit_attenuation_defaults_are_distinct() -> None:
         ["--output-dir", "unused", "--signal-ghz", "4.5", "--fixture", "jpa", "--attenuation-db", "7"]
     )
     assert _resolve_attenuation(fixture) == (0.0, "fixture_default_zero")
-    assert _resolve_attenuation(circuit)[1] == "themis_default_loss_model"
+    assert _resolve_attenuation(circuit)[1] == "signal_line_loss_model"
     assert _resolve_attenuation(explicit) == (7.0, "explicit")
 
 

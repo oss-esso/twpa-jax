@@ -19,6 +19,69 @@ LOSS_MODELS = (
     "conductance_abs_omega_opposite",
 )
 
+LOSSY_DEFAULT_LOSS_MODEL = "conductance_abs_omega"
+
+
+def default_loss_model_for(circuit: CircuitMatrices) -> str:
+    """Return the canonical convention for this circuit's capacitance."""
+    return LOSSY_DEFAULT_LOSS_MODEL if circuit.has_loss else "current_complex_c"
+
+
+def require_real(matrix_or_array: object, *, what: str) -> np.ndarray:
+    """Return real data, refusing to silently discard a loss contribution."""
+    if sp.issparse(matrix_or_array):
+        data = matrix_or_array.data
+        if np.iscomplexobj(data) and np.any(data.imag != 0.0):
+            raise ValueError(
+                f"{what} has a non-zero imaginary part; largest discarded magnitude "
+                f"would be {float(np.max(np.abs(data.imag))):.6g}"
+            )
+        return matrix_or_array.real
+    value = np.asarray(matrix_or_array)
+    if np.iscomplexobj(value) and np.any(value.imag != 0.0):
+        raise ValueError(
+            f"{what} has a non-zero imaginary part; largest discarded magnitude "
+            f"would be {float(np.max(np.abs(value.imag))):.6g}"
+        )
+    return value.real if np.iscomplexobj(value) else value
+
+
+def dynamic_block_from_parts(
+    C: sp.spmatrix,
+    G: sp.spmatrix,
+    K: sp.spmatrix,
+    omega: float,
+    *,
+    loss_model: str = "current_complex_c",
+    extra_K: sp.spmatrix | None = None,
+) -> sp.csr_matrix:
+    """Build one dynamic block from matrix parts and a loss convention."""
+    Cfull = C.astype(np.complex128).tocsr()
+    Gfull = G.astype(np.complex128).tocsr()
+    Kfull = K.astype(np.complex128).tocsr()
+    if extra_K is not None:
+        Kfull = Kfull + extra_K.astype(np.complex128).tocsr()
+    Cre = Cfull.real.astype(np.complex128).tocsr()
+    Cim = Cfull.imag.astype(np.complex128).tocsr()
+    if loss_model == "current_complex_c":
+        selected_C, selected_G = Cfull, Gfull
+    elif loss_model == "real_capacitance":
+        selected_C, selected_G = Cre, Gfull
+    elif loss_model == "conjugate_complex_c":
+        selected_C, selected_G = Cfull.conjugate().tocsr(), Gfull
+    elif loss_model == "complex_c_sign_omega":
+        selected_C = (Cre + 1j * (1.0 if omega >= 0.0 else -1.0) * Cim).tocsr()
+        selected_G = Gfull
+    elif loss_model == "conductance_signed_omega":
+        selected_C, selected_G = Cre, Gfull - omega * Cim
+    elif loss_model == "conductance_abs_omega":
+        selected_C, selected_G = Cre, Gfull - abs(omega) * Cim
+    elif loss_model == "conductance_abs_omega_opposite":
+        selected_C, selected_G = Cre, Gfull + abs(omega) * Cim
+    else:
+        raise ValueError(f"unknown loss_model={loss_model!r}")
+    return (Kfull - omega * omega * selected_C + 1j * omega * selected_G).tocsr()
+
 
 def dynamic_block(
     circuit: CircuitMatrices,
@@ -28,43 +91,10 @@ def dynamic_block(
     extra_K: sp.spmatrix | None = None,
 ) -> sp.csr_matrix:
     """Build D(w) = K - w^2 C + i w G, with optional loss convention."""
-    Cfull = circuit.C.astype(np.complex128).tocsr()
-    Gfull = circuit.G.astype(np.complex128).tocsr()
-    K = circuit.K.astype(np.complex128).tocsr()
-
-    if extra_K is not None:
-        K = K + extra_K.astype(np.complex128).tocsr()
-
-    Cre = Cfull.real.astype(np.complex128).tocsr()
-    Cim = Cfull.imag.astype(np.complex128).tocsr()
-
-    if loss_model == "current_complex_c":
-        C = Cfull
-        G = Gfull
-    elif loss_model == "real_capacitance":
-        C = Cre
-        G = Gfull
-    elif loss_model == "conjugate_complex_c":
-        C = Cfull.conjugate().astype(np.complex128).tocsr()
-        G = Gfull
-    elif loss_model == "complex_c_sign_omega":
-        sgn = 1.0 if omega >= 0.0 else -1.0
-        C = (Cre + 1j * sgn * Cim).astype(np.complex128).tocsr()
-        G = Gfull
-    elif loss_model == "conductance_signed_omega":
-        C = Cre
-        G = (Gfull - omega * Cim).astype(np.complex128).tocsr()
-    elif loss_model == "conductance_abs_omega":
-        C = Cre
-        G = (Gfull - abs(omega) * Cim).astype(np.complex128).tocsr()
-    elif loss_model == "conductance_abs_omega_opposite":
-        C = Cre
-        G = (Gfull + abs(omega) * Cim).astype(np.complex128).tocsr()
-    else:
-        raise ValueError(f"unknown loss_model={loss_model!r}")
-
-    D = (K - omega * omega * C + 1j * omega * G).tocsr()
-    return D
+    return dynamic_block_from_parts(
+        circuit.C, circuit.G, circuit.K, omega,
+        loss_model=loss_model, extra_K=extra_K,
+    )
 
 
 def port_s_from_unit_current_response(

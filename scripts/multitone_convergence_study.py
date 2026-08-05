@@ -13,6 +13,7 @@ import numpy as np
 
 from twpa_solver.builders.jc_doc import build_fqjtwpa, build_jpa, build_jtwpa
 from twpa_solver.core import CircuitMatrices
+from twpa_solver.core.nonlinear import make_branch_law
 from twpa_solver.multitone.basis import (
     MultiToneBasis,
     build_lattice_basis,
@@ -27,7 +28,6 @@ from twpa_solver.pump import (
     FullPumpProblem,
     HarmonicGrid,
     HarmonicNewtonKrylovSolver,
-    JosephsonBranchArray,
     NewtonKrylovSettings,
 )
 from twpa_solver.pump.basis import PumpBasis
@@ -199,7 +199,7 @@ def solve_jpa_p1db(
         G=circuit.G,
         K=circuit.K,
         Bphi=circuit.Bphi,
-        branch=JosephsonBranchArray(circuit.Ic, circuit.phi0),
+        branch=make_branch_law(circuit),
         grid=HarmonicGrid(np.asarray(pump_modes), grid_nt, omega_p),
         pump_node_index=circuit.port_to_index[1],
         pump_current_a=pump_current,

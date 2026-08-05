@@ -330,17 +330,66 @@ re-fits the CSV. C = fixed coupling loss, A*sqrt(f) = skin effect, B*f = dielect
 pure `A*sqrt(f)+B*f` fits terribly (RMS 4.6 dB, B<0). Sanity: model at 8 GHz ≈
 35.4 dB, matching the old band-calibrated flat 35 dB.
 
-## Pump-current conversion (validated 2026-07-18)
+`default_loss_model()`/this A10 fit is now named `pump_line_loss_model()` — it
+is the PUMP feedline's loss, not a generic loss. The SIGNAL feedline is a
+separate, physically distinct line: `signal_line_loss_model()` fits
+`docs/development/loss_B1.csv` (`att_dB(f) = 50.0 + 3.3*sqrt(f) + 0.14*f`, RMS
+2.80e-5 dB). Before 2026-08-05, `scripts/measured_psat_pipeline.py` subtracted
+a fabricated flat `SIGNAL_LINE_LOSS_DB = 72.5` from the Themis cube's signal
+axis instead — off by +9.4 to +15.3 dB across the band and erasing a real
+5.95 dB tilt (still present in `experiments/exp30_themis_map_and_pump_inference.py`
+and `exp45_curves_two_way.py`, both unfixed legacy scripts —
+`outputs/presentation/2c_themis_map.png` is NOT on the corrected calibration).
+Which physical line gets which model is forced by energy conservation, not a
+free fit choice: signal+idler output at compression cannot exceed the pump
+(`P_sat + 3 dB <= P_pump`), and only `pump_line_loss_model()` on the pump
+feedline satisfies it — `signal_line_loss_model()` there gives P_sat 16.5 dB
+*above* the pump, which is impossible. See
+`docs/development/psat_comparison_fix_plan.md` Phase 2 and
+`scripts/measured_psat_pipeline.py::energy_conservation_gate` (Phase 7), which
+now asserts this on every run instead of trusting it.
 
-The map power conversion in `exp10_full_ipm_pump_map_warmstart.py` and
-`scripts/run_gain_map.py` already computes the on-chip **peak** current,
-`I_peak = sqrt(2 P_W / Z0)`. The currently validated Python/IPM conversion is
-therefore **`--pump-current-jc-scale 1.0`**: do not apply an additional factor of
-two for current map regeneration. The factor `2.0` is the historical JC-parity
-conversion and remains the parser default for backwards compatibility, so current
-runs must pass `--pump-current-jc-scale 1.0` explicitly. See
-`docs/pump_current_conversions.tex` for the distinction between the two source
-conventions and their physical meaning.
+## Port power convention: Norton, not travelling-wave (resolved 2026-08-05)
+
+`src/twpa_solver/ports.py` is the single source of truth for current<->dBm.
+`designs/ipm_2c_fixed`'s `G` matrix has **exactly four nonzeros**, all
+`0.02 S = 50 Ω`, one per port — every drive is an ideal current source in
+parallel with `G0 = 1/Z0`, i.e. a **Norton** source, not a matched travelling
+wave. The load sees `I/2` (peak), so available power is `P = I^2 Z0 / 8`, not
+the travelling-wave `I^2 Z0 / 2` used everywhere before this date — an
+overstatement of exactly `10*log10(4) = 6.0206 dB`. Confirmed independently by
+the solver's own `pump_outgoing_power_w` observable
+(`multitone/observables.py::power_balance`): at `I = 7.2311e-6 A`,
+`pump_outgoing_power_w` reads -64.857 dBm, matching `I^2 Z0/8` to the last
+digit and off by 6.02 dB from `I^2 Z0/2`.
+
+`port_available_power_w(current_a, z0_ohm, convention="norton")` /
+`port_current_from_power_a(...)` are the conversion functions;
+`convention="legacy_traveling_wave"` reproduces every pre-2026-08-05 published
+number bit-for-bit (`LEGACY_TW_OFFSET_DB = 10*log10(4)`). `--power-convention`
+(default `norton`) is wired through `scripts/run_compression.py`,
+`scripts/run_gain_map.py`, and `src/twpa_solver/loss.py::dbm_to_peak_current_a`;
+gain maps lacking a `power_convention` metadata key are `legacy_traveling_wave`
+and get a `-6.0206` dB relabel at read time, never a re-solve — gain is a
+pump-on/pump-off ratio (`gain_vs_off_db`), invariant under the source-scale
+convention, so the fix is a pure relabel of absolute powers.
+
+**This supersedes "Pump-current conversion (validated 2026-07-18)"** — that
+entry validated `--pump-current-jc-scale` against JosephsonCircuits.jl, a
+factor-of-two check in *current* against another simulator
+([[jc-is-not-a-reference]]); it never addressed whether the port termination
+itself was Norton or travelling-wave, and `--pump-current-jc-scale`
+(`docs/development/pump_current_conversions.tex`) remains a **separate,
+orthogonal** knob layered on top of whichever power convention is selected —
+do not conflate the two when reading that doc, which now carries a dated
+addendum for this fix rather than being rewritten.
+
+**Depletion cross-check (Phase 7,** `measured_psat_pipeline.py::model_depletion_cross_check`**):**
+an energy-accounted depletion estimate (`(P_sat+3dB)/P_pump`, assuming
+signal+idler output ~ P_sat + 3 dB) agrees with the solver's own
+`pump_depletion_all_port_db` field to within 1.2-1.5x across a 7-point
+provisional-operating-point sweep — see [[pump-power-norton-6db]] for the
+resolved memory entry and current numbers.
 
 `--attenuation-db` defaults to `None` (= use the model); pass a float to force a
 flat value. Only `run_gain_map.py` is wired to the model; the `experiments/exp10_*`
@@ -593,6 +642,48 @@ prune_map_solutions (--top-k 100 --purge-point-dirs --apply)`. `-DryRun` prints
 commands; `-Only id1,id2` runs a subset. ~16 configs, est. ~20-26 h; pruned to
 ~0.1-0.2 GB/run.
 
+### Standard gain-map flag set (2026-08-03)
+
+Every production gain map uses this block. Pass it to `scripts/run_gain_map.py`,
+or forward it through `workflows/run_gain_map_and_plots.py` (which injects
+`--circuit-dir`, `--outdir`, `--executor inprocess` and adds the plot
+catalogue). Only the grid bounds and the directories change per run.
+
+```
+--executor inprocess --mode warmstart
+--inproc-pump-backend schur_cpu_mt --inproc-preconditioner real_coupled_fast
+--inproc-fold-predictor secant --inproc-fail-fast --fold-skip-patience 2
+--pump-current-jc-scale 1.0
+--n-power 20 --n-frequency 20 --frequency-chunk-size 10
+--pump-power-min-dbm -26 --pump-power-max-dbm -16
+--pump-freq-min-ghz 7.6 --pump-freq-max-ghz 7.85
+--signal-detuning-mhz 500 --no-signal-spectrum
+--log-level INFO --overwrite
+```
+
+Most of these already match the parser default, but **six do not** and omitting
+them silently changes results or cost:
+
+| flag | default | reason it is set |
+| --- | --- | --- |
+| `--inproc-fail-fast` | `False` | stop a bad cell instead of grinding |
+| `--fold-skip-patience 2` | `0` | enable skip counting |
+| `--signal-detuning-mhz 500` | `100` | wider signal offset |
+| `--no-signal-spectrum` | spectrum **on** | the default runs a full signal sweep at *every* grid point and dominates wall time |
+| `--log-level INFO` | `DEBUG` | DEBUG logs are enormous on a 400-point map |
+| `--overwrite` | `False` | reruns land in the same directory |
+
+Leave `--attenuation-db` unset (measured loss_A10 model applies) and
+`--loss-model` at `auto`. `--pump-port` defaults to 4, correct for 2c.
+
+`--pump-current-jc-scale` is kept in the block for explicitness only: 1.0 is now
+both the parser default and the validated conversion. Passing `2.0` would be a
+6 dB error.
+
+Caveat: `--fold-skip-patience 2` has previously culled the 2c broadband
+operating region into needle-only maps when skip counting false-tripped. Check
+the PASS coverage of a sparse map before quoting it.
+
 ## Validation provenance (experiments/)
 
 The solver's numerics are pinned to JosephsonCircuits.jl by the exp13/exp14
@@ -694,3 +785,15 @@ Other design dirs must be checked before use as variant sources.
 Gates: `tests/test_component_profiles.py`, `test_component_scatter.py`,
 `test_ipm_role_tags.py`, `test_ipm_component_plan.py`, `test_variant_design.py`
 (95 tests, each verified by mutation).
+# Dielectric dissipation
+
+On-chip dielectric loss is stored as `C * (1 - 1j*tan_delta)`, so
+`Im(C) = -C*tan_delta`. Lossy circuits resolve to `conductance_abs_omega`,
+which uses `G + |omega| C tan_delta` and preserves
+`D(-omega) = conj(D(omega))`. The `jj_cj` junction-capacitance role is always
+lossless; the tangent applies to substrate and coupling capacitors.
+
+`plasma_locked` Cj scatter derives Cj from the Lj factor, preserving each
+cell's plasma frequency. Because `conductance_abs_omega` is non-analytic in
+complex omega, Tier-1 stability remains available but Tier-2 complex-omega
+resonance refinement is unavailable for lossy circuits.

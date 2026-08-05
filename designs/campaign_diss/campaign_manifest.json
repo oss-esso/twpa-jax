@@ -1,0 +1,74 @@
+[
+  {
+    "run_id": "2c_base",
+    "outdir": "designs\\campaign_diss\\2c_base",
+    "tan_delta": 0.0,
+    "lj_scatter_sigma": 0.0,
+    "cj_scatter_mode": "none",
+    "scatter_seed": 1,
+    "total_elements": 16312
+  },
+  {
+    "run_id": "2c_td1e5",
+    "outdir": "designs\\campaign_diss\\2c_td1e5",
+    "tan_delta": 1e-05,
+    "lj_scatter_sigma": 0.0,
+    "cj_scatter_mode": "none",
+    "scatter_seed": 1,
+    "total_elements": 16312
+  },
+  {
+    "run_id": "2c_td1e4",
+    "outdir": "designs\\campaign_diss\\2c_td1e4",
+    "tan_delta": 0.0001,
+    "lj_scatter_sigma": 0.0,
+    "cj_scatter_mode": "none",
+    "scatter_seed": 1,
+    "total_elements": 16312
+  },
+  {
+    "run_id": "2c_td1e3",
+    "outdir": "designs\\campaign_diss\\2c_td1e3",
+    "tan_delta": 0.001,
+    "lj_scatter_sigma": 0.0,
+    "cj_scatter_mode": "none",
+    "scatter_seed": 1,
+    "total_elements": 16312
+  },
+  {
+    "run_id": "2c_sc1pct",
+    "outdir": "designs\\campaign_diss\\2c_sc1pct",
+    "tan_delta": 0.0,
+    "lj_scatter_sigma": 0.01,
+    "cj_scatter_mode": "plasma_locked",
+    "scatter_seed": 1,
+    "total_elements": 16312
+  },
+  {
+    "run_id": "2c_sc3pct",
+    "outdir": "designs\\campaign_diss\\2c_sc3pct",
+    "tan_delta": 0.0,
+    "lj_scatter_sigma": 0.03,
+    "cj_scatter_mode": "plasma_locked",
+    "scatter_seed": 1,
+    "total_elements": 16312
+  },
+  {
+    "run_id": "2c_sc5pct",
+    "outdir": "designs\\campaign_diss\\2c_sc5pct",
+    "tan_delta": 0.0,
+    "lj_scatter_sigma": 0.05,
+    "cj_scatter_mode": "plasma_locked",
+    "scatter_seed": 1,
+    "total_elements": 16312
+  },
+  {
+    "run_id": "2c_sc10pct",
+    "outdir": "designs\\campaign_diss\\2c_sc10pct",
+    "tan_delta": 0.0,
+    "lj_scatter_sigma": 0.1,
+    "cj_scatter_mode": "plasma_locked",
+    "scatter_seed": 1,
+    "total_elements": 16312
+  }
+]

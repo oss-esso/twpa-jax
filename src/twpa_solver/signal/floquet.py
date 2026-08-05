@@ -117,8 +117,19 @@ def assemble_conversion_matrix_from_base(
     omega_p: float,
     ms: list[int],
     loss_model: str = "current_complex_c",
+    environment: object | None = None,
+    environment_port_index: int | None = None,
 ) -> sp.csc_matrix:
-    dblocks = [dynamic_block(circuit, omega_s + m * omega_p, loss_model=loss_model) for m in ms]
+    node = environment_port_index
+    if node is None and circuit.port_to_index:
+        node = next(iter(circuit.port_to_index.values()))
+    dblocks = []
+    for m in ms:
+        omega = omega_s + m * omega_p
+        block = dynamic_block(circuit, omega, loss_model=loss_model)
+        if environment is not None:
+            block = block + sp.csr_matrix((np.asarray([environment.admittance(omega)]), ([node], [node])), shape=block.shape)
+        dblocks.append(block)
     A = (khat_base + sp.block_diag(dblocks, format="csc")).tocsc()
     logger.debug(
         "conversion_matrix_assembled_from_base omega_s=%.6e shape=%s nnz=%d",
@@ -134,11 +145,16 @@ def assemble_conversion_matrix(
     omega_p: float,
     ms: list[int],
     loss_model: str = "current_complex_c",
+    environment: object | None = None,
+    environment_port_index: int | None = None,
 ) -> sp.csc_matrix:
     zero = sp.csr_matrix(circuit.C.shape, dtype=np.complex128)
     rows: list[list[sp.csr_matrix]] = []
 
     D_cache: dict[int, sp.csr_matrix] = {}
+    node = environment_port_index
+    if node is None and circuit.port_to_index:
+        node = next(iter(circuit.port_to_index.values()))
     logger.debug(
         "conversion_matrix_assemble_start omega_s=%.6e omega_p=%.6e sidebands=%r",
         omega_s, omega_p, ms,
@@ -150,6 +166,11 @@ def assemble_conversion_matrix(
 
         if m not in D_cache:
             D_cache[m] = dynamic_block(circuit, omega_m, loss_model=loss_model)
+            if environment is not None:
+                D_cache[m] = D_cache[m] + sp.csr_matrix(
+                    (np.asarray([environment.admittance(omega_m)]), ([node], [node])),
+                    shape=D_cache[m].shape,
+                )
 
         for q in ms:
             ell = m - q
@@ -207,12 +228,20 @@ def solve_single_block_transfer(
     out_index: int,
     source_current_a: float,
     loss_model: str = "current_complex_c",
+    environment: object | None = None,
+    environment_port_index: int | None = None,
 ) -> tuple[complex, complex, float]:
     logger.debug(
         "single_block_transfer_start omega_s=%.6e source_index=%d out_index=%d",
         omega_s, source_index, out_index,
     )
-    A = (dynamic_block(circuit, omega_s, loss_model=loss_model) + D_extra).tocsc()
+    A = dynamic_block(circuit, omega_s, loss_model=loss_model) + D_extra
+    if environment is not None:
+        node = environment_port_index
+        if node is None and circuit.port_to_index:
+            node = next(iter(circuit.port_to_index.values()))
+        A = A + sp.csr_matrix((np.asarray([environment.admittance(omega_s)]), ([node], [node])), shape=A.shape)
+    A = A.tocsc()
     b = np.zeros(circuit.C.shape[0], dtype=np.complex128)
     b[source_index] = source_current_a
 
@@ -273,6 +302,7 @@ def solve_gain_one(
     loss_model: str = "current_complex_c",
     linear_solver: str = "superlu",
     khat_big_base: sp.spmatrix | None = None,
+    environment: object | None = None,
 ) -> GainResult:
     logger.debug(
         "gain_one_start signal_ghz=%s sidebands=%d signal_m=%d idler_m=%d "
@@ -295,6 +325,8 @@ def solve_gain_one(
             omega_p=omega_p,
             ms=ms,
             loss_model=loss_model,
+            environment=environment,
+            environment_port_index=source_index,
         )
     else:
         A = assemble_conversion_matrix_from_base(
@@ -304,6 +336,8 @@ def solve_gain_one(
             omega_p=omega_p,
             ms=ms,
             loss_model=loss_model,
+            environment=environment,
+            environment_port_index=source_index,
         )
     assemble_runtime_s = time.perf_counter() - t0
 
@@ -333,6 +367,8 @@ def solve_gain_one(
         source_index=source_index,
         out_index=out_index,
         source_current_a=source_current_a,
+        environment=environment,
+        environment_port_index=source_index,
         loss_model=loss_model,
     )
 
@@ -344,6 +380,8 @@ def solve_gain_one(
         source_index=source_index,
         out_index=out_index,
         source_current_a=source_current_a,
+        environment=environment,
+        environment_port_index=source_index,
     )
 
     gain_vs_off = float(abs(vout_on / vout_off) ** 2)

@@ -7,9 +7,21 @@ import numpy as np
 import pytest
 
 from twpa_solver import InsertionLossModel, default_loss_model
-from twpa_solver.loss import LOSS_A10_A_DB, LOSS_A10_B_DB, LOSS_A10_C_DB
+from twpa_solver.loss import (
+    LOSS_A10_A_DB,
+    LOSS_A10_B_DB,
+    LOSS_A10_C_DB,
+    LOSS_B1_A_DB,
+    LOSS_B1_B_DB,
+    LOSS_B1_C_DB,
+    pump_line_loss_model,
+    signal_line_loss_model,
+)
 
-CSV_PATH = Path(__file__).resolve().parents[1] / "docs" / "loss_A10.csv"
+CSV_PATH = Path(__file__).resolve().parents[1] / "docs" / "development" / "loss_A10.csv"
+LOSS_B1_CSV_PATH = (
+    Path(__file__).resolve().parents[1] / "docs" / "development" / "loss_B1.csv"
+)
 
 
 def test_frozen_coeffs_match_csv_refit() -> None:
@@ -58,14 +70,67 @@ def test_dbm_to_peak_current_applies_frequency_loss() -> None:
     i_high = model.dbm_to_peak_current_a(0.0, 12.0)
     assert i_low > i_high > 0.0
 
-    # Matches the explicit sqrt(2 P / Z0) convention at a given frequency.
+    # Default convention is Norton: matches sqrt(8 P / Z0) at a given frequency.
+    freq_ghz = 8.0
+    att_db = model.attenuation_db(freq_ghz)
+    power_w = 1.0e-3 * 10.0 ** ((0.0 - att_db) / 10.0)
+    expected = math.sqrt(8.0 * power_w / 50.0)
+    assert model.dbm_to_peak_current_a(0.0, freq_ghz) == pytest.approx(expected)
+
+
+def test_dbm_to_peak_current_legacy_convention_matches_old_formula() -> None:
+    model = default_loss_model()
     freq_ghz = 8.0
     att_db = model.attenuation_db(freq_ghz)
     power_w = 1.0e-3 * 10.0 ** ((0.0 - att_db) / 10.0)
     expected = math.sqrt(2.0 * power_w / 50.0)
-    assert model.dbm_to_peak_current_a(0.0, freq_ghz) == pytest.approx(expected)
+    actual = model.dbm_to_peak_current_a(
+        0.0, freq_ghz, convention="legacy_traveling_wave"
+    )
+    assert actual == pytest.approx(expected)
+
+
+def test_norton_current_is_2x_legacy_at_fixed_dbm() -> None:
+    model = default_loss_model()
+    norton = model.dbm_to_peak_current_a(-10.0, 7.0)
+    legacy = model.dbm_to_peak_current_a(
+        -10.0, 7.0, convention="legacy_traveling_wave"
+    )
+    assert norton == pytest.approx(2.0 * legacy)
 
 
 def test_negative_frequency_rejected() -> None:
     with pytest.raises(ValueError):
         default_loss_model().attenuation_db(-1.0)
+
+
+def test_loss_b1_frozen_coeffs_match_csv_refit() -> None:
+    # loss_B1 was frozen to round numbers (50.0, 3.3, 0.14); the lstsq refit
+    # lands within ~4e-6 of them (this CSV is a closed form to RMS 2.80e-5 dB,
+    # so the refit residual is solver noise, not a fit-quality issue).
+    fitted = InsertionLossModel.fit_csv(LOSS_B1_CSV_PATH)
+    assert fitted.c_db == pytest.approx(LOSS_B1_C_DB, abs=1e-5)
+    assert fitted.a_db == pytest.approx(LOSS_B1_A_DB, abs=1e-5)
+    assert fitted.b_db == pytest.approx(LOSS_B1_B_DB, abs=1e-5)
+
+
+def test_loss_b1_fit_quality_within_tolerance() -> None:
+    raw = np.genfromtxt(str(LOSS_B1_CSV_PATH), delimiter=",", names=True)
+    freq = np.asarray(raw["Frequency_GHz"], dtype=float)
+    att = -np.asarray(raw["Insertion_Loss_dB"], dtype=float)
+    predicted = signal_line_loss_model().attenuation_db(freq)
+    rms = float(np.sqrt(np.mean((predicted - att) ** 2)))
+    assert rms < 1e-4  # measured fit RMS ~2.80e-5 dB
+
+
+def test_pump_line_loss_model_is_loss_a10() -> None:
+    assert pump_line_loss_model().attenuation_db(8.0) == pytest.approx(
+        default_loss_model().attenuation_db(8.0)
+    )
+
+
+def test_signal_line_loss_differs_from_pump_line() -> None:
+    freq = 7.256
+    assert signal_line_loss_model().attenuation_db(
+        freq
+    ) != pytest.approx(pump_line_loss_model().attenuation_db(freq))

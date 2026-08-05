@@ -21,7 +21,7 @@ def promote_pump_solution(
         raise ValueError("pump solution row count does not match pump basis")
     result = np.zeros((multitone_basis.n_tones, source.shape[1]), dtype=np.complex128)
     for row, mode in enumerate(pump_basis.modes):
-        tone = ToneIndex(int(mode), 0)
+        tone = ToneIndex(int(mode) * multitone_basis.pump_tone.h, 0)
         if tone in multitone_basis.tones:
             result[multitone_basis.index_of(tone)] = source[row]
     return result

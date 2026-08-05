@@ -151,6 +151,57 @@ class EffectiveSnailBranchLaw:
         }
 
 
+@dataclass(frozen=True)
+class CompositeBranchLaw:
+    """Dispatch several branch laws onto disjoint columns of one branch axis."""
+
+    laws: tuple[Any, ...]
+    columns: tuple[np.ndarray, ...]
+
+    def __post_init__(self) -> None:
+        if len(self.laws) != len(self.columns) or not self.laws:
+            raise ValueError("laws and columns must be non-empty and have equal length")
+        normalized = tuple(np.asarray(column, dtype=int) for column in self.columns)
+        if any(column.ndim != 1 or column.size == 0 for column in normalized):
+            raise ValueError("each composite column set must be a non-empty one-dimensional array")
+        all_columns = np.concatenate(normalized)
+        nbranch = int(all_columns.max()) + 1
+        if np.any(all_columns < 0) or np.unique(all_columns).size != all_columns.size or not np.array_equal(
+            np.sort(all_columns), np.arange(nbranch)
+        ):
+            raise ValueError("composite columns must partition range(nbranch) exactly")
+        for law, column in zip(self.laws, normalized):
+            if np.asarray(law.current(np.zeros((1, column.size)))).shape != (1, column.size):
+                raise ValueError("each law must accept exactly its assigned number of branches")
+        object.__setattr__(self, "columns", normalized)
+
+    @property
+    def nbranch(self) -> int:
+        return int(sum(column.size for column in self.columns))
+
+    def _dispatch(self, name: str, flux: np.ndarray) -> np.ndarray:
+        value = np.asarray(flux, dtype=float)
+        if value.ndim == 0 or value.shape[-1] != self.nbranch:
+            raise ValueError("flux must have branches on its final axis")
+        result = np.empty_like(value, dtype=float)
+        for law, column in zip(self.laws, self.columns):
+            result[..., column] = getattr(law, name)(value[..., column])
+        return result
+
+    def current(self, flux: np.ndarray) -> np.ndarray:
+        return self._dispatch("current", flux)
+
+    def tangent(self, flux: np.ndarray) -> np.ndarray:
+        return self._dispatch("tangent", flux)
+
+    def gamma(self, flux: np.ndarray) -> np.ndarray:
+        return self.tangent(flux)
+
+    @property
+    def metadata(self) -> dict[str, Any]:
+        return {"type": "composite", "parts": [law.metadata for law in self.laws]}
+
+
 def make_branch_law(circuit: Any) -> BranchLaw:
     return getattr(circuit, "branch_law", None) or JosephsonBranchLaw(
         circuit.Ic, circuit.phi0

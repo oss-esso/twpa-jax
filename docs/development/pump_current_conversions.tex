@@ -111,4 +111,46 @@ Use the following checklist:
         JC-parity run.
 \end{enumerate}
 
+\section*{Addendum (5 August 2026): Norton port termination}
+
+Equation~\eqref{eq:peak-current} above is the \emph{travelling-wave} relation
+between a wave-amplitude current and its power, $P=\tfrac12 I_{\mathrm{peak}}^2Z_0$.
+It is not the relation that applies to this circuit. Every port of
+\texttt{designs/ipm\_2c\_fixed} has a $G$-matrix diagonal entry of exactly
+$0.02\,\mathrm S=1/Z_0$ and nothing else conductive, i.e.\ each drive is an
+ideal current source in parallel with a $Z_0$ termination -- a
+\textbf{Norton} source. The load only sees $I_{\mathrm{peak}}/2$, so the
+available power is
+\begin{equation}
+  P_{\mathrm W}=\tfrac18 I_{\mathrm{peak}}^2 Z_0,
+  \label{eq:peak-current-norton}
+\end{equation}
+a factor of 4 below the travelling-wave relation used to derive
+Eq.~\eqref{eq:peak-current}, i.e.\ the inverse
+conversion for a fixed on-chip power target needs
+\emph{twice} the peak current this document's Eq.~\eqref{eq:peak-current}
+computes:
+\begin{equation}
+  I_{\mathrm{peak}}=\sqrt{\frac{8P_{\mathrm W}}{Z_0}}
+  \qquad\text{(Norton, not \eqref{eq:peak-current})}.
+\end{equation}
+Confirmed against the solver's own outgoing-power observable
+(\texttt{pump\_outgoing\_power\_w}): at $I=7.2311\times10^{-6}\,\mathrm A$ it
+reads $-64.857$~dBm, matching $I^2Z_0/8$ to the reported digits and
+$6.0206$~dB ($=10\log_{10}4$) below $I^2Z_0/2$.
+
+\textbf{This is orthogonal to \texttt{--pump-current-jc-scale}.} That
+parameter is a separate multiplier on the source current chosen for
+JosephsonCircuits.jl parity, layered on top of whichever power convention is
+in effect -- it says nothing about whether the port itself is Norton or
+travelling-wave, and this addendum does not change its recommended value.
+The current code (\texttt{src/twpa\_solver/ports.py},
+\texttt{--power-convention}, default \texttt{norton}) implements
+Eq.~\eqref{eq:peak-current-norton}; \texttt{--power-convention
+legacy\_traveling\_wave} reproduces every number this document's original
+sections describe, bit for bit, for reproducing historical runs. See
+\texttt{docs/development/psat\_comparison\_fix\_plan.md} Phase~1 and
+\texttt{CLAUDE.md}'s "Port power convention: Norton, not travelling-wave" for
+the full derivation and the depletion cross-check that confirmed it.
+
 \end{document}

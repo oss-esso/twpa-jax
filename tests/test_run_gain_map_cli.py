@@ -10,6 +10,11 @@ import numpy as np
 import scripts.run_gain_map as run_gain_map
 
 
+def test_signal_attenuation_override_is_separate_from_pump_model() -> None:
+    args = SimpleNamespace(signal_attenuation_db=7.5)
+    assert run_gain_map.signal_attenuation_db_for(8.0, args) == 7.5
+
+
 def test_inproc_fail_fast_is_opt_in(monkeypatch) -> None:
     monkeypatch.setattr(sys, "argv", ["run_gain_map.py"])
 

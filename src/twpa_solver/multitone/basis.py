@@ -85,6 +85,7 @@ class MultiToneBasis:
     delta: float
     n_p: int | None = None
     n_delta: int | None = None
+    pump_tone_index: ToneIndex = ToneIndex(1, 0)
     _index: dict[ToneIndex, int] = field(init=False, repr=False)
     _theta_flat: np.ndarray = field(init=False, repr=False)
 
@@ -104,7 +105,10 @@ class MultiToneBasis:
         if any(tone.omega(self.omega_p, self.delta) <= 0.0 for tone in self.tones):
             raise ValueError("all retained tones must have strictly positive frequency")
 
-        required = {ToneIndex(1, 0), ToneIndex(1, -1), ToneIndex(1, 1)}
+        required = {
+            ToneIndex(1, 0), ToneIndex(1, -1), ToneIndex(1, 1),
+            self.pump_tone_index,
+        }
         missing = required.difference(self.tones)
         if missing:
             raise ValueError(f"basis is missing required tones: {sorted(missing)}")
@@ -135,7 +139,7 @@ class MultiToneBasis:
 
     @property
     def pump_tone(self) -> ToneIndex:
-        return ToneIndex(1, 0)
+        return self.pump_tone_index
 
     @property
     def signal_tone(self) -> ToneIndex:
@@ -168,6 +172,7 @@ class MultiToneBasis:
             "tones": [{"h": t.h, "q": t.q} for t in self.tones],
             "omega_p": self.omega_p,
             "delta": self.delta,
+            "pump_tone": {"h": self.pump_tone.h, "q": self.pump_tone.q},
             "n_p": self.n_p,
             "n_delta": self.n_delta,
             "real_reconstruction_factor": REAL_RECONSTRUCTION_FACTOR,
@@ -251,6 +256,7 @@ def build_sideband_matched_basis(
     omega_p: float,
     delta: float,
     omega_max: float,
+    pump_tone_index: ToneIndex = ToneIndex(1, 0),
 ) -> MultiToneBasis:
     """Build a positive-frequency basis covering exactly ``[-S, S]``.
 
@@ -272,6 +278,11 @@ def build_sideband_matched_basis(
         raise ValueError("omega_max must be positive")
 
     candidates: list[tuple[ToneIndex, str]] = []
+    if pump_tone_index != ToneIndex(1, 0):
+        weak_tone = ToneIndex(1, 0)
+        if weak_tone.omega(omega_p, delta) > omega_max:
+            raise ValueError("omega_max clips required weak half-pump tone (1, 0)")
+        candidates.append((weak_tone, "required weak half-pump tone"))
     seen_sources: dict[ToneIndex, str] = {}
     for mode in pump_modes:
         tone = ToneIndex(int(mode), 0)
@@ -296,7 +307,7 @@ def build_sideband_matched_basis(
         candidates.append((tone, source))
 
     ordered = list(dict.fromkeys(tone for tone, _ in candidates))
-    basis = MultiToneBasis(ordered, omega_p, delta)
+    basis = MultiToneBasis(ordered, omega_p, delta, pump_tone_index=pump_tone_index)
     expected = set(range(-sidebands, sidebands + 1))
     covered = basis.covered_sidebands()
     if covered != expected:
@@ -306,3 +317,34 @@ def build_sideband_matched_basis(
             f"sideband coverage mismatch: missing={missing}, extra={extra}"
         )
     return basis
+
+
+def build_half_pump_basis(
+    pump_harmonics: Iterable[int],
+    sidebands: int,
+    omega_p_physical: float,
+    delta: float,
+    omega_max: float | None = None,
+) -> MultiToneBasis:
+    """Build a lattice using half-pump quanta as its fundamental frequency.
+
+    ``sidebands`` counts steps of ``omega_p_physical / 2``, not physical pump
+    quanta.  Pump-only harmonics remain even ``h`` values; the required weak
+    ``(1, 0)`` tone is retained by the general basis invariant.
+    """
+    if omega_p_physical <= 0.0:
+        raise ValueError("omega_p_physical must be positive")
+    modes = [int(h) * 2 for h in pump_harmonics]
+    if any(mode <= 0 or mode % 2 for mode in modes):
+        raise ValueError("half-pump harmonics must be positive physical harmonic indices")
+    omega_0 = omega_p_physical / 2.0
+    if omega_max is None:
+        omega_max = omega_0 * (max(modes) + sidebands + 1)
+    return build_sideband_matched_basis(
+        modes,
+        sidebands,
+        omega_0,
+        delta,
+        omega_max,
+        pump_tone_index=ToneIndex(2, 0),
+    )

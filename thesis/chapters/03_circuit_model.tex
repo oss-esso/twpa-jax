@@ -125,6 +125,12 @@ being able to reproduce each of them. \code{real\_capacitance} discards the
 imaginary part entirely and is the lossless comparison case.
 \end{implnote}
 
+For the canonical lossy solve the imaginary capacitance is moved into a
+positive conductance using $G_{\mathrm{loss}}=|\omega|C\tan\delta$. This keeps
+negative-frequency sidebands dissipative and gives
+$\Dmat(-\omega)=\Dmat(\omega)^*$. IPM loss applies to substrate and coupling
+capacitors only; the junction barrier capacitance $C_j$ remains lossless.
+
 \section{Data structure and persistence}
 
 \begin{implnote}[\code{CircuitMatrices}]
