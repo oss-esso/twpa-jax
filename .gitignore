@@ -22,6 +22,7 @@ dist/
 venv/
 env/
 .ipynb_checkpoints/
+CLAUDE.md
 
 # --- Test scratch ------------------------------------------------------------
 .pytest_cache/
@@ -41,6 +42,7 @@ diagnostics/
 plots/
 logs/
 industrial_completion_outputs/
+references/
 
 # --- Scratch and temp run directories ----------------------------------------
 tmp*/
@@ -100,3 +102,6 @@ experiments/*
 docs/development/**/*.md
 docs/development/**/*.html
 docs/development/**/*.zip
+
+
+./github/
