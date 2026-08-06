@@ -163,6 +163,7 @@ class FastCoupledPreconditioner:
         self._pardiso = None
         self._lu = None
         self._analyzed = False
+        self._singular_fallback = False
         self.last_assembly_runtime_s = 0.0
         self.last_factor_runtime_s = 0.0
         self.last_pardiso_error = ""
@@ -461,8 +462,30 @@ class FastCoupledPreconditioner:
             raise RuntimeError(f"banded solve failed: dgbtrs info={info}")
         return x[permutation]
 
+    def _lsq_solve(self, b_real: np.ndarray) -> np.ndarray:
+        """Sparse least-squares fallback for a singular ``M``.
+
+        The analogue of JosephsonCircuits.jl's ``QRfactorization()`` option
+        ("can solve systems which have singular matrices"): both LU paths
+        (PARDISO and SuperLU) are undefined at an exactly singular Jacobian,
+        so fall back to the minimum-norm least-squares solution instead of
+        propagating a bare ``RuntimeError``/non-finite result. This is a
+        linear-algebra robustness measure only -- the fallback firing is
+        itself the strongest available evidence that ``M`` went singular
+        here, so ``last_factor_backend`` reports it rather than the caller
+        having to infer it.
+        """
+        result = spla.lsqr(
+            self.M, b_real, atol=1e-10, btol=1e-10,
+            iter_lim=2 * self.M.shape[0] + 10,
+        )
+        self._singular_fallback = True
+        self.last_factor_backend = "lsq_singular_fallback"
+        return np.asarray(result[0], dtype=np.float64)
+
     def _factor(self) -> None:
         t0 = time.perf_counter()
+        self._singular_fallback = False
 
         if self.use_banded:
             self._factor_banded()
@@ -508,43 +531,91 @@ class FastCoupledPreconditioner:
                 self.use_pardiso = False
                 self._pardiso = None
                 self._analyzed = False
-                self._lu = spla.splu(self.M.tocsc())
-                L_factor, U_factor = self._lu.L, self._lu.U
-                self.last_factor_backend = "superlu_fallback"
-                _log_factor_backend_once("superlu_fallback", f"error={self.last_pardiso_error}")
+                try:
+                    self._lu = spla.splu(self.M.tocsc())
+                    self.last_factor_backend = "superlu_fallback"
+                    _log_factor_backend_once(
+                        "superlu_fallback", f"error={self.last_pardiso_error}"
+                    )
+                except RuntimeError as superlu_exc:
+                    self._lu = None
+                    self._singular_fallback = True
+                    self.last_factor_backend = "lsq_singular_fallback"
+                    _log_factor_backend_once(
+                        "lsq_singular_fallback",
+                        f"pardiso_error={self.last_pardiso_error} "
+                        f"superlu_error={superlu_exc!r}",
+                    )
 
         else:
-            self._lu = spla.splu(self.M.tocsc())
-            L_factor, U_factor = self._lu.L, self._lu.U
-            self.last_factor_backend = "superlu"
-            _log_factor_backend_once("superlu")
+            try:
+                self._lu = spla.splu(self.M.tocsc())
+                self.last_factor_backend = "superlu"
+                _log_factor_backend_once("superlu")
+            except RuntimeError as superlu_exc:
+                self._lu = None
+                self._singular_fallback = True
+                self.last_factor_backend = "lsq_singular_fallback"
+                _log_factor_backend_once(
+                    "lsq_singular_fallback", f"superlu_error={superlu_exc!r}"
+                )
 
         self.last_factor_runtime_s = time.perf_counter() - t0
 
     def solve(self, b_real: np.ndarray) -> np.ndarray:
         if self.use_banded:
             return self._solve_banded(b_real)
+        if self._singular_fallback:
+            return self._lsq_solve(b_real)
         if self.use_pardiso and self._pardiso is not None:
+            pardiso_error: Exception | None = None
             try:
                 self._pardiso.set_phase(33)
                 with _pardiso_thread_context():
-                    return self._pardiso._call_pardiso(self.M.tocsr(), b_real)
+                    x = self._pardiso._call_pardiso(self.M.tocsr(), b_real)
+                if np.all(np.isfinite(x)):
+                    return x
+                pardiso_error = RuntimeError(
+                    "PARDISO solve returned a non-finite result"
+                )
             except Exception as exc:
-                self.last_pardiso_error = repr(exc)
-                self.last_factor_backend = "pardiso_solve_failed"
+                pardiso_error = exc
 
-                if self.pardiso_strict:
-                    raise RuntimeError(
-                        "PARDISO solve failed while TWPA_REQUIRE_PARDISO=1."
-                    ) from exc
+            self.last_pardiso_error = repr(pardiso_error)
+            self.last_factor_backend = "pardiso_solve_failed"
 
-                self.use_pardiso = False
-                self._pardiso = None
-                self._analyzed = False
+            if self.pardiso_strict:
+                raise RuntimeError(
+                    "PARDISO solve failed while TWPA_REQUIRE_PARDISO=1."
+                ) from pardiso_error
+
+            self.use_pardiso = False
+            self._pardiso = None
+            self._analyzed = False
+            try:
                 self._lu = spla.splu(self.M.tocsc())
                 self.last_factor_backend = "superlu_fallback"
+            except RuntimeError as superlu_exc:
+                self._lu = None
+                _log_factor_backend_once(
+                    "lsq_singular_fallback",
+                    f"pardiso_solve_error={self.last_pardiso_error} "
+                    f"superlu_error={superlu_exc!r}",
+                )
+                return self._lsq_solve(b_real)
 
         if self._lu is None:
-            self._lu = spla.splu(self.M.tocsc())
-            self.last_factor_backend = "superlu"
-        return self._lu.solve(b_real)
+            try:
+                self._lu = spla.splu(self.M.tocsc())
+                self.last_factor_backend = "superlu"
+            except RuntimeError as superlu_exc:
+                _log_factor_backend_once(
+                    "lsq_singular_fallback", f"superlu_error={superlu_exc!r}"
+                )
+                return self._lsq_solve(b_real)
+
+        x = self._lu.solve(b_real)
+        if np.all(np.isfinite(x)):
+            return x
+        _log_factor_backend_once("lsq_singular_fallback", "superlu solve non-finite")
+        return self._lsq_solve(b_real)

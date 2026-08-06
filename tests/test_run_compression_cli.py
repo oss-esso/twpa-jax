@@ -15,10 +15,135 @@ from scripts.run_compression import (
     _first_kinetic_threshold_current,
     _interpolate_p1db_current,
     _resolve_attenuation,
+    _resolve_pump_current_a,
+    _resolve_signal_current_bracket_a,
     _small_signal_floor_delta_db,
     build_parser,
     main,
 )
+
+
+def test_pump_power_dbm_rejects_explicit_current() -> None:
+    parser = build_parser()
+    with pytest.raises(SystemExit):
+        main(
+            [
+                "--output-dir", "unused", "--signal-ghz", "4.5",
+                "--pump-current-a", "1e-6", "--pump-power-dbm", "-20.0",
+            ]
+        )
+
+
+def test_resolve_pump_current_prefers_explicit_current_over_power_and_default() -> None:
+    parser = build_parser()
+    args = parser.parse_args(
+        ["--output-dir", "unused", "--signal-ghz", "4.5", "--pump-current-a", "3.7e-06"]
+    )
+    current, source = _resolve_pump_current_a(args, default_current=9.0e-06)
+    assert current == pytest.approx(3.7e-06)
+    assert source == "explicit_current"
+
+
+def test_resolve_pump_current_falls_back_to_circuit_default() -> None:
+    parser = build_parser()
+    args = parser.parse_args(["--output-dir", "unused", "--signal-ghz", "4.5"])
+    current, source = _resolve_pump_current_a(args, default_current=9.0e-06)
+    assert current == pytest.approx(9.0e-06)
+    assert source == "circuit_metadata"
+
+
+def test_resolve_pump_current_raises_without_any_source() -> None:
+    parser = build_parser()
+    args = parser.parse_args(["--output-dir", "unused", "--signal-ghz", "4.5"])
+    with pytest.raises(ValueError, match="pump-current-a.*pump-power-dbm"):
+        _resolve_pump_current_a(args, default_current=None)
+
+
+def test_resolve_pump_current_from_power_dbm_matches_manual_conversion() -> None:
+    from twpa_solver.loss import pump_loss_model
+    from twpa_solver.ports import port_current_from_power_a
+
+    parser = build_parser()
+    args = parser.parse_args(
+        [
+            "--output-dir", "unused", "--signal-ghz", "4.5",
+            "--pump-power-dbm", "-20.0", "--pump-freq-ghz", "7.1",
+            "--circuit-dir", "designs/ipm_2c_fixed",
+        ]
+    )
+    current, source = _resolve_pump_current_a(args, default_current=None)
+    assert source == "pump_power_dbm"
+    atten_db = pump_loss_model().attenuation_db(7.1)
+    on_chip_power_w = 1.0e-3 * 10.0 ** ((-20.0 - atten_db) / 10.0)
+    expected = port_current_from_power_a(on_chip_power_w, 50.0, convention="legacy_traveling_wave")
+    assert current == pytest.approx(expected)
+
+
+def test_signal_power_dbm_requires_both_bounds() -> None:
+    with pytest.raises(SystemExit):
+        main(
+            [
+                "--output-dir", "unused", "--signal-ghz", "4.5",
+                "--signal-power-min-dbm", "-60.0",
+            ]
+        )
+
+
+def test_signal_power_dbm_rejects_explicit_current() -> None:
+    with pytest.raises(SystemExit):
+        main(
+            [
+                "--output-dir", "unused", "--signal-ghz", "4.5",
+                "--signal-power-min-dbm", "-60.0", "--signal-power-max-dbm", "-20.0",
+                "--signal-current-min-a", "1e-10",
+            ]
+        )
+
+
+def test_resolve_signal_bracket_defaults_when_nothing_given() -> None:
+    parser = build_parser()
+    args = parser.parse_args(["--output-dir", "unused", "--signal-ghz", "4.5"])
+    min_a, max_a, source = _resolve_signal_current_bracket_a(args)
+    assert (min_a, max_a) == pytest.approx((1e-12, 1e-9))
+    assert source == "explicit_current"
+
+
+def test_resolve_signal_bracket_prefers_explicit_current() -> None:
+    parser = build_parser()
+    args = parser.parse_args(
+        [
+            "--output-dir", "unused", "--signal-ghz", "4.5",
+            "--signal-current-min-a", "3e-10", "--signal-current-max-a", "7e-8",
+        ]
+    )
+    min_a, max_a, source = _resolve_signal_current_bracket_a(args)
+    assert (min_a, max_a) == pytest.approx((3e-10, 7e-8))
+    assert source == "explicit_current"
+
+
+def test_resolve_signal_bracket_from_power_dbm_matches_manual_conversion() -> None:
+    from twpa_solver.loss import signal_line_loss_model
+    from twpa_solver.ports import port_current_from_power_a
+
+    parser = build_parser()
+    args = parser.parse_args(
+        [
+            "--output-dir", "unused", "--signal-ghz", "7.2",
+            "--signal-power-min-dbm", "-60.0", "--signal-power-max-dbm", "-20.0",
+            "--circuit-dir", "designs/ipm_2c_fixed",
+        ]
+    )
+    min_a, max_a, source = _resolve_signal_current_bracket_a(args)
+    assert source == "signal_power_dbm"
+    atten_db = signal_line_loss_model().attenuation_db(7.2)
+    expected_min = port_current_from_power_a(
+        1.0e-3 * 10.0 ** ((-60.0 - atten_db) / 10.0), 50.0, convention="legacy_traveling_wave"
+    )
+    expected_max = port_current_from_power_a(
+        1.0e-3 * 10.0 ** ((-20.0 - atten_db) / 10.0), 50.0, convention="legacy_traveling_wave"
+    )
+    assert min_a == pytest.approx(expected_min)
+    assert max_a == pytest.approx(expected_max)
 
 
 def test_effective_p1db_prefers_kinetic_threshold() -> None:

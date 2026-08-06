@@ -36,7 +36,7 @@ LOSS_A10_B_DB = 0.8354288817
 # the on-chip pump must exceed that -- which loss_A10 (34.54 dB @ 7.256 GHz,
 # on-chip pump -55.54 dBm) satisfies and a ~45 dB or ~60 dB pump-line loss
 # does not (see docs/development/psat_comparison_fix_plan.md).
-LOSS_B1_C_DB = 50.0
+LOSS_B1_C_DB = 70.0
 LOSS_B1_A_DB = 3.3
 LOSS_B1_B_DB = 0.14
 

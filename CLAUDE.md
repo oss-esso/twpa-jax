@@ -549,6 +549,68 @@ for this compact demo drops power leaking to other sidebands. Tests:
   GMRES converges in ~1 iteration. Use for stiff DC/mutual designs.
   `run_gain_map.py`'s in-process engine defaults to `real_coupled`.
 
+## Pseudo-arclength metric fix and fold-vs-numerical measurement (2026-08-06)
+
+`solve_arclength` (`src/twpa_solver/pump/solver.py`) previously normalised
+its tangent with an unscaled Euclidean metric mixing node flux (`X`, ~1e-13
+Wb on a real device) with the dimensionless source scale `lambda` (~1.0). The
+state's contribution to the arclength constraint was ~5e-26 of the lambda
+contribution -- ten orders below double-precision roundoff -- so the function
+was natural-parameter continuation in disguise: fold detection was
+structurally impossible (`lam_dot`'s sign could never flip) and the corrector
+returned `terminal_reason="minimum_step"` identically for a genuine fold and
+a merely sharp turn. Fixed: a state-scale-derived metric
+(`metric_x(a,b) = Re<a,b> / state_scale**2`, same construction as the
+already-correct `trace_arclength_from_two_points`), a Govaerts & Pryce
+one-refinement bordered solve (accurate through a near-singular Jacobian,
+where plain block elimination is not), and a least-squares (`lsqr`) fallback
+in `FastCoupledPreconditioner` for an exactly-singular factor (the
+JosephsonCircuits.jl `QRfactorization()` analogue -- a numerical-technique
+borrow only, not a physics comparison; see `jc-is-not-a-reference`). Full
+plan: `docs/development/arclength_metric_fix_and_fold_test_function_plan.md`.
+
+New: `src/twpa_solver/pump/singularity.py` -- `jacobian_min_eigenvalue`
+(inverse power iteration on the exact real-packed Jacobian's factor/solve,
+same dispatch as `_linear_solver`) and `jacobian_det_signature` (sign/log|det|
+via SuperLU's `U` diagonal + permutation parity). These measure fold-vs-wall
+directly instead of inferring it from whether continuation happened to
+converge. Diagnostic driver: `scripts/scan_branch_singularity.py` (marches
+one frequency column in power, records both functions plus `peak_i_over_ic`
+per point; not wired into the production map).
+
+**Re-measured against the two decisive claims in
+`docs/development/2c_convergence_arclength_and_port_convention_investigation_2026-08-06.md`
+§2b/§2d**, both of which were produced by the broken instrument
+(`designs/ipm_2c_fixed`, 25 points each, -24..-18 dBm,
+`outputs/phase5_singularity_scan/{fp7p0,fp7p9}/`):
+
+- **fp=7.9 GHz: confirmed NUMERICAL**, on real evidence this time. Fails only
+  from -19.0 to -18.0 dBm; `min_eigenvalue` in the failing band (1.9e5-6.6e5)
+  stays the same order as the converged baseline (2.6e5-1.4e7), `det_sign`
+  flips only 2/24 times. The Jacobian is not close to singular where Newton
+  fails -- a continuation-predictor artifact, matching the original verdict.
+- **fp=7.0 GHz: WRONG as "a genuine, tight fold" -- the real signature is
+  SNAKING.** Fails from -22.75 dBm onward (20/25 points) and never recovers;
+  `det_sign` flips 11/24 times (~every other point) and `min_eigenvalue`
+  collapses as low as 208 (vs. a 1.1e5-1.1e7 converged baseline) then
+  partially recovers and collapses again, rather than monotonically
+  approaching zero once. `peak_i_over_ic` stays flat (~0.43-0.48) throughout,
+  ruling out a critical-current mechanism. Repeated near-zero eigenvalue
+  crossings + multiple det-sign flips in one band is the Phase-6 SNAKING gate
+  criterion, not a simple fold -- consistent with this device's already-noted
+  peak-current hot-spot migrating between cells (1250-2500) rather than
+  growing smoothly in place. **No single scalar "fold power" exists to quote
+  at this frequency**; a grid point past the first snake onset may sit on a
+  branch continuation from lambda=0 can never reach. Deflation (Farrell et
+  al.), not more arclength tuning, is the indicated next tool -- scoped as a
+  separate Phase 6 plan, not started.
+
+Not yet re-run under the fixed instrument: the full 19-frequency
+`--fold-follow` sweep (§2d's "zero folds everywhere" was measured with the
+broken metric and is unreliable pending a re-run) and any fp=7.0 GHz fold
+*location* number from prior sessions (e.g. "lambda~0.97") -- both are open
+follow-up work, not re-affirmed results.
+
 ## Continuation-method suite (`run_gain_map.py` + `solver.py`)
 
 Opt-in inter-cell traversal / predictor / recovery / fold-policy layers plus

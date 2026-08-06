@@ -4,6 +4,7 @@ import logging
 import math
 import time
 from dataclasses import dataclass
+from typing import Callable
 
 import numpy as np
 import scipy.sparse.linalg as spla
@@ -18,6 +19,71 @@ def _real_dot(A: np.ndarray, B: np.ndarray) -> float:
     so arclength tangent/constraint algebra stays in real arithmetic.
     """
     return float(np.real(np.vdot(A, B)))
+
+
+def _bordered_block_step(
+    linsolve: Callable[[np.ndarray], np.ndarray],
+    rhs_a: np.ndarray,
+    target: float,
+    S: np.ndarray,
+    c_dot: Callable[[np.ndarray], float],
+    lam_dot: float,
+    b: np.ndarray | None = None,
+) -> tuple[np.ndarray, float, np.ndarray] | None:
+    """One block-elimination pass of the arclength bordered system.
+
+    Solves ``J d_X = rhs_a + d_lam * S`` combined with the scalar constraint
+    ``c_dot(d_X) + lam_dot * d_lam = target`` via Keller's bordering
+    algorithm: two applications of ``linsolve`` (an approximate ``J^-1``)
+    combined through the scalar constraint. Returns ``None`` if the scalar
+    denominator degenerates. ``J b = S`` is constant across both the
+    corrector Newton loop and the refinement pass in
+    :func:`bordered_solve_refined`; pass it in to skip its solve.
+    """
+    if b is None:
+        b = linsolve(S)
+    a = linsolve(rhs_a)
+    denom = c_dot(b) + lam_dot
+    if not math.isfinite(denom) or abs(denom) < 1e-300:
+        return None
+    d_lam = (target - c_dot(a)) / denom
+    d_X = a + d_lam * b
+    return d_X, d_lam, b
+
+
+def bordered_solve_refined(
+    matvec: Callable[[np.ndarray], np.ndarray],
+    linsolve: Callable[[np.ndarray], np.ndarray],
+    R: np.ndarray,
+    n: float,
+    S: np.ndarray,
+    c_dot: Callable[[np.ndarray], float],
+    lam_dot: float,
+) -> tuple[np.ndarray, float] | None:
+    """Bordered block elimination with one Govaerts-Pryce refinement pass.
+
+    Plain block elimination solves the augmented arclength system through
+    two applications of an approximate ``J^-1``; near a fold ``J`` is
+    (near-)singular, so that approximation's error is amplified by ``J``'s
+    huge condition number, even though the *bordered* system itself stays
+    well-posed. One extra pass -- computing the bordered system's own
+    residual and eliminating again with the same ``linsolve``/``b`` -- costs
+    one more linear solve and restores accuracy through the singularity
+    (Govaerts & Pryce, "Block elimination with one refinement solves
+    bordered linear systems accurately", BIT 30, 1990). Returns ``None`` if
+    the first pass degenerates.
+    """
+    first = _bordered_block_step(linsolve, -R, -n, S, c_dot, lam_dot)
+    if first is None:
+        return None
+    d_X, d_lam, b = first
+    r1 = -R - (matvec(d_X) - S * d_lam)
+    r2 = -n - (c_dot(d_X) + lam_dot * d_lam)
+    second = _bordered_block_step(linsolve, r1, r2, S, c_dot, lam_dot, b=b)
+    if second is None:
+        return d_X, d_lam
+    dd_X, dd_lam, _b = second
+    return d_X + dd_X, d_lam + dd_lam
 
 
 def _finite_state(X: np.ndarray) -> bool:
@@ -912,6 +978,22 @@ class HarmonicNewtonKrylovSolver:
 
         return solve
 
+    def _matvec_fn(
+        self, problem: FullPumpProblem, X: np.ndarray,
+    ) -> Callable[[np.ndarray], np.ndarray]:
+        """Build a JVP-only closure (no factorization) at ``X``.
+
+        Used by :func:`bordered_solve_refined` to compute the bordered
+        system's own residual -- a separate, cheap operation from the
+        factorized ``linsolve`` closure ``_linear_solver`` builds.
+        """
+        tangent = problem.tangent_state(X)
+
+        def matvec(V: np.ndarray) -> np.ndarray:
+            return problem.jvp_coeffs_with_tangent(V, tangent)
+
+        return matvec
+
     def _solve_linear(
         self,
         problem: FullPumpProblem,
@@ -1047,7 +1129,11 @@ class HarmonicNewtonKrylovSolver:
 
         Returns ``(X, lambda, info)`` where ``info`` records whether ``target_lam``
         was reached and the fold ``lambda`` if a turning point (sign change of
-        ``lambda_dot``) was crossed first.
+        ``lambda_dot``) was crossed first. ``info["state_scale"]`` is the
+        scale factor applied to the state contribution of the arclength
+        metric (``metric_x(a,b) = Re<a,b> / state_scale**2``), derived from
+        the initial tangent so the state and lambda terms of the arclength
+        constraint are comparable regardless of the state's physical units.
         """
         X = problem.zeros() if X0 is None else np.array(X0, dtype=np.complex128, copy=True)
         lam = float(lam0)
@@ -1058,83 +1144,146 @@ class HarmonicNewtonKrylovSolver:
             "fold_lambda": None,
             "steps": 0,
             "terminal_reason": "max_steps",
+            "state_scale": None,
         }
 
-        # Initial tangent: J Xdot = S, then normalise (Xdot, lam_dot).
+        # Initial tangent: J Xdot = S (unnormalised).
         try:
             Xdot = self._solve_linear(problem, X, S, deadline_s=max_wall_s, t0=t0)
         except GmresDeadlineExceeded:
             info["terminal_reason"] = "deadline"
             return X, lam, info
+        except (RuntimeError, FloatingPointError, ValueError, OverflowError) as exc:
+            info["terminal_reason"] = "singular_jacobian"
+            info["error"] = repr(exc)
+            return X, lam, info
         lam_dot = 1.0
-        norm = math.sqrt(_real_dot(Xdot, Xdot) + lam_dot * lam_dot)
+
+        # State-vs-lambda have very different physical units (node flux in
+        # webers vs a dimensionless source scale); an unscaled Euclidean
+        # metric makes the lambda term dominate by ~1e26 on a real device,
+        # collapsing this into natural-parameter continuation (fold detection
+        # structurally impossible, corrector never converges past a turn).
+        # Derive the state scale from the initial tangent, same construction
+        # as the seeded ``trace_arclength_from_two_points`` (:1173-1177), so
+        # both contributions to the arclength constraint are O(1) together.
+        raw_state_norm = math.sqrt(_real_dot(Xdot, Xdot))
+        x_norm = math.sqrt(_real_dot(X, X))
+        if not math.isfinite(raw_state_norm) or not math.isfinite(x_norm):
+            info["terminal_reason"] = "degenerate_tangent"
+            return X, lam, info
+        state_scale = max(raw_state_norm / abs(lam_dot), x_norm * 1e-6, 1e-300)
+        if state_scale <= 1e-300:
+            info["terminal_reason"] = "degenerate_tangent"
+            return X, lam, info
+        info["state_scale"] = state_scale
+
+        def metric_x(a: np.ndarray, b: np.ndarray) -> float:
+            return _real_dot(a, b) / (state_scale * state_scale)
+
+        norm = math.sqrt(metric_x(Xdot, Xdot) + lam_dot * lam_dot)
         Xdot, lam_dot = Xdot / norm, lam_dot / norm
 
-        tol = max(self.settings.newton_tol * 100.0, 1e-7)  # relative coeff tol
+        tol = max(self.settings.newton_tol * 10.0, 1e-8)  # relative coeff tol
+        ds_initial = float(ds)
+        step_size = float(ds)
+        info["endpoint_above_newton_tol"] = None
         for step in range(1, max_steps + 1):
             info["steps"] = step
             if max_wall_s > 0.0 and time.perf_counter() - t0 > max_wall_s:
                 info["terminal_reason"] = "deadline"
                 return X, lam, info
-            X_pred = X + ds * Xdot
-            lam_pred = lam + ds * lam_dot
+            X_pred = X + step_size * Xdot
+            lam_pred = lam + step_size * lam_dot
             Xc, lamc = np.array(X_pred, copy=True), float(lam_pred)
-            # Modified Newton: one factorization at the predictor point, reused
-            # across the inner corrector iterations (the coupled factor barely
-            # changes over a corrector and is the dominant cost). Each GMRES
-            # call is itself bounded by max_wall_s so one stiff corrector step
-            # cannot silently outrun the budget between the outer checks above.
+            # Full Newton: refactor at Xc every corrector iteration (a frozen
+            # predictor-point factor is worst exactly where this method is
+            # supposed to work -- near a fold, where the Jacobian moves fastest).
+            # Each GMRES call is itself bounded by max_wall_s so one stiff
+            # corrector step cannot silently outrun the budget between the
+            # outer checks above.
+            converged = False
+            used_newton = newton_max
+            lin = None
             try:
-                lin = self._linear_solver(
-                    problem, X_pred, deadline_s=max_wall_s, t0=t0,
-                )
-                b = lin(S)  # J b = S (dX/dlam) -- constant RHS, factor once
-                converged = False
-                for _ in range(newton_max):
+                for it in range(1, newton_max + 1):
                     R = problem.residual_coeffs(Xc, lamc)
-                    n = _real_dot(Xdot, Xc - X) + lam_dot * (lamc - lam) - ds
-                    if problem.norms(Xc, lamc, False)["coeff_rel"] < tol and abs(n) < tol * max(ds, 1.0):
-                        converged = True
+                    n = metric_x(Xdot, Xc - X) + lam_dot * (lamc - lam) - step_size
+                    rel = problem.norms(Xc, lamc, False)["coeff_rel"]
+                    if rel < tol and abs(n) < tol * max(step_size, 1.0):
+                        converged, used_newton = True, it - 1
                         break
-                    a = lin(-R)  # J a = -R (modified Newton: reuse predictor factor)
-                    denom = _real_dot(Xdot, b) + lam_dot
-                    if abs(denom) < 1e-300:
+                    lin = self._linear_solver(
+                        problem, Xc, deadline_s=max_wall_s, t0=t0,
+                    )
+                    matvec = self._matvec_fn(problem, Xc)
+                    step_result = bordered_solve_refined(
+                        matvec, lin, R, n, S,
+                        lambda v: metric_x(Xdot, v), lam_dot,
+                    )
+                    if step_result is None:
                         break
-                    d_lam = (-n - _real_dot(Xdot, a)) / denom
-                    d_X = a + d_lam * b
+                    d_X, d_lam = step_result
                     Xc = Xc + d_X
                     lamc = lamc + d_lam
             except GmresDeadlineExceeded:
                 info["terminal_reason"] = "deadline"
                 return X, lam, info
+            except (RuntimeError, FloatingPointError, ValueError, OverflowError) as exc:
+                info["terminal_reason"] = "singular_jacobian"
+                info["error"] = repr(exc)
+                return X, lam, info
             if not converged:
-                ds *= 0.5
-                if ds < 1e-4:
+                step_size *= 0.5
+                if step_size < 1e-4:
                     info["terminal_reason"] = "minimum_step"
                     return X, lam, info
                 continue
-            # New tangent (keep continuation direction via sign).
+            # New tangent from the corrected point's own factor (a stale
+            # predictor-point factor would be systematically O(step_size) wrong
+            # for the tangent direction). Converging on the very first check
+            # (no correction needed) leaves ``lin`` unbuilt -- build it once
+            # at the accepted Xc in that case.
             try:
+                if lin is None:
+                    lin = self._linear_solver(
+                        problem, Xc, deadline_s=max_wall_s, t0=t0,
+                    )
                 Xdot_new = lin(S)
             except GmresDeadlineExceeded:
                 info["terminal_reason"] = "deadline"
                 return X, lam, info
+            except (RuntimeError, FloatingPointError, ValueError, OverflowError) as exc:
+                info["terminal_reason"] = "singular_jacobian"
+                info["error"] = repr(exc)
+                return X, lam, info
             lam_dot_new = 1.0
-            nrm = math.sqrt(_real_dot(Xdot_new, Xdot_new) + lam_dot_new ** 2)
+            nrm = math.sqrt(metric_x(Xdot_new, Xdot_new) + lam_dot_new ** 2)
             Xdot_new, lam_dot_new = Xdot_new / nrm, lam_dot_new / nrm
-            if _real_dot(Xdot_new, Xdot) + lam_dot_new * lam_dot < 0.0:
+            if metric_x(Xdot_new, Xdot) + lam_dot_new * lam_dot < 0.0:
                 Xdot_new, lam_dot_new = -Xdot_new, -lam_dot_new
             # Fold = sign change of lam_dot.
             if lam_dot_new * lam_dot < 0.0 and info["fold_lambda"] is None:
                 info["fold_lambda"] = float(lamc)
-            # Target crossing (interpolate to target_lam).
+            # Target crossing (interpolate to target_lam). The interpolated
+            # endpoint is consumed downstream as a warm guess for a final
+            # target solve, not a converged point -- flag when it sits above
+            # production newton_tol so a caller can tell a loose endpoint from
+            # a tight one instead of silently wasting a solve on it.
             if (lam - target_lam) * (lamc - target_lam) <= 0.0 and lamc != lam:
                 theta = (target_lam - lam) / (lamc - lam)
                 X = X + theta * (Xc - X)
+                endpoint_rel = problem.norms(X, target_lam, False)["coeff_rel"]
+                info["endpoint_above_newton_tol"] = bool(
+                    endpoint_rel > self.settings.newton_tol
+                )
                 info["reached_target"] = True
                 info["terminal_reason"] = "target"
                 return X, target_lam, info
             X, lam, Xdot, lam_dot = Xc, lamc, Xdot_new, lam_dot_new
+            # Grow the step on a cheap corrector; keep the halving/floor above.
+            if used_newton <= 3:
+                step_size = min(ds_initial, step_size * 1.25)
         return X, lam, info
 
     def trace_arclength_from_two_points(

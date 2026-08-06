@@ -49,7 +49,7 @@ MEAS_PUMP_GHZ = 7.256
 PUMP_EXCLUSION_GHZ = 0.15
 GAIN_MATCH_TOL_DB = 0.25
 MIN_MEASURED_G0_DB = 3.0
-NORTON_OFFSET_DB = 10.0 * np.log10(4.0)  # 6.0206 dB, legacy_traveling_wave -> norton
+NORTON_OFFSET_DB = 10.0 * np.log10(4.0)  # 6.0206 dB, norton -> legacy_traveling_wave
 
 
 def measured_table() -> tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -107,13 +107,16 @@ def model_table(run_dir: Path) -> list[dict[str, float]]:
         # [[2c-model-compresses-early-confirmed]] for the corrected number) --
         # subtract the run's own recorded attenuation_db to get back on-chip first.
         on_chip_dbm = float(p1db) - float(summary.get("attenuation_db", 0.0))
-        p1db_norton = on_chip_dbm - (
-            0.0 if convention == "norton" else NORTON_OFFSET_DB
+        # Target convention is legacy_traveling_wave (design intent confirmed
+        # 2026-08-06, CLAUDE.md "Port power convention"). A run recorded under
+        # norton reads 6.0206 dB low against that target and needs it added back.
+        p1db_reference = on_chip_dbm + (
+            NORTON_OFFSET_DB if convention == "norton" else 0.0
         )
         rows.append({
             "signal_ghz": float(match.group(1)),
             "model_g0_db": float(gain),
-            "model_p1db_dbm": p1db_norton,
+            "model_p1db_dbm": p1db_reference,
             "power_convention": convention,
         })
     return rows

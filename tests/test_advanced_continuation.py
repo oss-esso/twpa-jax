@@ -10,6 +10,7 @@ preconditioner / arclength code paths.
 
 from __future__ import annotations
 
+import math
 import sys
 from pathlib import Path
 
@@ -90,10 +91,65 @@ def test_arclength_matches_direct_solution() -> None:
     solver = _solver()
     X_direct, rep = solver.solve_one(problem, problem.zeros(), 1.0)
     assert rep.converged
+    # ds=0.1 leaves ~7e-7 of linear-interpolation truncation at the target
+    # crossing (interpolated between the two straddling arclength points, not
+    # itself Newton-polished); ds=0.02 shrinks that below 1e-7 while still
+    # converging in well under max_steps.
     X_arc, lam, info = solver.solve_arclength(
-        problem, problem.zeros(), 0.0, ds=0.1, target_lam=1.0, max_steps=80)
+        problem, problem.zeros(), 0.0, ds=0.02, target_lam=1.0, max_steps=200)
     assert info["reached_target"]
-    np.testing.assert_allclose(X_arc, X_direct, atol=1e-5)
+    np.testing.assert_allclose(X_arc, X_direct, atol=1e-7)
+
+
+def _build_scaled_problem(pump_current: float, s: float, *, omega: float = 0.37):
+    # Residual D(w)X + Bphi*Ic*sin(psi/phi0) - S is exactly covariant under
+    # X -> s*X when phi0 -> s*phi0, Ic -> s*Ic, pump_current -> s*pump_current
+    # (C, G, K, lambda unchanged): psi/phi0 is invariant so the nonlinear term
+    # scales by s via Ic, the linear term scales by s via X, and the source
+    # scales by s via pump_current_a. So the solution scales by exactly s and
+    # every accepted lambda along the branch is identical to the s=1 problem.
+    C = sp.csr_matrix(np.array([[1.0]], dtype=np.complex128))
+    G = sp.csr_matrix(np.array([[0.01]], dtype=np.complex128))
+    K = sp.csr_matrix(np.array([[1.0]], dtype=np.complex128))
+    Bphi = sp.csr_matrix(np.array([[1.0]], dtype=np.float64))
+    grid = exp08.HarmonicGrid(modes=np.array([1, 2, 3]), nt=16, omega=omega)
+    branch = exp08.JosephsonBranchArray(Ic=np.array([s], dtype=np.float64), phi0=s)
+    return exp08.FullIPMPumpProblem(
+        C=C, G=G, K=K, Bphi=Bphi, branch=branch, grid=grid,
+        pump_node_index=0, pump_current_a=s * pump_current,
+    )
+
+
+def test_arclength_is_invariant_under_state_rescaling() -> None:
+    solver = _solver()
+    problem_unit = _build_scaled_problem(0.6, 1.0)
+    X_unit, lam_unit, info_unit = solver.solve_arclength(
+        problem_unit, problem_unit.zeros(), 0.0, ds=0.1, target_lam=1.0, max_steps=80,
+    )
+
+    s = 1e-15
+    problem_scaled = _build_scaled_problem(0.6, s)
+    X_scaled, lam_scaled, info_scaled = solver.solve_arclength(
+        problem_scaled, problem_scaled.zeros(), 0.0, ds=0.1, target_lam=1.0, max_steps=80,
+    )
+
+    assert info_unit["reached_target"] == info_scaled["reached_target"]
+    assert info_unit["reached_target"]
+    assert abs(lam_scaled - lam_unit) < 1e-9
+    np.testing.assert_allclose(X_scaled, s * X_unit, rtol=1e-4, atol=s * 1e-8)
+
+
+def test_arclength_reports_state_scale() -> None:
+    solver = _solver()
+    problem = _build_scaled_problem(0.6, 1e-15)
+    _X, _lam, info = solver.solve_arclength(
+        problem, problem.zeros(), 0.0, ds=0.1, target_lam=1.0, max_steps=80,
+    )
+    assert info["state_scale"] is not None
+    assert math.isfinite(info["state_scale"])
+    assert info["state_scale"] > 0.0
+    # The scale must actually track the state's units, not sit pinned at 1.0.
+    assert info["state_scale"] < 1e-10
 
 
 def test_scaled_two_point_arclength_reaches_higher_drive() -> None:

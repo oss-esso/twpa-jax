@@ -248,3 +248,100 @@ session -- verification was empirical (repeated map/column reruns compared
 against prior results), not unit tests. Consider adding regression coverage
 for the `gc.collect()` placement and the warm-started arclength seed
 selection if this code is touched again.
+
+## Addendum (2026-08-06, later): the confirming instrument was degenerate
+
+**§2b and §2d above are voided by a defect in the tool that produced them,
+not by new physics.** `solve_arclength`'s tangent normalisation used an
+unscaled Euclidean metric mixing node flux (`X`, ~1e-13 Wb on this device)
+with the dimensionless source scale `lambda` (~1.0). Measured on a real
+converged 2c state, the state's contribution to the arclength constraint was
+~5e-26 of the lambda contribution -- ten orders of magnitude below
+double-precision roundoff. The constraint reduced bit-identically to
+`lamc - lam = ds`: the function was natural-parameter continuation with
+extra bookkeeping, not pseudo-arclength. Consequences that map directly onto
+the two claims above: `lam_dot`'s sign could structurally never flip (so the
+19-frequency `--fold-follow` sweep reporting zero folds was a tautology of
+the bug, not a result), and past any turning point the corrector failed at
+every `ds`, returning `terminal_reason="minimum_step"` for a genuine fold
+*and* a merely sharp turn alike -- it could not tell the two apart. Full
+root-cause, fix, and regression tests:
+`docs/development/arclength_metric_fix_and_fold_test_function_plan.md`
+(Phases 1-3, `src/twpa_solver/pump/solver.py`).
+
+Phase 4 of that plan added a direct singularity measurement that does not
+depend on continuation succeeding at all:
+`twpa_solver.pump.singularity.jacobian_min_eigenvalue` (smallest-magnitude
+eigenvalue of the exact real-packed pump Jacobian, inverse power iteration)
+and `jacobian_det_signature` (sign/log|det| via SuperLU). Phase 5 re-ran both
+of this doc's decisive points with the fixed `solve_arclength` plus these
+two measurements, via the new diagnostic driver
+`scripts/scan_branch_singularity.py` (25 points each, -24..-18 dBm,
+production engine settings, `designs/ipm_2c_fixed`; full CSVs and plots at
+`outputs/phase5_singularity_scan/{fp7p0,fp7p9}/`).
+
+### fp=7.9 GHz: §2d's "no real fold" conclusion is CONFIRMED, now on real evidence
+
+Converges cleanly through -19.75 dBm (20/25 points), then fails from -19.0
+to -18.0 dBm (5/25). In the failing band, `min_eigenvalue` stays large
+(1.9e5-6.6e5) -- the same order of magnitude as the converged baseline
+(2.6e5-1.4e7) -- and `det_sign` flips only twice across the whole 25-point
+column. Neither is the signature of an approaching zero eigenvalue. **The
+wall here is numerical** (Newton/arclength failing to converge while the
+Jacobian itself is not close to singular), matching §2d's original verdict
+("a continuation predictor artifact, not a physical amplitude limit") -- but
+now established by directly measuring the Jacobian's spectrum, not by an
+instrument that was structurally incapable of finding a fold anywhere.
+
+### fp=7.0 GHz: §2b/§2d's "genuine, tight fold" is WRONG -- the real signature is SNAKING
+
+Converges through -23.0 dBm (5/25), then **never converges again** for the
+remaining 20 points (-22.75 down through -18.0 dBm) even with the fixed
+arclength corrector. This band is not one clean turning point:
+`det_sign` flips 11 times across the 24 adjacent-point pairs (46%, roughly
+every other point), and `min_eigenvalue` collapses as low as **208** at
+-21.5 dBm against a converged baseline of 1.1e5-1.1e7 -- a real >500x
+collapse -- then partially recovers and collapses again at other points
+rather than monotonically approaching zero once. Repeated near-zero
+`min_eigenvalue` crossings and multiple `det_sign` flips within one band is
+exactly the Phase-6 SNAKING criterion, not a simple fold: the Jacobian is
+passing through (at minimum) several near-degenerate singular
+configurations across this power range, consistent with this doc's own
+already-recorded observation that the peak-current hot-spot migrates between
+neighbouring cells (hopping across indices 1250-2500) rather than growing
+smoothly in place -- the textbook signature of spatially localized states
+snaking through a bistable discrete lattice (Farrell et al.; see the plan's
+Sources). `peak_i_over_ic` stays flat (~0.43-0.48) throughout the failing
+band, ruling out a critical-current effect as the mechanism.
+
+**This does not mean §2b's aggregate "-23..-19 dBm is a genuine,
+frequency-dependent amplitude fold" is false** -- fp=7.0 GHz's wall is
+still real and still amplitude-limited, just structurally a snake, not a
+fold. It does mean **no single scalar "fold power" exists to quote at this
+frequency**: continuation in lambda cannot reach the far side by any step
+control, because the branch is not a single curve turning once, and a grid
+point requested past the first snake onset may sit on a disconnected branch
+that continuation from lambda=0 can never reach at all. Per the plan, this
+is a **Phase 6 gate: SNAKING confirmed at fp=7.0 GHz** -- deflation (Farrell
+et al.), seeded at the target lambda from known-converged neighbours, is the
+indicated next tool, not more arclength tuning. Phase 6 itself is scoped as
+a separate plan and was intentionally not started here.
+
+### Net correction to §3
+
+- The map's -23..-19 dBm convergence boundary remains genuine and
+  amplitude-limited, but is **not uniformly "a fold"** across frequency:
+  fp=7.9 GHz is numerical, fp=7.0 GHz is snaking. Do not assume a shared
+  mechanism across frequencies in this band without measuring each one --
+  this doc's own original text warned exactly that, and it undersold how
+  different "no fold" (fp=7.9) and "snaking" (fp=7.0) actually are as
+  numerical objects, not just as prose.
+- `--fold-follow`'s 19-frequency "zero folds everywhere" result
+  (§2d) must be re-run under the fixed `solve_arclength` before being cited
+  again; it was measured with a broken instrument. Not done in this pass
+  (scope: the two decisive single-frequency columns above, not the full
+  sweep) -- an open follow-up, not a re-affirmed result.
+- Reported fp=7.0 GHz fold locations from this session's earlier arclength
+  runs (e.g. "true maximum sustainable amplitude close to lambda~0.97") were
+  measured with the same broken instrument and should be treated as
+  unreliable pending a snaking-aware re-measurement (Phase 6).

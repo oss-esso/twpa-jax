@@ -165,6 +165,18 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--pump-current-a", type=float)
     parser.add_argument(
+        "--pump-power-dbm",
+        type=float,
+        help=(
+            "External/source-referred pump power in dBm, converted to on-chip "
+            "peak current via pump_line_loss_model() at --pump-freq-ghz and "
+            "--power-convention -- the same conversion run_gain_map.py uses "
+            "(--pump-power-min/max-dbm). Mutually exclusive with "
+            "--pump-current-a/--pump-current-list, which set on-chip current "
+            "directly and bypass this conversion entirely."
+        ),
+    )
+    parser.add_argument(
         "--dc-current-a", type=float, default=0.0,
         help="Uniform kinetic-inductor DC bias current in amperes.",
     )
@@ -223,8 +235,21 @@ def build_parser() -> argparse.ArgumentParser:
             "by exactly 6.0206 dB."
         ),
     )
-    parser.add_argument("--signal-current-min-a", type=float, default=1e-12)
-    parser.add_argument("--signal-current-max-a", type=float, default=1e-9)
+    parser.add_argument("--signal-current-min-a", type=float, default=None)
+    parser.add_argument("--signal-current-max-a", type=float, default=None)
+    parser.add_argument(
+        "--signal-power-min-dbm",
+        type=float,
+        help=(
+            "External/source-referred signal power bracket (dBm), converted "
+            "to the on-chip current sweep bounds via signal_line_loss_model() "
+            "at --signal-ghz and --power-convention -- the same physical "
+            "cable-to-fridge conversion the pump side uses "
+            "(--pump-power-dbm). Requires --signal-power-max-dbm; mutually "
+            "exclusive with --signal-current-min-a/--signal-current-max-a."
+        ),
+    )
+    parser.add_argument("--signal-power-max-dbm", type=float)
     parser.add_argument("--recovery", choices=("plain", "ladder"), default="ladder")
     parser.add_argument("--signal-substep-init-db", type=float, default=0.5)
     parser.add_argument("--signal-substep-min-db", type=float, default=0.01)
@@ -391,6 +416,84 @@ def _resolve_attenuations(args: argparse.Namespace) -> tuple[float, str, float, 
         pump_value, pump_source if args.pump_attenuation_db is None else "explicit_pump",
         signal_value, signal_source if args.signal_attenuation_db is None else "explicit_signal",
     )
+
+
+def _dbm_to_on_chip_current_a(
+    power_dbm: float, attenuation_db: float, z0_ohm: float, convention: str
+) -> float:
+    """Source/external-referred dBm -> on-chip peak current (A).
+
+    Same physical cable: subtract the line's own attenuation to get on-chip
+    power, then invert the port's current<->power relation for the selected
+    convention. Shared by the pump and signal power-dbm resolvers so both
+    lines go through identical math.
+    """
+    on_chip_power_w = 1.0e-3 * 10.0 ** ((float(power_dbm) - attenuation_db) / 10.0)
+    return float(port_current_from_power_a(on_chip_power_w, z0_ohm, convention=convention))
+
+
+def _resolve_pump_current_a(
+    args: argparse.Namespace, default_current: float | None
+) -> tuple[float, str]:
+    """On-chip pump peak current (A), before ``--pump-current-jc-scale``.
+
+    Three sources, in priority order: explicit ``--pump-current-a`` (direct,
+    bypasses any loss/convention model entirely); ``--pump-power-dbm``
+    (converted via the same pump_line_loss_model()/--power-convention pipeline
+    run_gain_map.py uses -- see CLAUDE.md "Port power convention"); the
+    circuit's own metadata pump source, as a last-resort default.
+    """
+    if args.pump_current_a is not None:
+        return float(args.pump_current_a), "explicit_current"
+    if args.pump_power_dbm is not None:
+        pump_attenuation_db, _, _, _ = _resolve_attenuations(args)
+        current_a = _dbm_to_on_chip_current_a(
+            args.pump_power_dbm, pump_attenuation_db, args.z0_ohm, args.power_convention
+        )
+        return current_a, "pump_power_dbm"
+    if default_current is not None:
+        return float(default_current), "circuit_metadata"
+    raise ValueError(
+        "one of --pump-current-a / --pump-power-dbm is required when circuit "
+        "metadata has no pump source"
+    )
+
+
+_SIGNAL_CURRENT_MIN_A_DEFAULT = 1e-12
+_SIGNAL_CURRENT_MAX_A_DEFAULT = 1e-9
+
+
+def _resolve_signal_current_bracket_a(
+    args: argparse.Namespace,
+) -> tuple[float, float, str]:
+    """On-chip signal current sweep bounds (A): (min, max, source).
+
+    Same cable-to-fridge conversion as the pump side
+    (``_resolve_pump_current_a``), through ``signal_line_loss_model()`` at
+    ``--signal-ghz`` instead of the pump line. Falls back to the raw current
+    bounds (explicit or the module defaults) when ``--signal-power-min/max-dbm``
+    is not given.
+    """
+    if args.signal_power_min_dbm is not None:
+        _, _, signal_attenuation_db, _ = _resolve_attenuations(args)
+        min_a = _dbm_to_on_chip_current_a(
+            args.signal_power_min_dbm, signal_attenuation_db, args.z0_ohm, args.power_convention
+        )
+        max_a = _dbm_to_on_chip_current_a(
+            args.signal_power_max_dbm, signal_attenuation_db, args.z0_ohm, args.power_convention
+        )
+        return min_a, max_a, "signal_power_dbm"
+    min_a = (
+        _SIGNAL_CURRENT_MIN_A_DEFAULT
+        if args.signal_current_min_a is None
+        else float(args.signal_current_min_a)
+    )
+    max_a = (
+        _SIGNAL_CURRENT_MAX_A_DEFAULT
+        if args.signal_current_max_a is None
+        else float(args.signal_current_max_a)
+    )
+    return min_a, max_a, "explicit_current"
 
 
 def _build_multitone_basis(
@@ -594,13 +697,8 @@ def _solve_and_persist_shared_pump(args: argparse.Namespace) -> Path:
     pump_port = _resolve_pump_port(args, source_port)
     pump_sources = metadata.get("pump_sources", [])
     default_current = pump_sources[0].get("current_a") if pump_sources else None
-    if args.pump_current_a is None and default_current is None:
-        raise ValueError(
-            "--pump-current-a is required when circuit metadata has no pump source"
-        )
-    pump_current = float(args.pump_current_a or default_current) * float(
-        args.pump_current_jc_scale
-    )
+    pump_current_base, _ = _resolve_pump_current_a(args, default_current)
+    pump_current = pump_current_base * float(args.pump_current_jc_scale)
     omega_p = 2.0 * math.pi * args.pump_freq_ghz * 1e9
     pump_state, pump_basis, pump_reports, pump_problem = _solve_pump_from_scratch(
         args, circuit, metadata, pump_port, pump_current, omega_p
@@ -615,6 +713,7 @@ def _solve_and_persist_shared_pump(args: argparse.Namespace) -> Path:
             **pump_basis.to_metadata(),
             "pump_freq_ghz": args.pump_freq_ghz,
             "pump_current_a": pump_current,
+            "pump_power_dbm": args.pump_power_dbm,
             "nt": args.pump_nt,
         },
     )
@@ -642,9 +741,8 @@ def _solve_compression(
             raise ValueError(f"{label} port {port} is absent from circuit ports {sorted(circuit.port_to_index)}")
     pump_sources = metadata.get("pump_sources", [])
     default_current = pump_sources[0].get("current_a") if pump_sources else None
-    if args.pump_current_a is None and default_current is None:
-        raise ValueError("--pump-current-a is required when circuit metadata has no pump source")
-    pump_current = float(args.pump_current_a or default_current) * float(args.pump_current_jc_scale)
+    pump_current_base, pump_current_source = _resolve_pump_current_a(args, default_current)
+    pump_current = pump_current_base * float(args.pump_current_jc_scale)
     omega_p = 2.0 * math.pi * args.pump_freq_ghz * 1e9
     selected_preconditioner = resolve_multitone_preconditioner(
         args.multitone_preconditioner
@@ -739,7 +837,10 @@ def _solve_compression(
             return problem.reconstruct_full(state)
         return state
 
-    currents = np.geomspace(args.signal_current_min_a, args.signal_current_max_a, max(args.n_signal_power, 1))
+    signal_current_min_a, signal_current_max_a, signal_current_source = (
+        _resolve_signal_current_bracket_a(args)
+    )
+    currents = np.geomspace(signal_current_min_a, signal_current_max_a, max(args.n_signal_power, 1))
     pump_off_path = AffineSourcePath.signal_turn_on(
         np.zeros_like(pump_source),
         signal_unit * float(currents[0]),
@@ -1321,6 +1422,8 @@ def _solve_compression(
         "pump_freq_ghz": args.pump_freq_ghz,
         "signal_ghz": args.signal_ghz,
         "pump_current_a": pump_current,
+        "pump_current_source": pump_current_source,
+        "pump_power_dbm": args.pump_power_dbm,
         "pump_converged": pump_converged,
         "pump_current_jc_scale": args.pump_current_jc_scale,
         "pump_solution_dir": str(args.pump_solution_dir) if args.pump_solution_dir else None,
@@ -1330,6 +1433,11 @@ def _solve_compression(
         "diagnostic_port": diagnostic_port,
         "attenuation_db": attenuation_db,
         "signal_attenuation_db": attenuation_db,
+        "signal_current_min_a": signal_current_min_a,
+        "signal_current_max_a": signal_current_max_a,
+        "signal_current_source": signal_current_source,
+        "signal_power_min_dbm": args.signal_power_min_dbm,
+        "signal_power_max_dbm": args.signal_power_max_dbm,
         "signal_attenuation_source": attenuation_source,
         "pump_attenuation_db": pump_attenuation_db,
         "pump_attenuation_source": pump_attenuation_source,
@@ -1950,6 +2058,18 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.pump_current_list and args.pump_current_a is not None:
         parser.error("--pump-current-a and --pump-current-list are mutually exclusive")
+    if args.pump_power_dbm is not None and args.pump_current_a is not None:
+        parser.error("--pump-power-dbm and --pump-current-a are mutually exclusive")
+    if args.pump_power_dbm is not None and args.pump_current_list:
+        parser.error("--pump-power-dbm and --pump-current-list are mutually exclusive")
+    if (args.signal_power_min_dbm is None) != (args.signal_power_max_dbm is None):
+        parser.error("--signal-power-min-dbm and --signal-power-max-dbm must be given together")
+    if args.signal_power_min_dbm is not None and (
+        args.signal_current_min_a is not None or args.signal_current_max_a is not None
+    ):
+        parser.error(
+            "--signal-power-min/max-dbm and --signal-current-min/max-a are mutually exclusive"
+        )
     if args.n_signal_freq == 1 and args.signal_ghz is None:
         parser.error("--signal-ghz is required for a single-frequency run")
     args.factor_backend = _select_factor_backend(args, max(args.n_signal_freq, 1))

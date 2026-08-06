@@ -2065,6 +2065,19 @@ def _recover(
             X_arc, _lam, info = solver.solve_arclength(
                 solve_problem, X0, lam0, ds=0.02, max_steps=60, target_lam=1.0,
                 max_wall_s=engine.args.inproc_solve_deadline_s)
+        except (RuntimeError, FloatingPointError, ValueError, OverflowError) as exc:
+            # solve_arclength itself now catches a singular-factor RuntimeError
+            # internally and returns a terminal_reason instead of raising; this
+            # is a second line of defense so an unanticipated failure here
+            # downgrades this one cell instead of escaping into the map loop.
+            logger.debug(
+                "recovery_arclength_exception point=%d error=%r", point.index, exc,
+            )
+            info = {
+                "reached_target": False,
+                "terminal_reason": "exception",
+                "error": repr(exc),
+            }
         finally:
             # Collect promptly so one cell's allocation churn doesn't carry
             # fragmentation pressure into the next cell's solve.
