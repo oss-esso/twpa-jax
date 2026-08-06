@@ -44,6 +44,7 @@ from __future__ import annotations
 import argparse
 import os
 import csv
+import dataclasses
 import gc
 import json
 import logging
@@ -1681,6 +1682,14 @@ def run_warm_pass_inprocess(
                 logger.debug("warm_point_reseed_retry index=%d", point.index)
                 row, X = engine.solve_point(point, pass_dir, mode="seed", warm_X=None)
                 retried = row["status"] == "PASS"
+                # A failing reseed can pay for 60-120+ Newton/PARDISO refactors
+                # (full adaptive-then-fixed continuation ladder from scratch).
+                # Collecting promptly here keeps that churn from fragmenting
+                # the process heap and slowing down every later point in this
+                # long-lived worker -- measured 4.00x slower PARDISO factor
+                # time on later, otherwise-identical converged points without
+                # this (same mechanism as the arclength recovery leak).
+                gc.collect()
 
             # Adaptive power-substep recovery: the coarse power step can miss a
             # gain-lobe crest that a finer natural continuation crosses (see
@@ -2013,12 +2022,53 @@ def _recover(
         if res:
             return res[0], res[1], True, "fold_bridge"
     if fp == "arclength":
-        # Round the fold: pseudo-arclength from lambda=0 to full drive, then a
-        # warm target solve from the arclength state.
-        solver = exp08.HarmonicNewtonKrylovSolver(engine._settings())
-        X_arc, _lam, info = solver.solve_arclength(
-            solve_problem, solve_problem.zeros(), 0.0, ds=0.1, target_lam=1.0,
-            max_wall_s=engine.args.inproc_solve_deadline_s)
+        # Round the fold: pseudo-arclength continuation to full drive, then a
+        # warm target solve from the arclength state. Warm-started from the
+        # best available converged neighbour (same lookup as the other
+        # recovery ladders) instead of a cold (X=0, lambda=0) start -- the
+        # trace then only has to cover the remaining distance to lambda=1,
+        # not the whole 0->1 range. This matters beyond speed: each arclength
+        # step can pay for several PARDISO refactors and many GMRES
+        # iterations, each temporarily allocating a ~10-25 MB array (the
+        # coupled Jacobian's packed index/Krylov buffers); a cold trace on a
+        # stiff cell can rack up thousands of these within one recovery
+        # attempt, which fragments the process heap over a long chunk run --
+        # measured crashing with ArrayMemoryError ~170-470 points into a
+        # chunk, at a different array size each time (not a fixed-size bug).
+        # Warm-starting cuts the per-cell call volume by roughly the same
+        # factor as the step-count reduction.
+        if parent_i is not None and parent_i.get("current", 0.0) > 0.0:
+            X0 = parent_i["X"]
+            lam0 = min(parent_i["current"] / cur_t, 0.98)
+        else:
+            X0 = solve_problem.zeros()
+            lam0 = 0.0
+        # Cap GMRES iterations tighter than the main solve: the exact
+        # preconditioner converges in ~1 iteration on a healthy point, and a
+        # corrector call that needs far more than that deep in a stiff
+        # region is already grinding, not converging -- let it fail fast
+        # (halves ds and retries) rather than burn hundreds of PARDISO/GMRES
+        # calls per corrector attempt.
+        recovery_settings = dataclasses.replace(engine._settings(), gmres_maxiter=20)
+        solver = exp08.HarmonicNewtonKrylovSolver(recovery_settings)
+        # ds=0.1 measured too coarse near the map's high-power fold band: a
+        # verified-converged seed (coeff_rel 1.4e-13) at fp=7.0 GHz, lambda
+        # 0.551 had a plain-Newton convergence radius of only ~0.01-0.05 in
+        # lambda (step +0.009 converged, +0.049 did not) -- both this
+        # corrector and the unmodified library solve_arclength() failed to
+        # accept even one ds=0.1 step from that exact point, confirmed by
+        # calling solve_arclength directly. 0.02 sits inside the measured
+        # radius with margin; the corrector still halves further on failure,
+        # so this only removes wasted oversized first attempts, it does not
+        # change behavior where ds=0.1 already worked fine.
+        try:
+            X_arc, _lam, info = solver.solve_arclength(
+                solve_problem, X0, lam0, ds=0.02, max_steps=60, target_lam=1.0,
+                max_wall_s=engine.args.inproc_solve_deadline_s)
+        finally:
+            # Collect promptly so one cell's allocation churn doesn't carry
+            # fragmentation pressure into the next cell's solve.
+            gc.collect()
         if info.get("reached_target"):
             row, X, ok = _attempt(engine, point, pass_dir, prebuilt, mode="warm", warm_X=X_arc)
             if ok:
@@ -2031,8 +2081,12 @@ def _recover(
         logger.debug("recovery_end point=%d tag=fail_fast", point.index)
         return last_row, last_X, False, "fail_fast"
 
-    # Final fallback: fresh linear_phasor + adaptive reseed.
+    # Final fallback: fresh linear_phasor + adaptive reseed. Same PARDISO/GMRES
+    # churn risk as run_warm_pass_inprocess's reseed retry -- collect promptly
+    # so a failing point here doesn't degrade every later point in this
+    # long-lived worker (see the reseed-retry fix in run_warm_pass_inprocess).
     row, X, ok = _attempt(engine, point, pass_dir, prebuilt, mode="seed", warm_X=None)
+    gc.collect()
     logger.debug("recovery_end point=%d tag=reseed ok=%s", point.index, ok)
     return row, X, ok, "reseed"
 
