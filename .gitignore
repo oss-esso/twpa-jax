@@ -97,11 +97,11 @@ experiments/*
 !experiments/pump_basis.py
 !experiments/ripple_common.py
 
-# --- docs/development/ : data only -------------------------------------------
-# This directory holds measurement data (Themis .mat/.npy cubes) and figures.
-# The development write-ups that used to sit alongside them are dev-only, so
-# markdown here is ignored; user-facing documentation belongs in docs/ proper.
-docs/development/**/*.md
-docs/development/**/*.html
-docs/development/**/*.zip
+# --- designs/ : keep the production design only ------------------------------
+/designs/*
+!/designs/ipm_2c_fixed/
+!/designs/ipm_2c_fixed/**
+
+# --- docs/development/ : development material -------------------------------
+/docs/development/
 
