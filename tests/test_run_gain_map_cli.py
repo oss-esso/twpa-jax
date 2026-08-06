@@ -10,6 +10,21 @@ import numpy as np
 import scripts.run_gain_map as run_gain_map
 
 
+def test_measurement_grid_loader_preserves_nonuniform_themis_axes() -> None:
+    measurement_dir = Path(
+        "docs/development/17.03.10_Themis_SetupAug25_noVTS_transmission_15mK"
+    )
+    powers, freqs = run_gain_map.load_measurement_grid(measurement_dir)
+
+    assert powers.size == 31
+    assert freqs.size == 51
+    assert np.isclose(powers[0], -25.96)
+    assert np.isclose(powers[-1], -16.94666666666667)
+    assert np.isclose(freqs[0], 7.043)
+    assert np.isclose(freqs[-1], 7.373)
+    assert not np.allclose(freqs, np.linspace(freqs[0], freqs[-1], freqs.size))
+
+
 def test_signal_attenuation_override_is_separate_from_pump_model() -> None:
     args = SimpleNamespace(signal_attenuation_db=7.5)
     assert run_gain_map.signal_attenuation_db_for(8.0, args) == 7.5

@@ -46,6 +46,7 @@ import gc
 import json
 import logging
 import math
+import re
 import shutil
 import subprocess
 import sys
@@ -61,6 +62,8 @@ import scipy.sparse as sp
 logger = logging.getLogger(__name__)
 
 ROOT = Path(__file__).resolve().parents[1]
+
+_THEMIS_FREQ_RE = re.compile(r"105C5_([0-9.]+)GHz\.npy$")
 
 # Legacy subprocess paths are kept only for compatibility. The production
 # default is the in-process package path below.
@@ -2384,6 +2387,10 @@ def write_summary(
         "mode": args.mode,
         "output_dir": str(outdir),
         "grid": {"n_power": args.n_power, "n_frequency": args.n_frequency},
+        "grid_from_measurement_dir": (
+            str(args.grid_from_measurement_dir)
+            if args.grid_from_measurement_dir is not None else None
+        ),
         "pump_power_dbm": [args.pump_power_min_dbm, args.pump_power_max_dbm],
         "pump_freq_ghz": [args.pump_freq_min_ghz, args.pump_freq_max_ghz],
         "attenuation_db": args.attenuation_db,
@@ -2468,6 +2475,44 @@ def write_summary(
     lines.extend(["", "## Artifacts", "",
                   "- `map_points.csv`", "- `map_arrays.npz`", "- `map_summary.json`"])
     (outdir / "map_summary.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def load_measurement_grid(measurement_dir: Path) -> tuple[np.ndarray, np.ndarray]:
+    """Load exact pump axes from a Themis ``105C5_*GHz.npy`` directory.
+
+    The Themis frequency filenames are rounded to MHz and are not necessarily
+    an exact ``linspace``.  Loading the axes from the files prevents a map
+    requested with the same endpoints and point count from drifting by a few
+    hundred kHz or more.  The power axis is taken from the first file and is
+    required to agree across all files.
+    """
+    files = []
+    for path in measurement_dir.glob("105C5_*GHz.npy"):
+        match = _THEMIS_FREQ_RE.search(path.name)
+        if match is not None:
+            files.append((float(match.group(1)), path))
+    files.sort(key=lambda item: item[0])
+    if not files:
+        raise FileNotFoundError(
+            f"no Themis 105C5_*GHz.npy files found in {measurement_dir}"
+        )
+
+    frequencies = np.asarray([item[0] for item in files], dtype=float)
+    if np.any(np.diff(frequencies) <= 0.0):
+        raise ValueError(f"measurement frequency grid is not strictly increasing: {measurement_dir}")
+
+    first = np.load(files[0][1], allow_pickle=True).item()
+    powers = np.asarray(first["PumpPower"], dtype=float).reshape(-1)
+    if powers.size == 0 or np.any(~np.isfinite(powers)) or np.any(np.diff(powers) <= 0.0):
+        raise ValueError(f"invalid PumpPower axis in {files[0][1]}")
+
+    for _, path in files[1:]:
+        data = np.load(path, allow_pickle=True).item()
+        other = np.asarray(data["PumpPower"], dtype=float).reshape(-1)
+        if other.shape != powers.shape or not np.allclose(other, powers, rtol=0.0, atol=1e-9):
+            raise ValueError(f"PumpPower axis differs between {files[0][1]} and {path}")
+
+    return powers, frequencies
 
 
 # =============================================================================
@@ -2695,6 +2740,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
     p.add_argument("--n-power", type=int, default=50)
     p.add_argument("--n-frequency", type=int, default=50)
+    p.add_argument(
+        "--grid-from-measurement-dir",
+        type=Path,
+        default=None,
+        help=(
+            "Use the exact PumpPower axis and numeric 105C5_*GHz filename "
+            "frequency axis from a Themis measurement directory. Overrides "
+            "--n-power/--n-frequency and the pump min/max values."
+        ),
+    )
     p.add_argument("--frequency-chunk-size", type=int, default=10,
                    help="Run frequency columns in separate worker processes of this "
                    "many columns each, then merge. 10 is the standard memory-safe "
@@ -2859,8 +2914,11 @@ def build_points(args: argparse.Namespace) -> tuple[list[GridPoint], np.ndarray,
         args.pump_power_min_dbm, args.pump_power_max_dbm,
         args.pump_freq_min_ghz, args.pump_freq_max_ghz,
     )
-    powers = np.linspace(args.pump_power_min_dbm, args.pump_power_max_dbm, args.n_power)
-    freqs = np.linspace(args.pump_freq_min_ghz, args.pump_freq_max_ghz, args.n_frequency)
+    if args.grid_from_measurement_dir is not None:
+        powers, freqs = load_measurement_grid(args.grid_from_measurement_dir)
+    else:
+        powers = np.linspace(args.pump_power_min_dbm, args.pump_power_max_dbm, args.n_power)
+        freqs = np.linspace(args.pump_freq_min_ghz, args.pump_freq_max_ghz, args.n_frequency)
     points: list[GridPoint] = []
     index = 0
     for i, power_dbm in enumerate(powers):
@@ -3186,6 +3244,23 @@ def main(argv: list[str] | None = None) -> int:
         # row rebuilds the per-frequency partition as it sweeps, but caching all
         # n_frequency partitions would OOM (~16 GB at 50 columns).
 
+    points, powers, freqs = build_points(args)
+    if args.grid_from_measurement_dir is not None:
+        # Explicit grids are kept in one process.  The chunk subprocess CLI
+        # represents frequency columns by a local linspace, which would lose
+        # the nonuniform measurement axis we just loaded.
+        args.n_power = int(powers.size)
+        args.n_frequency = int(freqs.size)
+        args.pump_power_min_dbm = float(powers[0])
+        args.pump_power_max_dbm = float(powers[-1])
+        args.pump_freq_min_ghz = float(freqs[0])
+        args.pump_freq_max_ghz = float(freqs[-1])
+        if args.frequency_chunk_size > 0:
+            logger.info(
+                "explicit measurement grid: disabling frequency chunk subprocesses"
+            )
+            args.frequency_chunk_size = 0
+
     use_chunk_driver = (
         not args.chunk_worker
         and args.executor == "inprocess"
@@ -3202,7 +3277,6 @@ def main(argv: list[str] | None = None) -> int:
         shutil.rmtree(outdir)
     outdir.mkdir(parents=True, exist_ok=True)
 
-    points, powers, freqs = build_points(args)
     logger.debug(
         "main_grid_built n_points=%d power_range=(%s,%s) frequency_range=(%s,%s)",
         len(points), powers[0] if powers.size else None,

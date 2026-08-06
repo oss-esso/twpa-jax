@@ -300,6 +300,35 @@ valid internal check and should still pass.
 Until production-basis self-convergence is measured, treat every published P1dB
 as carrying an unquantified basis-truncation uncertainty.
 
+**2c basis self-convergence, measured 2026-08-06** (`experiments/exp54_basis_self_convergence.py`,
+`outputs/exp54_basis_self_convergence/basis_convergence_full.json`): S=10 vs
+S=12 vs S=14 on `designs/ipm_2c_fixed`, fixed operating point fp=7.100 GHz,
+Ip=7.2311e-6 A, three signal frequencies (6.0/7.2/8.4 GHz), full
+`--stop-after-p1db` nonlinear search at each point. **Converged**: G0 and P1dB
+agree to <1e-6 dB between S=10/12/14 at 6.0 and 7.2 GHz; at 8.4 GHz the
+refined nonlinear P1dB solve itself failed to converge at S=12/14
+(`p1db_state_status=SIGNAL_CONTINUATION_FAILED`, falls back to the smooth
+interpolated P1dB) but that fallback value still agrees to 5e-9 dB between
+S=12 and S=14, so the basis truncation itself is not the source of any
+disagreement. This does not touch the JTWPA gap above (different device,
+non-monotone in S) but does resolve "2c inherited S=10 by analogy" — 2c's
+S=10 choice at this operating point is now directly verified, not inherited.
+
+Same campaign reran the gain-matched P1dB-vs-measurement comparison
+([[2c-model-compresses-early-confirmed]]) at 100 MHz spacing (13 points,
+6.0-7.6 GHz) instead of the earlier ~200 MHz/18-point grid:
+**mean delta -18.20 dB, median -18.75 dB** — reproduces the earlier -18.25 dB
+finding almost exactly at 2x the frequency resolution. The model still
+compresses ~18 dB earlier than the hardware at matched gain; this is not a
+basis-truncation artifact (S=10 is converged) and not a frequency-resolution
+artifact (denser grid gives the same number). A first pass at this rerun (via
+`experiments/exp53_gain_matched_p1db_comparison.py`) gave a spurious +41 dB
+from comparing the model's external/instrument-referred `p1db` field directly
+against the measured table's on-chip (loss-subtracted) power — the model
+field already has the run's attenuation added back on top of on-chip power
+(`_current_to_dbm`, `run_compression.py:444-448`); fixed by subtracting the
+run's own recorded `attenuation_db` before comparing on-chip to on-chip.
+
 The earlier 2c blocker was a settings/wiring mismatch, not a fold or intrinsic
 continuation wall. The gain-map pump is injected at port 4 while signal
 scattering is 1 -> 2; using port 1 for both gave a promoted-pump residual of
