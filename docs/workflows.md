@@ -121,7 +121,8 @@ python workflows/run_gain_map_and_plots.py `
   --pump-power-min-dbm -30 `
   --pump-power-max-dbm -20 `
   --pump-freq-min-ghz 7 `
-  --pump-freq-max-ghz 8
+  --pump-freq-max-ghz 8 `
+  --log-level INFO
 ```
 
 The workflow forces the in-process executor and writes the usual map artifacts under the run directory, followed by plots under `run-dir/plots/`:
