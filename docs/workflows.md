@@ -14,6 +14,89 @@ python workflows/build_design_and_passive.py `
   --cell-length-um 10
 ```
 
+### Complete option reference
+
+The workflow-specific options are:
+
+| Option | Type/default | Meaning |
+| --- | --- | --- |
+| `--design-dir PATH` | required | Output directory for the generated design, matrices, passive data, and figures. It is created automatically. |
+| `--passive-start-ghz FLOAT` | `4.0` | First passive-analysis frequency. |
+| `--passive-stop-ghz FLOAT` | `11.0` | Final passive-analysis frequency. |
+| `--passive-points INT` | `1401` | Number of passive-analysis frequency points; must be at least 2. |
+| `--passive-z0-ohm FLOAT` | `50.0` | Reference impedance for the passive S-parameters. |
+
+All other options are forwarded to the IPM builder. The complete forwarded
+option set is:
+
+```text
+# Output and coupler mode
+--outdir PATH                         # overridden by --design-dir
+--coupler-mode {cached,optimize,ideal}
+--write-matrices                      # always enabled by this workflow
+--draw
+
+# Topology and discretization
+--start-node-top INT
+--start-node-bot INT
+--ground INT
+--array-length INT
+--num-rows INT
+--arrays-per-dc INT
+--length-of-long-tl INT
+--length-of-short-tl INT
+--coupler-section-length INT
+--len1 INT
+--len2 INT
+--len3 INT
+--len4 INT
+
+# Electrical parameters
+--coupling-db FLOAT
+--z0-ohm FLOAT
+--coupler-freq-ghz FLOAT
+--lj-ph FLOAT
+--cj-ff FLOAT
+--cg-ff FLOAT
+--cl-per-um-ff FLOAT
+--ll-per-um-ph FLOAT
+--rleft-ohm FLOAT
+--rright-ohm FLOAT
+--rm-ohm FLOAT
+--cell-length-um FLOAT
+
+# Cached-coupler geometry overrides
+--cached-coupler-width-um FLOAT
+--cached-coupler-gap-um FLOAT
+--cached-coupler-gap-to-ground-um FLOAT
+--cached-coupler-length-um FLOAT
+
+# Component scatter
+--lj-scatter-sigma FLOAT
+--lj-scatter-seed INT
+--scatter-seed INT
+--cj-scatter-sigma FLOAT
+--cg-scatter-sigma FLOAT
+--scatter-distribution {normal,uniform}
+--lj-scatter-clip-min FLOAT
+--lj-scatter-clip-max FLOAT
+--cj-scatter-clip-min FLOAT
+--cj-scatter-clip-max FLOAT
+--cg-scatter-clip-min FLOAT
+--cg-scatter-clip-max FLOAT
+
+# Spatial profiles
+--profile-json PATH
+--lj-profile TEXT                     # repeatable
+--cg-profile TEXT                     # repeatable
+```
+
+Integer topology options are counts or node indices. Options whose names end
+in `-ghz`, `-um`, `-ff`, `-ph`, `-ohm`, or `-db` use those units directly.
+The scatter clip values are multiplicative bounds, and `--lj-profile` and
+`--cg-profile` may each be supplied more than once. Cached-coupler geometry
+overrides are ignored when `--coupler-mode optimize` is selected.
+
 The workflow always enables matrix output because the passive solver requires `C.npz`, `G.npz`, `K.npz`, `Bphi.npz`, and `ipm_arrays.npz`.
 
 Generated files include:
