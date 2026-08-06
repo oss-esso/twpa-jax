@@ -25,7 +25,8 @@ python workflows/run_gain_map_and_plots.py `
   --run-dir outputs/ipm_2c_fixed_themis_coarse_14.18.08 `
   --grid-from-measurement-dir docs/development/14.18.08_Themis_SetupAug25_noVTS_transmission_15mK `
   --frequency-chunk-size 0 `
-  --no-signal-spectrum
+  --no-signal-spectrum `
+  --log-level INFO
 ```
 
 Expected pump axes: 51 frequencies from 5.980 to 7.997 GHz, and 31 powers
@@ -40,7 +41,8 @@ python workflows/run_gain_map_and_plots.py `
   --run-dir outputs/ipm_2c_fixed_themis_fine_17.03.10 `
   --grid-from-measurement-dir docs/development/17.03.10_Themis_SetupAug25_noVTS_transmission_15mK `
   --frequency-chunk-size 0 `
-  --no-signal-spectrum
+  --no-signal-spectrum `
+  --log-level INFO
 ```
 
 Expected pump axes: 51 frequencies from 7.043 to 7.373 GHz, and 31 powers

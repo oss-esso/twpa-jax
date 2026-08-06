@@ -237,7 +237,7 @@ def reference_signal_current_a(
         signal_line_loss_model().attenuation_db(signal_ghz)
     )
     power_w = 1.0e-3 * 10.0 ** (onchip_dbm / 10.0)
-    return port_current_from_power_a(power_w, z0_ohm, convention="norton")
+    return port_current_from_power_a(power_w, z0_ohm, convention="legacy_traveling_wave")
 
 
 def solve_finite_signal_gain_db(
@@ -612,7 +612,7 @@ def fit_operating_point(
         raise RuntimeError("no candidate in the fine grid produced a usable G0(f) curve")
 
     on_chip_pump_dbm = 10.0 * math.log10(
-        port_available_power_w(current_best, z0_ohm, convention="norton") / 1.0e-3
+        port_available_power_w(current_best, z0_ohm, convention="legacy_traveling_wave") / 1.0e-3
     )
     model_summary = summarize_band(model_freq_ghz, best_curve)
     measured_summary = summarize_band(model_freq_ghz, target_g0_db)

@@ -51,7 +51,7 @@ BASE_ARGS = [
     "--recovery", "ladder",
     "--factor-backend", "pardiso",
     "--signal-continuation-deadline-s", "180",
-    "--power-convention", "norton",
+    "--power-convention", "legacy_traveling_wave",
 ]
 
 

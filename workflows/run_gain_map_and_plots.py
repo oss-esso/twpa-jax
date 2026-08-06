@@ -14,6 +14,36 @@ from scripts import plot_gain_map, run_gain_map
 from scripts.plot_gain_vs_pumpfreq_signalfreq import plot_one as plot_pump_frequency
 from scripts.plot_gain_vs_pumppower_signalfreq import plot_one as plot_pump_power
 
+# Standard production gain-map engine flags (see CLAUDE.md "Standard gain-map
+# flag set"). Applied unless the caller already passed the same flag through
+# to run_gain_map.py, so a caller can still override any single one.
+DEFAULT_ENGINE_FLAGS: list[tuple[str, str | None]] = [
+    ("--mode", "warmstart"),
+    ("--inproc-pump-backend", "schur_cpu_mt"),
+    ("--inproc-preconditioner", "real_coupled_fast"),
+    ("--inproc-fold-predictor", "secant"),
+    ("--inproc-fail-fast", None),
+    ("--fold-skip-patience", "2"),
+    ("--pump-current-jc-scale", "1.0"),
+    ("--frequency-chunk-size", "10"),
+    ("--signal-detuning-mhz", "150"),
+    ("--no-signal-spectrum", None),
+    ("--log-level", "INFO"),
+]
+
+
+def _apply_default_engine_flags(run_args: list[str]) -> list[str]:
+    """Prepend DEFAULT_ENGINE_FLAGS for any flag the caller did not already pass."""
+    present = set(run_args)
+    defaults: list[str] = []
+    for flag, value in DEFAULT_ENGINE_FLAGS:
+        if flag in present:
+            continue
+        defaults.append(flag)
+        if value is not None:
+            defaults.append(value)
+    return defaults + run_args
+
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
@@ -28,6 +58,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--plot-save-svg", action="store_true")
     args, run_args = parser.parse_known_args(argv)
 
+    run_args = _apply_default_engine_flags(run_args)
     run_args.extend([
         "--circuit-dir", str(args.design), "--outdir", str(args.run_dir),
         "--executor", "inprocess",

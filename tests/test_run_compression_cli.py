@@ -443,9 +443,9 @@ def test_interpolated_p1db_is_the_reported_one_when_refinement_is_off(
     assert summary["p1db"] == pytest.approx(summary["p1db_interpolated_dbm"])
 
 
-def test_power_convention_defaults_to_norton() -> None:
+def test_power_convention_defaults_to_legacy_traveling_wave() -> None:
     args = build_parser().parse_args(["--output-dir", "unused", "--signal-ghz", "4.5"])
-    assert args.power_convention == "norton"
+    assert args.power_convention == "legacy_traveling_wave"
 
 
 def test_legacy_power_convention_shifts_p1db_by_exactly_6p02_db(tmp_path) -> None:
@@ -456,11 +456,11 @@ def test_legacy_power_convention_shifts_p1db_by_exactly_6p02_db(tmp_path) -> Non
     """
     norton_dir = tmp_path / "norton"
     legacy_dir = tmp_path / "legacy"
-    args = _jpa_gain_args(norton_dir, 5) + ["--p1db-power-tol-db", "0"]
+    args = _jpa_gain_args(legacy_dir, 5) + ["--p1db-power-tol-db", "0"]
     assert main(args) == 0
     assert main(
-        [a if a != str(norton_dir) else str(legacy_dir) for a in args]
-        + ["--power-convention", "legacy_traveling_wave"]
+        [a if a != str(legacy_dir) else str(norton_dir) for a in args]
+        + ["--power-convention", "norton"]
     ) == 0
 
     norton_summary = json.loads((norton_dir / "compression_summary.json").read_text())

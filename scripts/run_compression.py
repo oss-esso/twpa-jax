@@ -212,13 +212,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--power-convention",
         choices=("norton", "legacy_traveling_wave"),
-        default="norton",
+        default="legacy_traveling_wave",
         help=(
             "Port drive current -> available power relation. Every drive "
             "port in the production netlists is an ideal current source in "
-            "parallel with Z0 (Norton), so available power is I^2*Z0/8, not "
-            "the traveling-wave I^2*Z0/2. legacy_traveling_wave reproduces "
-            "pre-fix numbers bit-for-bit, offset by exactly 6.0206 dB."
+            "parallel with Z0, a matched wave port (I is the incident "
+            "wave's own current amplitude), so available power is the "
+            "traveling-wave I^2*Z0/2, not the Norton-generator I^2*Z0/8. "
+            "'norton' is kept as a selectable alternate convention, offset "
+            "by exactly 6.0206 dB."
         ),
     )
     parser.add_argument("--signal-current-min-a", type=float, default=1e-12)

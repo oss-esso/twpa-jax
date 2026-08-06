@@ -66,7 +66,7 @@ def run(args: argparse.Namespace) -> dict[str, object]:
     omega_p = 2.0 * math.pi * args.pump_ghz * 1e9
     source_dbm = args.pump_dbm - args.pump_attenuation_db
     pump_power_w = 1.0e-3 * 10.0 ** (source_dbm / 10.0)
-    pump_current = port_current_from_power_a(pump_power_w, 50.0, convention="norton")
+    pump_current = port_current_from_power_a(pump_power_w, 50.0, convention="legacy_traveling_wave")
     dc_flux = kinetic_dc_branch_flux(circuit, args.dc_current_a)
     environment = PortEnvironment() if args.environment == "paper_standing_wave" else None
     basis = resolve_pump_basis(

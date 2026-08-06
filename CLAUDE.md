@@ -378,30 +378,53 @@ feedline satisfies it — `signal_line_loss_model()` there gives P_sat 16.5 dB
 `scripts/measured_psat_pipeline.py::energy_conservation_gate` (Phase 7), which
 now asserts this on every run instead of trusting it.
 
-## Port power convention: Norton, not travelling-wave (resolved 2026-08-05)
+## Port power convention: matched travelling-wave, not Norton (reverted 2026-08-06)
 
 `src/twpa_solver/ports.py` is the single source of truth for current<->dBm.
 `designs/ipm_2c_fixed`'s `G` matrix has **exactly four nonzeros**, all
 `0.02 S = 50 Ω`, one per port — every drive is an ideal current source in
-parallel with `G0 = 1/Z0`, i.e. a **Norton** source, not a matched travelling
-wave. The load sees `I/2` (peak), so available power is `P = I^2 Z0 / 8`, not
-the travelling-wave `I^2 Z0 / 2` used everywhere before this date — an
-overstatement of exactly `10*log10(4) = 6.0206 dB`. Confirmed independently by
-the solver's own `pump_outgoing_power_w` observable
-(`multitone/observables.py::power_balance`): at `I = 7.2311e-6 A`,
-`pump_outgoing_power_w` reads -64.857 dBm, matching `I^2 Z0/8` to the last
-digit and off by 6.02 dB from `I^2 Z0/2`.
+parallel with `G0 = 1/Z0`. This topology is ambiguous between two standard
+port conventions: a **Norton generator** (the injected current is the
+source's own short-circuit current, splitting `I/2` across a separately
+matched load, `P = I^2 Z0/8`) or a **matched wave port** (the injected
+current *is* the incident wave's own amplitude, `G0` only absorbing
+reflections, `P = I^2 Z0/2`). The `G` stamp alone cannot distinguish them.
 
-`port_available_power_w(current_a, z0_ohm, convention="norton")` /
-`port_current_from_power_a(...)` are the conversion functions;
-`convention="legacy_traveling_wave"` reproduces every pre-2026-08-05 published
-number bit-for-bit (`LEGACY_TW_OFFSET_DB = 10*log10(4)`). `--power-convention`
-(default `norton`) is wired through `scripts/run_compression.py`,
-`scripts/run_gain_map.py`, and `src/twpa_solver/loss.py::dbm_to_peak_current_a`;
-gain maps lacking a `power_convention` metadata key are `legacy_traveling_wave`
-and get a `-6.0206` dB relabel at read time, never a re-solve — gain is a
-pump-on/pump-off ratio (`gain_vs_off_db`), invariant under the source-scale
-convention, so the fix is a pure relabel of absolute powers.
+Default is **`legacy_traveling_wave`** (`P = I^2 Z0/2`), per the design intent
+confirmed 2026-08-06: `I` is the incident wave amplitude. `convention="norton"`
+remains selectable for comparison but is not physically justified for the
+current topology.
+
+**Open inconsistency, not yet resolved:** `multitone/observables.py::extract_port_waves`
+(lines ~72-75) independently derives the *outgoing* wave from the actual
+solved node state via KCL as `current = injected_current - voltage/z0_ohm`
+— i.e. it subtracts the port resistor's own draw, which is the Norton
+picture, not the travelling-wave one. This was not changed in the revert.
+The two pictures agree only once the separate port resistor is actually
+removed from the netlist (planned, not yet done) — until then, the
+source-side current-to-power conversion (`ports.py`, now travelling-wave) and
+the solved-state wave extraction (`observables.py`, still Norton-KCL) are
+using two different physical pictures of the same port. Do not "fix" either
+side unilaterally without redoing this section.
+
+`port_available_power_w(current_a, z0_ohm)` / `port_current_from_power_a(...)`
+are the conversion functions; `convention="norton"` reproduces the
+2026-08-05..06 Norton-era numbers bit-for-bit (`LEGACY_TW_OFFSET_DB =
+10*log10(4)` is still the exact offset between the two, now in the opposite
+direction: Norton reads `-6.0206 dB` relative to the default). `--power-convention`
+(default `legacy_traveling_wave`) is wired through `scripts/run_compression.py`,
+`scripts/run_gain_map.py`, and `src/twpa_solver/loss.py::dbm_to_peak_current_a`.
+Gain (`gain_vs_off_db`) is a pump-on/pump-off ratio, invariant under the
+source-scale convention, so this only ever relabels absolute powers (P1dB,
+saturation dBm, etc.), never gain itself.
+
+**Superseded:** the "Norton, resolved 2026-08-05" entry that previously lived
+here (default `norton`, `P = I^2 Z0/8`) is reverted. That entry's own
+evidence — `pump_outgoing_power_w` matching `I^2 Z0/8` to the last digit — is
+still true and still in the code (it comes from the same unresolved KCL
+subtraction in `observables.py` noted above), it just no longer determines
+the *source-side* default. Do not cite the old entry as settled; the port
+topology question is open until the resistor-removal work above lands.
 
 **This supersedes "Pump-current conversion (validated 2026-07-18)"** — that
 entry validated `--pump-current-jc-scale` against JosephsonCircuits.jl, a

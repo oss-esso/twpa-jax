@@ -18,16 +18,16 @@ def test_norton_available_power_is_i_squared_z0_over_8() -> None:
     current_a = 7.3803e-6
     z0_ohm = 50.0
     expected = current_a * current_a * z0_ohm / 8.0
-    assert port_available_power_w(current_a, z0_ohm) == pytest.approx(expected)
+    assert port_available_power_w(
+        current_a, z0_ohm, convention="norton"
+    ) == pytest.approx(expected)
 
 
 def test_legacy_available_power_is_i_squared_z0_over_2() -> None:
     current_a = 7.3803e-6
     z0_ohm = 50.0
     expected = current_a * current_a * z0_ohm / 2.0
-    assert port_available_power_w(
-        current_a, z0_ohm, convention="legacy_traveling_wave"
-    ) == pytest.approx(expected)
+    assert port_available_power_w(current_a, z0_ohm) == pytest.approx(expected)
 
 
 def test_legacy_offset_is_exactly_6p02_db() -> None:
@@ -66,21 +66,23 @@ def test_nonpositive_z0_rejected() -> None:
 
 
 def test_mutation_swapping_8_to_2_fails_norton_check() -> None:
-    """Guards the exact denominator: a stray divide-by-2 must fail this."""
+    """Guards the exact denominator: a stray divide-by-8 must fail this."""
     current_a = 1.0e-6
     z0_ohm = 50.0
     correct = port_available_power_w(current_a, z0_ohm)
-    wrong_denominator_2 = current_a * current_a * z0_ohm / 2.0
-    assert correct != pytest.approx(wrong_denominator_2)
-    assert correct == pytest.approx(wrong_denominator_2 / 4.0)
+    wrong_denominator_8 = current_a * current_a * z0_ohm / 8.0
+    assert correct != pytest.approx(wrong_denominator_8)
+    assert correct == pytest.approx(wrong_denominator_8 * 4.0)
 
 
-def test_netlist_ports_are_norton_terminated_at_1_over_z0() -> None:
+def test_netlist_ports_are_matched_wave_ports_at_1_over_z0() -> None:
     """designs/ipm_2c_fixed's G matrix has exactly one 1/Z0 nonzero per port.
 
-    This is the physical fact the Norton convention rests on: each drive port
-    is an ideal current source in parallel with Z0, not a matched traveling-
-    wave port.
+    Each drive port is an ideal current source in parallel with Z0 -- a
+    matched wave port, where the injected current is the incident wave's own
+    amplitude (Z0 only absorbs reflections correctly), not a Norton
+    generator whose short-circuit current splits across a separate matched
+    load.
     """
     circuit = load_circuit(DESIGN_DIR)
     z0_ohm = 50.0

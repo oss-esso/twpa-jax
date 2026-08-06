@@ -26,15 +26,17 @@ after the warm pass and folds their gain drift into the gate, so the big run is
 still guarded without paying for a full cold map.
 
 Pump current is derived from delivered power after subtracting the line
-loss. Every drive port is an ideal current source in parallel with Z0
-(Norton), so the default ``--power-convention norton`` inverts
-``P_avail = I_peak^2 * Z0 / 8``, i.e. ``I_peak = sqrt(8 * P_W / Z0)`` (see
-``twpa_solver.ports``). ``--power-convention legacy_traveling_wave`` restores
-the old ``I_peak = sqrt(2 * P_W / Z0)`` convention -- for a fixed dBm the
-Norton current is 2x the legacy one, so a map regenerated with the same dBm
-bounds under a different convention is a different physical sweep. The loss
-defaults to the measured ``loss_A10`` model ``c + a*sqrt(f) + b*f`` (dB, f in
-GHz); pass a flat ``--attenuation-db`` to override it.
+loss. Every drive port is an ideal current source in parallel with Z0, a
+matched wave port (``I`` is the incident wave's own current amplitude), so
+the default ``--power-convention legacy_traveling_wave`` inverts
+``P_avail = I_peak^2 * Z0 / 2``, i.e. ``I_peak = sqrt(2 * P_W / Z0)`` (see
+``twpa_solver.ports``). ``--power-convention norton`` selects the alternate
+Norton-generator reading (``I_peak = sqrt(8 * P_W / Z0)``) for comparison --
+for a fixed dBm the Norton current is half the legacy one, so a map
+regenerated with the same dBm bounds under a different convention is a
+different physical sweep. The loss defaults to the measured ``loss_A10``
+model ``c + a*sqrt(f) + b*f`` (dB, f in GHz); pass a flat ``--attenuation-db``
+to override it.
 """
 
 from __future__ import annotations
@@ -98,7 +100,7 @@ from twpa_solver.ports import (  # noqa: E402
 
 def dbm_to_peak_current_a(
     power_dbm: float, *, attenuation_db: float, z0_ohm: float,
-    convention: str = "norton",
+    convention: str = "legacy_traveling_wave",
 ) -> float:
     logger.debug(
         "dbm_to_peak_current_a_start power_dbm=%s attenuation_db=%s z0_ohm=%s convention=%s",
@@ -119,8 +121,8 @@ def dbm_to_peak_current_a(
 def peak_current_to_power_dbm(current_a: float, freq_ghz: float, args: argparse.Namespace) -> float:
     """Inverse of ``dbm_to_peak_current_a``: on-chip peak current -> pump dBm.
 
-    Available power follows ``args.power_convention`` (Norton default:
-    ``P_avail = I^2 Z0 / 8``); see ``twpa_solver.ports``.
+    Available power follows ``args.power_convention`` (legacy_traveling_wave
+    default: ``P_avail = I^2 Z0 / 2``); see ``twpa_solver.ports``.
     """
     if current_a <= 0.0:
         return float("-inf")
@@ -2793,14 +2795,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument(
         "--power-convention",
         choices=("norton", "legacy_traveling_wave"),
-        default="norton",
+        default="legacy_traveling_wave",
         help=(
             "Port drive current -> available power relation. Every drive "
             "port in the production netlists is an ideal current source in "
-            "parallel with Z0 (Norton), so available power is I^2*Z0/8, not "
-            "the traveling-wave I^2*Z0/2. Maps produced before this flag "
-            "existed used legacy_traveling_wave and are relabeled -6.0206 dB "
-            "at read time (power_convention key absent = legacy)."
+            "parallel with Z0, a matched wave port (I is the incident "
+            "wave's own current amplitude), so available power is the "
+            "traveling-wave I^2*Z0/2, not the Norton-generator I^2*Z0/8. "
+            "'norton' is kept as a selectable alternate convention."
         ),
     )
     # Signal readout frequency. Default: track the pump at a fixed detuning

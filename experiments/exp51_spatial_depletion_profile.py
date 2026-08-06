@@ -219,7 +219,7 @@ def main(circuit_dir: str = "designs/ipm_2c_fixed", label: str | None = None) ->
     pump_seed_solve = pump_seed[:, schur_partition.retained]
 
     p1db_current_a = port_current_from_power_a(
-        1.0e-3 * 10.0 ** (P1DB_ON_CHIP_DBM / 10.0), Z0_OHM, convention="norton"
+        1.0e-3 * 10.0 ** (P1DB_ON_CHIP_DBM / 10.0), Z0_OHM, convention="legacy_traveling_wave"
     )
     print(f"target on-chip P1dB current at fs={SIGNAL_GHZ} GHz: {p1db_current_a:.6e} A "
           f"({P1DB_ON_CHIP_DBM} dBm)")

@@ -63,16 +63,15 @@ class InsertionLossModel:
         freq_ghz: float,
         *,
         z0_ohm: float = 50.0,
-        convention: str = "norton",
+        convention: str = "legacy_traveling_wave",
     ) -> float:
         """External pump power (dBm) -> on-chip peak current (A) at ``freq_ghz``.
 
-        Applies the frequency-dependent attenuation, then inverts the Norton
-        available-power relation ``I_peak = sqrt(8 * P_W / Z0)`` (see
-        ``twpa_solver.ports``). For a fixed dBm the Norton drive current is
-        2x the legacy ``legacy_traveling_wave`` current, so a map regenerated
-        with the same dBm bounds under a different convention is a different
-        physical sweep.
+        Applies the frequency-dependent attenuation, then inverts the matched
+        wave-port available-power relation ``I_peak = sqrt(2 * P_W / Z0)``
+        (see ``twpa_solver.ports``). For a fixed dBm the Norton convention's
+        drive current is half this, so a map regenerated with the same dBm
+        bounds under a different convention is a different physical sweep.
         """
         if z0_ohm <= 0.0:
             raise ValueError("z0_ohm must be positive")

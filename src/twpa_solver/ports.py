@@ -1,19 +1,20 @@
-"""Available power at a Norton-terminated port.
+"""Available power at a matched port.
 
 Every drive port in the production netlists (``designs/ipm_2c_fixed`` and the
 JC-parity fixtures) is an ideal current source in parallel with a fixed
 conductance ``G0 = 1/Z0`` -- the ``G`` matrix has exactly one nonzero per port,
-equal to ``1/Z0``, and nothing else in the circuit is conductive. A Norton
-source of peak current ``I`` splits evenly between its own ``Z0`` and the
-``Z0`` load it drives, so the load sees peak current ``I/2`` and
+equal to ``1/Z0``, and nothing else in the circuit is conductive. This is the
+standard matched wave-port construction: ``I`` is the incident wave's own
+current amplitude (the conductance only absorbs reflections correctly), so
+the available power is the traveling-wave form
 
-    P_avail = 0.5 * (I/2)^2 * Z0 = I^2 * Z0 / 8
+    P_avail = 0.5 * I^2 * Z0 = I^2 * Z0 / 2
 
-The traveling-wave form ``I^2 * Z0 / 2`` treats ``I`` as a wave amplitude
-incident on a *matched* port with no parallel source resistance; applied to a
-Norton drive current it overstates available power by exactly
-``10*log10(4) = 6.0206 dB``. ``legacy_traveling_wave`` is kept only so
-already-published numbers stay reproducible behind an explicit flag.
+The Norton-generator reading (``I`` as the source's own short-circuit
+current, splitting in half across the matched load, giving ``I^2 * Z0 / 8``)
+does not apply here since ``I`` is defined as the wave amplitude, not a
+generator's short-circuit current. ``norton`` is kept only as a selectable
+convention for comparison.
 """
 
 from __future__ import annotations
@@ -32,14 +33,15 @@ def _validate_convention(convention: str) -> None:
 
 
 def port_available_power_w(
-    current_a: float, z0_ohm: float, convention: str = "norton"
+    current_a: float, z0_ohm: float, convention: str = "legacy_traveling_wave"
 ) -> float:
     """Peak port drive current (A) -> available power (W).
 
-    ``norton`` (default): ``I^2 * Z0 / 8``, correct for an ideal current
-    source in parallel with ``Z0`` driving a matched ``Z0`` load.
-    ``legacy_traveling_wave``: ``I^2 * Z0 / 2``, the historical convention
-    that treats ``I`` as an incident wave amplitude.
+    ``legacy_traveling_wave`` (default): ``I^2 * Z0 / 2``, correct for a
+    matched wave port where ``I`` is the incident wave's own current
+    amplitude.
+    ``norton``: ``I^2 * Z0 / 8``, treats ``I`` as a Norton generator's
+    short-circuit current split across a matched load; kept for comparison.
     """
     _validate_convention(convention)
     if z0_ohm <= 0.0:
@@ -49,7 +51,7 @@ def port_available_power_w(
 
 
 def port_current_from_power_a(
-    power_w: float, z0_ohm: float, convention: str = "norton"
+    power_w: float, z0_ohm: float, convention: str = "legacy_traveling_wave"
 ) -> float:
     """Available power (W) -> peak port drive current (A). Inverse of
     :func:`port_available_power_w`."""

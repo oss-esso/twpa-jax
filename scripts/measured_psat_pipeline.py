@@ -921,7 +921,7 @@ def load_model_sweep_from_points(run_dir: Path) -> tuple[ModelSweep, list[dict[s
         rows.sort(key=lambda r: float(r["signal_current_a"]))
         current = np.array([float(r["signal_current_a"]) for r in rows])
         power = np.array([
-            10.0 * np.log10(port_available_power_w(i, Z0_OHM, convention="norton") / 1.0e-3)
+            10.0 * np.log10(port_available_power_w(i, Z0_OHM, convention="legacy_traveling_wave") / 1.0e-3)
             for i in current
         ])
         gain = np.array([float(r["gain_vs_off_db"]) for r in rows])
