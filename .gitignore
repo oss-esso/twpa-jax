@@ -22,7 +22,10 @@ dist/
 venv/
 env/
 .ipynb_checkpoints/
-CLAUDE.md
+# Branch-private Claude/GitHub/reference material
+/CLAUDE.md
+/.github/
+/references/
 
 # --- Test scratch ------------------------------------------------------------
 .pytest_cache/
@@ -42,7 +45,6 @@ diagnostics/
 plots/
 logs/
 industrial_completion_outputs/
-references/
 
 # --- Scratch and temp run directories ----------------------------------------
 tmp*/
@@ -103,5 +105,3 @@ docs/development/**/*.md
 docs/development/**/*.html
 docs/development/**/*.zip
 
-
-./github/

@@ -1,7 +1,0 @@
-{
-  "method": "Bloch extraction from the assembled residual linearization",
-  "builder_max_relative_error": 1.0940395822272829e-15,
-  "builder_rms_relative_error": 3.822702844780847e-16,
-  "cme_max_relative_error": 0.06067484111760348,
-  "cme_rms_relative_error": 0.039733888515170235
-}
