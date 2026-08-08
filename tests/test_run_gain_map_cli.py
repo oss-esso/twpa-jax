@@ -47,6 +47,47 @@ def test_inproc_fail_fast_flag_enables_fast_failure(monkeypatch) -> None:
     assert args.inproc_fail_fast is True
 
 
+def test_recovery_arclength_flags_default_to_no_change(monkeypatch) -> None:
+    # 0 for both -- solve_arclength treats rescale_every=0 as disabled and
+    # max_steps_after_fold=0 as mathematically identical to its own None
+    # default (see docs/development/arclength_fold_resolution_plan.md Phase 4).
+    monkeypatch.setattr(sys, "argv", ["run_gain_map.py"])
+
+    args = run_gain_map.parse_args()
+
+    assert args.recovery_arclength_rescale_every == 0
+    assert args.recovery_arclength_max_steps_after_fold == 0
+
+
+def test_recovery_arclength_flags_are_settable(monkeypatch) -> None:
+    monkeypatch.setattr(sys, "argv", [
+        "run_gain_map.py",
+        "--recovery-arclength-rescale-every", "5",
+        "--recovery-arclength-max-steps-after-fold", "150",
+    ])
+
+    args = run_gain_map.parse_args()
+
+    assert args.recovery_arclength_rescale_every == 5
+    assert args.recovery_arclength_max_steps_after_fold == 150
+
+
+def test_write_points_csv_carries_arclength_fold_current(tmp_path) -> None:
+    import csv
+
+    row_with_fold = {"pass": 0, "point_index": 0, "status": "FAILED",
+                      "pump_arclength_fold_current_a": 1.163e-05}
+    row_without_fold = {"pass": 0, "point_index": 1, "status": "PASS"}
+    out = tmp_path / "points.csv"
+
+    run_gain_map.write_points_csv(out, [row_with_fold, row_without_fold])
+
+    with open(out, newline="", encoding="utf-8") as f:
+        rows = list(csv.DictReader(f))
+    assert rows[0]["pump_arclength_fold_current_a"] == "1.163e-05"
+    assert rows[1]["pump_arclength_fold_current_a"] == ""
+
+
 def test_all_intra_cell_continuation_methods_are_selectable(monkeypatch) -> None:
     methods = {
         "fixed",

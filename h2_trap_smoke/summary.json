@@ -1,0 +1,118 @@
+{
+  "cases": [
+    {
+      "checkpoint": "D:\\Projects\\Thesis\\twpa_jax\\g1_current_79\\pass\\points\\point_0004_p_m23p8947dbm_fp_7p9ghz\\pump",
+      "current_a": 6.958837637355967e-06,
+      "step_theta": 0.05,
+      "integrator_name": "trapezoid",
+      "periods": 2,
+      "integration": {
+        "success": true,
+        "message": "success",
+        "steps": 252,
+        "newton_iterations": 252
+      },
+      "e_x_rms": 0.0008815375629531828,
+      "e_x_max": 0.0013286318463757681,
+      "e_v_rms": 0.08011481913766856,
+      "e_X": 0.0010846664354325164,
+      "strobe_max": 0.09751840960543728,
+      "strobe_periods": [
+        0,
+        1,
+        2
+      ],
+      "strobe_errors": [
+        0.0,
+        0.07342913323882819,
+        0.09751840960543728
+      ],
+      "dae_constraint_max": 3.0430116040763575e-17,
+      "observables": {
+        "td_rj": 0.5724872311239352,
+        "hb_rj": 0.5717485088667265,
+        "td_max_phi": 0.6095361821632262,
+        "hb_max_phi": 0.6086354895652573,
+        "td_min_cos": 0.8199136358178525,
+        "hb_min_cos": 0.8204289381833596
+      }
+    },
+    {
+      "checkpoint": "D:\\Projects\\Thesis\\twpa_jax\\g1_current_79\\pass\\points\\point_0012_p_m19p6842dbm_fp_7p9ghz\\pump",
+      "current_a": 1.1299598687329626e-05,
+      "step_theta": 0.05,
+      "integrator_name": "trapezoid",
+      "periods": 2,
+      "integration": {
+        "success": true,
+        "message": "success",
+        "steps": 252,
+        "newton_iterations": 252
+      },
+      "e_x_rms": 0.0010524106992545609,
+      "e_x_max": 0.0018770652024487848,
+      "e_v_rms": 0.23721415079317096,
+      "e_X": 0.0013028660260696922,
+      "strobe_max": 0.13115047373253239,
+      "strobe_periods": [
+        0,
+        1,
+        2
+      ],
+      "strobe_errors": [
+        0.0,
+        0.0864403417935586,
+        0.13115047373253239
+      ],
+      "dae_constraint_max": 3.748066505247166e-17,
+      "observables": {
+        "td_rj": 0.7980304452319815,
+        "hb_rj": 0.7988937858382736,
+        "td_max_phi": 0.9240197732174236,
+        "hb_max_phi": 0.9254537872688509,
+        "td_min_cos": 0.6026171325832392,
+        "hb_min_cos": 0.601472126493814
+      }
+    }
+  ],
+  "refinement": [
+    {
+      "checkpoint": "D:\\Projects\\Thesis\\twpa_jax\\g1_current_79\\pass\\points\\point_0012_p_m19p6842dbm_fp_7p9ghz\\pump",
+      "current_a": 1.1299598687329626e-05,
+      "step_theta": 0.05,
+      "integrator_name": "trapezoid",
+      "periods": 2,
+      "integration": {
+        "success": true,
+        "message": "success",
+        "steps": 252,
+        "newton_iterations": 252
+      },
+      "e_x_rms": 0.0010524106992545609,
+      "e_x_max": 0.0018770652024487848,
+      "e_v_rms": 0.23721415079317096,
+      "e_X": 0.0013028660260696922,
+      "strobe_max": 0.13115047373253239,
+      "strobe_periods": [
+        0,
+        1,
+        2
+      ],
+      "strobe_errors": [
+        0.0,
+        0.0864403417935586,
+        0.13115047373253239
+      ],
+      "dae_constraint_max": 3.748066505247166e-17,
+      "observables": {
+        "td_rj": 0.7980304452319815,
+        "hb_rj": 0.7988937858382736,
+        "td_max_phi": 0.9240197732174236,
+        "hb_max_phi": 0.9254537872688509,
+        "td_min_cos": 0.6026171325832392,
+        "hb_min_cos": 0.601472126493814
+      }
+    }
+  ],
+  "validated": false
+}

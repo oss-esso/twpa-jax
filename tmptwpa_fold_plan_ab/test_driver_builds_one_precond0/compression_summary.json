@@ -1,0 +1,161 @@
+{
+  "status": "NO_GAIN_AT_OPERATING_POINT",
+  "stability_status": "NOT_CHECKED",
+  "stability_points": {},
+  "circuit_source": "jpa",
+  "pump_freq_ghz": 4.75001,
+  "signal_ghz": 4.75,
+  "pump_current_a": 5.65e-09,
+  "pump_current_source": "circuit_metadata",
+  "pump_power_dbm": null,
+  "pump_converged": true,
+  "pump_current_jc_scale": 1.0,
+  "pump_solution_dir": null,
+  "source_port": 1,
+  "pump_port": 1,
+  "out_port": 1,
+  "diagnostic_port": 1,
+  "attenuation_db": 0.0,
+  "signal_attenuation_db": 0.0,
+  "signal_current_min_a": 1e-12,
+  "signal_current_max_a": 1e-09,
+  "signal_current_source": "explicit_current",
+  "signal_power_min_dbm": null,
+  "signal_power_max_dbm": null,
+  "signal_attenuation_source": "fixture_default_zero",
+  "pump_attenuation_db": 0.0,
+  "pump_attenuation_source": "fixture_default_zero",
+  "attenuation_source": "fixture_default_zero",
+  "power_convention": "legacy_traveling_wave",
+  "small_signal_gain_db": -0.432457665102004,
+  "small_signal_gain_vs_off_db": -0.432457665102004,
+  "small_signal_floor_delta_db": 0.012449314276801293,
+  "small_signal_floor_tol_db": 0.05,
+  "small_signal_floor_flat": true,
+  "pump_off_gain_db": 3.2787133862811696e-14,
+  "pump_reference_s21_real": 0.15642234693393986,
+  "pump_reference_s21_imag": -0.987690128892278,
+  "p1db": null,
+  "p1db_method": "none",
+  "p1db_smooth_dbm": null,
+  "p_sc_dbm": null,
+  "p1db_effective_dbm": null,
+  "p1db_effective_status": "NOT_REACHED",
+  "p1db_interpolated_dbm": null,
+  "first_1db_crossing_dbm": null,
+  "number_of_crossings": 0,
+  "n_requested_power_points": 2,
+  "n_failed_power_points": 0,
+  "failed_signal_power_dbm": [],
+  "failed_power_point_statuses": [
+    "VALID_SOLVED",
+    "VALID_SOLVED"
+  ],
+  "p1db_degraded": false,
+  "p1db_refinement_failure": null,
+  "nonmonotonic_compression": false,
+  "compression_model_depletion_only_description": "dB gain from the linear-gain depletion trend; not an acceptance oracle",
+  "max_power_balance_rel_err": 2.7779882435898318e-15,
+  "max_external_power_balance_rel_err": 1.0000017754238513,
+  "max_manley_rowe_rel_err": 0.0,
+  "max_external_manley_rowe_rel_err": 0.00017992962733331778,
+  "p1db_signal_current_a": null,
+  "p1db_input_dbm": null,
+  "p1db_output_dbm": null,
+  "p1db_state_status": "NOT_REQUESTED",
+  "p1db_pump_depletion_db": null,
+  "p1db_pump_depletion_all_port_db": null,
+  "p1db_pump_depletion_all_port_db_status": "NOT_AVAILABLE",
+  "p1db_pump_net_power_delta_w": null,
+  "p1db_external_supplied_power": null,
+  "p1db_external_power_balance_rel_err": null,
+  "message": "Small-signal gain -0.432458 dB is below the 3 dB compression-study threshold; P1dB is not reported.",
+  "multitone_preconditioner": "real_coupled_fast",
+  "multitone_backend": "full",
+  "factor_backend": "pardiso",
+  "recovery": "ladder",
+  "basis": {
+    "tones": [
+      {
+        "h": 1,
+        "q": 0
+      },
+      {
+        "h": 3,
+        "q": 0
+      },
+      {
+        "h": 5,
+        "q": 0
+      },
+      {
+        "h": 7,
+        "q": 0
+      },
+      {
+        "h": 9,
+        "q": 0
+      },
+      {
+        "h": 11,
+        "q": 0
+      },
+      {
+        "h": 13,
+        "q": 0
+      },
+      {
+        "h": 15,
+        "q": 0
+      },
+      {
+        "h": 17,
+        "q": 0
+      },
+      {
+        "h": 19,
+        "q": 0
+      },
+      {
+        "h": 1,
+        "q": 1
+      },
+      {
+        "h": 0,
+        "q": 1
+      },
+      {
+        "h": 1,
+        "q": -1
+      },
+      {
+        "h": 2,
+        "q": -1
+      },
+      {
+        "h": 3,
+        "q": -1
+      }
+    ],
+    "omega_p": 29845193040.956104,
+    "delta": 62831.85307312012,
+    "pump_tone": {
+      "h": 1,
+      "q": 0
+    },
+    "n_p": 78,
+    "n_delta": 6,
+    "real_reconstruction_factor": 2.0,
+    "phase_convention": "exp_plus_i_(h_theta_p_plus_q_theta_delta)"
+  },
+  "multitone_basis": "matched",
+  "multitone_sidebands": 2,
+  "n_signal_power": 2,
+  "resource_budget_gb": 8.0,
+  "signal_frequency_range_ghz": [
+    4.75,
+    4.75
+  ],
+  "n_signal_freq": 1,
+  "signal_workers": 1
+}

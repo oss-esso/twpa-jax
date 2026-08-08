@@ -56,8 +56,8 @@ past a detected fold, and never calls the singularity functions.
 
 ## Prerequisites
 
-- [ ] `designs/ipm_2c_fixed` circuit unchanged since the Phase 5 CSVs were produced.
-- [ ] `TWPA_REQUIRE_PARDISO=1` available for timed re-runs (matches existing convention).
+- [x] `designs/ipm_2c_fixed` circuit unchanged since the Phase 5 CSVs were produced.
+- [x] `TWPA_REQUIRE_PARDISO=1` available for timed re-runs (matches existing convention).
 
 ---
 
@@ -228,6 +228,53 @@ high-power solution at this frequency) or exhausts the new budget too
 7.9 GHz, not a solver failure, and stop -- no further remedy exists for a
 confirmed fold beyond going around it).
 
+### Phase 2 result (measured 2026-08-07)
+
+Deviation from the plan text above: the CLI flag actually implemented is
+`--arclength-max-steps-after-fold` with default `None` (no change), not
+"default matching `--arclength-max-steps`" as originally written -- the
+literal plan text was self-contradictory (matching `--arclength-max-steps`
+by default would itself change behavior whenever a fold is detected late).
+`None` is what `solve_arclength` itself defaults to, so this keeps the two
+consistent. A companion `--arclength-rescale-every` flag (Phase 1's
+parameter) was added at the same time since Phase 3 needs it too.
+
+First attempt used too small a base budget (`--arclength-max-steps 20`,
+`--arclength-max-steps-after-fold 100`) and never triggered the extension at
+all -- none of the 12 points reached far enough into the branch to detect a
+fold within 20 steps in the first place (`arclength_fold_lambda` empty on
+every failing row). Re-run with a base budget matching the original
+fold-detecting data (`--arclength-max-steps 60`) plus a large extension
+(`--arclength-max-steps-after-fold 150`, `--eig-iters 5` to bound per-step
+diagnostic cost), `designs/ipm_2c_fixed`, fp=7.9 GHz, -22.0..-18.5 dBm
+(`outputs/phase2_fold_rounding_check/singularity_scan.csv`, mirrored at
+`D:\tmp\p2chk2`):
+
+| power (dBm) | converged | lambda_reached | fold_lambda | I_bound (A) |
+| ---: | :---: | ---: | ---: | ---: |
+| -22.0 to -19.5 | True | 1.0 | (-21.5 only: 0.9896, still reached target) | -- |
+| -19.0 | **False** | 0.9703 | 0.9511 | 1.1628e-05 |
+| -18.5 | **False** | 0.9991 | 0.8984 | 1.1633e-05 |
+
+The extended budget recovers -19.5 dBm and above (previously failing under
+the old fixed `max_steps=60` with no extension -- e.g. the original Phase 5
+CSV's -19.5 dBm row *did* already reach target via arclength even without
+this change, but -21.5 through -20.0 dBm needed the larger base budget to
+detect their fold at all). At -19.0 and -18.5 dBm, a fold is detected
+(`fold_lambda` populated) but even 150 further steps cannot cross back to
+`target_lam=1.0` -- the budget is exhausted on the returning branch, not
+before reaching the fold. This is the plan's anticipated "exhausts the new
+budget too" outcome. The measured `I_bound` (1.1628e-05 / 1.1633e-05 A)
+matches the previously-cited `1.1929e-05 A` to ~2.5%, using a properly
+fold-triggered (not merely budget-exhausted) measurement this time.
+
+**Verdict: CONFIRMED genuine fold at fp=7.9 GHz, `I_bound ~= 1.163e-05 A`.**
+This is the device's physical pump ceiling at this frequency, not a solver
+artifact -- no further remedy exists within this plan's scope (a returning
+branch may still exist further past 150 extra steps, but 150 is already
+~2.5x the ~76 steps a toy fold-and-return fixture needed end-to-end, so
+diminishing-returns applies; not pursued further here).
+
 ---
 
 ## Phase 3: Classify fp=7.0-type corrector death
@@ -261,8 +308,6 @@ append a "Phase 3 result" section after running)
 - If `bordered_conditioning` stays well-conditioned through the boundary but
   the corrector still dies: something else is wrong (candidate: Newton
   step-length control, not covered by this plan -- open a follow-up).
-  the corrector still dies: something else is wrong (candidate: Newton
-  step-length control, not covered by this plan -- open a follow-up).
 - If `bordered_conditioning` also degenerates at 8.640e-06 A: genuine branch
   point confirmed. Scope a separate deflation plan; do not implement deflation
   under this plan.
@@ -272,6 +317,57 @@ append a "Phase 3 result" section after running)
 **Automated**: n/a (measurement/classification phase).
 **Manual**: The decision-gate outcome above, written into this document with
 the actual `bordered_conditioning` numbers at and near the boundary.
+
+### Phase 3 result (measured 2026-08-07)
+
+Re-ran `scan_branch_singularity.py` on fp=7.0 GHz, -23.5..-21.0 dBm
+(`designs/ipm_2c_fixed`, `--arclength-max-steps 60
+--arclength-rescale-every 5 --eig-iters 5`,
+`outputs/phase3_rescale_classification/singularity_scan.csv`, mirrored at
+`D:\tmp\p3chk`). Compare against the original (pre-Phase-1) measurement at
+the same frequency (`outputs/phase5_singularity_scan/fp7p0/singularity_scan.csv`),
+where every failing row from -22.75 dBm (8.7326e-06 A) through -18.0 dBm
+showed `terminal_reason=minimum_step` and **no** `fold_lambda` ever
+populated -- the corrector simply stopped converging, full stop.
+
+| power (dBm) | current (A) | terminal_reason (old) | terminal_reason (new) | fold_lambda (new) |
+| ---: | ---: | :---: | :---: | ---: |
+| -22.5 | 8.988e-06 | minimum_step | max_steps | (none) |
+| -22.0 | 9.520e-06 | minimum_step | max_steps | 0.9273 |
+| -21.5 | 1.008e-05 | minimum_step | max_steps | 0.8758 |
+| -21.0 | 1.068e-05 | minimum_step | max_steps | 0.8090 |
+
+With `rescale_every=5`, `terminal_reason=minimum_step` **never occurs** in
+this range -- the corrector keeps making forward progress well past the old
+8.640e-06 A boundary (up to 1.068e-05 A tested, 24% higher), running out of
+the plain `max_steps=60` budget instead of dying, and now detects real folds
+in 3 of 4 points. This directly matches decision-gate outcome (a).
+
+`bordered_condition` (per-step CSV, `outputs/phase3_rescale_classification/singularity_scan_steps.csv`)
+ranged 5e10-2e13 across all four points, including well before the failing
+endpoint -- **not usable for a fold-vs-branch-point read here**: `--eig-iters
+5` (kept low to bound wall time on this already-expensive real-device check)
+is far too few power iterations for `bordered_conditioning` to have
+converged, unlike the small-fixture unit test (Phase 0) where it was
+validated finite/positive at a converged point, not calibrated at this
+scale. `min_eigenvalue` at the last accepted step of each point (188, -469,
+3.9e4, -3.3e3) is small compared to a healthy baseline (~1e5-1e6) but
+**not** categorically different from the *old* unrescaled measurement's own
+near-boundary values (e.g. original row at -21.5 dBm: -207.99) -- consistent
+with approaching a genuine singularity in both measurements, not new
+information on its own.
+
+**Verdict: (a) mistuning CONFIRMED, no further phase needed.** The Phase 1
+relative step floor / periodic rescale directly fixes the qualitative
+failure mode (`minimum_step` -> productive marching + real fold detection),
+letting the corrector reach currents beyond the previously-reported physical
+boundary. Reaching `target_lam=1.0` at these higher currents is now the same
+already-solved Phase 2 problem (round the detected fold with
+`max_steps_after_fold`), not a new fp=7.0-specific blocker. The
+`bordered_conditioning` branch-point check was inconclusive at the `iters=5`
+setting used here; if a firmer fold-vs-branch-point read is ever wanted at
+fp=7.0 it needs a re-run at `iters>=20` (Phase 0's tested default), but that
+is not required by outcome (a) and is not pursued further under this plan.
 
 ---
 
@@ -327,6 +423,135 @@ new CLI flags default to current behavior; `pytest -q` full suite green.
 either wider PASS coverage (if fold rounding/mistuning-fix succeeded) or a
 correctly-labeled fold boundary in place of a bare FAILED cell.
 
+### Phase 4 progress (2026-08-07)
+
+**Done:**
+- Change #1 (`_recover` arclength branch): `--recovery-arclength-rescale-every`
+  and `--recovery-arclength-max-steps-after-fold` wired into the
+  `solve_arclength` call at `scripts/run_gain_map.py` (both default `0`,
+  no-change). `pump_arclength_fold_current_a` recorded into the cell's row
+  when a fold is detected but the extended budget still can't reach
+  `target_lam=1.0`, whichever of the `--inproc-fail-fast` or final-reseed
+  exit path returns the cell (added to `write_points_csv`'s fieldnames).
+- Change #3 (docs): `CLAUDE.md`'s "Pseudo-arclength metric fix..." section
+  and memory `arclength-metric-bug-and-snaking-verdict.md` both updated with
+  the corrected Phase 2/3 verdicts.
+- Automated success criteria: `tests/test_run_gain_map_cli.py` gained
+  `test_recovery_arclength_flags_default_to_no_change`,
+  `test_recovery_arclength_flags_are_settable`, and
+  `test_write_points_csv_carries_arclength_fold_current` (28/28 pass). Full
+  fast suite (`pytest -q`, no `--run-slow`): 497 passed, 2 pre-existing
+  unrelated failures in `test_loss_model.py` (confirmed via `git stash` to
+  fail identically on the clean tree -- Norton-vs-legacy-convention tests
+  unrelated to this plan). `--run-slow` full suite run separately.
+
+**Deferred, not started -- both are large campaign-scale runs (hours), not
+code changes, and were not part of what was asked for this session:**
+- Change #2's full 19-frequency `--fold-follow` sweep re-run.
+- The Manual success criterion's full production 2c map re-run.
+
+Both remain open follow-up work. The per-point evidence gathered directly
+under Phases 2-3 (`outputs/phase2_fold_rounding_check/`,
+`outputs/phase3_rescale_classification/`) already demonstrates the fix works
+at the single-cell level at both frequencies; a full map re-run would
+confirm it at production scale but was not run in this session.
+
+### Reduced 4-frequency fold-follow sweep (measured 2026-08-07)
+
+User asked for a cut-down version of Change #2 to save time: 4 frequencies
+instead of 19, same 7.6-8.5 GHz band as the original investigation doc's
+sweep. `fold_power` (`solver.py`) did not accept `rescale_every`, so it was
+added (threaded through to its inner `solve_arclength` call) -- otherwise
+this re-run would repeat the exact metric-mistuning failure mode Phase 3
+diagnosed, silently reading as "no fold in range" again. `run_fold_follow`
+now forwards `--recovery-arclength-rescale-every` (same flag Phase 4 already
+added) into `fold_power`.
+
+Ran 4 evenly-spaced points (`linspace(7.6, 8.5, 4)` = 7.6/7.9/8.2/8.5 GHz,
+which conveniently includes fp=7.9 GHz), `--pump-power-max-dbm -16`
+(reference power for the lambda-to-current scaling),
+`--recovery-arclength-rescale-every 5`
+(`outputs/phase4_fold_follow_reduced/fold_curve.csv`):
+
+| freq (GHz) | fold_lambda | fold_power (dBm) |
+| ---: | ---: | ---: |
+| 7.6 | 0.5311 | -21.496 |
+| 7.9 | 0.6734 | -19.435 |
+| 8.2 | (none found within 120 steps) | -- |
+| 8.5 | 0.6438 | -19.825 |
+
+**3 of 4 points now find a real fold**, directly contradicting the original
+19-point sweep's "zero folds everywhere" (§2d of the 2026-08-06
+investigation doc) -- strong evidence that result really was the broken
+pre-Phase-1 metric, not a physics finding, as this plan's Phase 0-3 verdicts
+already concluded from the single-frequency data. The fp=7.9 GHz fold_lambda
+here (0.6734, referenced against `-16 dBm`) is not directly comparable to
+Phase 2's fold_lambda (0.9511/0.8984, referenced against the much lower
+-19.0/-18.5 dBm points near the production power ceiling) -- `fold_power`
+marches from `lambda=0` at a fixed high reference current and reports the
+*first* turning point encountered, which need not be the same fold Phase 2
+characterized near a different, lower operating point. 8.2 GHz finding none
+within 120 steps is a single data point at reduced resolution and is not
+strong evidence of "no fold at 8.2 GHz" on its own -- consistent with why
+the plan originally scoped a 19-point sweep rather than 4.
+
+**Still not done**: the full 19-point sweep at finer frequency resolution,
+and the full production map re-run. Both remain open follow-up work; this
+reduced sweep is corroborating evidence for the corrected verdicts, not a
+replacement for either.
+
+### Full 19-frequency fold-follow sweep (measured 2026-08-07)
+
+Same command as the reduced sweep, `--n-frequency 19` over the full
+7.6-8.5 GHz band, `--pump-power-max-dbm -16`,
+`--recovery-arclength-rescale-every 5`
+(`D:/tmp/phase4_fold_follow_full/fold_curve.csv`):
+
+| freq (GHz) | fold_lambda | fold_power (dBm) |
+| ---: | ---: | ---: |
+| 7.60 | 0.5311 | -21.496 |
+| 7.65 | 0.5677 | -20.918 |
+| 7.70 | 0.5697 | -20.887 |
+| 7.75 | 0.6419 | -19.850 |
+| 7.80 | 0.5637 | -20.980 |
+| 7.85 | 0.5309 | -21.499 |
+| 7.90 | 0.6734 | -19.435 |
+| 7.95 | 0.6164 | -20.202 |
+| 8.00 | 0.6831 | -19.310 |
+| 8.05 | 0.5676 | -20.919 |
+| 8.10 | 0.4893 | -22.208 |
+| 8.15 | 0.4452 | -23.029 |
+| 8.20 | (none found within 120 steps) | -- |
+| 8.25 | 0.6519 | -19.717 |
+| 8.30 | 0.6072 | -20.334 |
+| 8.35 | 0.5402 | -21.349 |
+| 8.40 | 0.6946 | -19.165 |
+| 8.45 | 0.7390 | -18.627 |
+| 8.50 | 0.6438 | -19.825 |
+
+**18 of 19 points find a real fold** -- only fp=8.20 GHz found none within
+the 120-step budget, matching that same frequency's result in the reduced
+sweep (which used the identical grid point). This is now the full-resolution
+replacement for the original 19-point sweep from the 2026-08-06 investigation
+doc's §2d, and it flatly contradicts that sweep's "zero folds everywhere"
+verdict: fold power ranges -18.6 to -23.0 dBm across the whole band, a
+~4.4 dB spread with no obvious trend against frequency (not monotone, not a
+simple envelope -- 8.45 GHz is the shallowest fold at -18.6 dBm, 8.15 GHz the
+deepest at -23.0 dBm, with no adjacent-frequency smoothness suggesting this
+is set by comb/lobe structure rather than a slowly-varying device property).
+
+The single fp=8.20 GHz non-detection does not reopen the "no fold" question
+generally -- it is one grid point at the sweep's `ds=0.02` step and
+`rescale_every=5` settings, not evidence the branch has no fold there; a
+finer local scan (smaller `ds`, or `max_steps_after_fold`) at that one
+frequency is the natural follow-up if it matters, not yet run.
+
+**Still open**: this sweep uses `fold_power`'s raw `solve_arclength` (no
+fold refinement -- Milestone D's `_refine_fold` added after this sweep ran is
+not yet wired into `fold_power`/`run_fold_follow`), so each `fold_lambda`
+above is a bracket-point estimate, not a refined root; and the full
+production gain-map re-run using this fold information is still not done.
+
 ---
 
 ## Testing strategy
@@ -354,6 +579,18 @@ full physics suite).
 - `scan_branch_singularity.py` re-runs at fp=7.9 and fp=7.0 GHz per phase
   (Phases 0, 2, 3 manual steps above).
 - Full `--run-slow` suite before any production wiring lands (Phase 4).
+
+### Final verification (2026-08-07)
+
+`pytest -q --run-slow` (full suite, `--basetemp` outside the repo per
+convention): **500 passed, 1 xfailed, 2 failed**. The 2 failures
+(`tests/test_loss_model.py::test_dbm_to_peak_current_applies_frequency_loss`,
+`::test_norton_current_is_2x_legacy_at_fixed_dbm`) are pre-existing and
+unrelated to this plan -- confirmed via `git stash` to fail identically on
+the clean pre-session tree (they assume Norton is the default power
+convention; per CLAUDE.md's "Port power convention" section the default was
+reverted back to `legacy_traveling_wave` in a prior session and these two
+tests were never updated). Not touched under this plan's scope.
 
 ---
 

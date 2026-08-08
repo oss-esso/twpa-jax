@@ -1,0 +1,105 @@
+{
+  "audit": {
+    "circuit_dir": "D:\\Projects\\Thesis\\twpa_jax\\designs\\ipm_2c_fixed",
+    "node_count": 6136,
+    "branch_count": 2508,
+    "c_nnz": 12671,
+    "g_nnz": 4,
+    "k_nnz": 15438,
+    "algebraic_nodes": [
+      4576
+    ],
+    "differential_nodes": 6135,
+    "c_factorable": true,
+    "algebraic_g_factorable": true,
+    "transient_integrator": "scipy.integrate.solve_ivp available; H3 uses sparse implicit trapezoid",
+    "source_convention": "peak Norton/current-source amplitude: I_p(t)=I_p cos(theta)",
+    "hb_convention": "X_k positive phasor, x(t)=2 Re sum X_k exp(+i k theta)"
+  },
+  "checkpoint": "g1_current_79\\pass\\points\\point_0012_p_m19p6842dbm_fp_7p9ghz\\pump",
+  "start_current_a": 1.1299598687329626e-05,
+  "target_current_a": 1.4e-05,
+  "ramp_periods": 20,
+  "hold_periods": 10,
+  "integrator": {
+    "success": true,
+    "message": "success",
+    "steps": 18850,
+    "newton_iterations": 18850
+  },
+  "classification": "BROADBAND_OR_CHAOTIC",
+  "stroboscopic": {
+    "periods": [
+      0.0,
+      1.0,
+      2.0,
+      3.0,
+      4.0,
+      5.0,
+      6.0,
+      7.0,
+      8.0,
+      9.0,
+      10.0
+    ],
+    "d1": [
+      0.008119005134721087,
+      0.008881180137830128,
+      0.00965934285217624,
+      0.010354288557624772,
+      0.010887011906854439,
+      0.01121846793985287,
+      0.011471388166536695,
+      0.01192283579087956,
+      0.012577379703589228
+    ],
+    "d2": [
+      0.016920547213380446,
+      0.01845782791703803,
+      0.019916388216098896,
+      0.021123374840958147,
+      0.021954151386089152,
+      0.022488185446583125,
+      0.023162990063606875,
+      0.024309130105895086,
+      0.025556901862232462
+    ],
+    "d3": [
+      0.02634884166895378,
+      0.02854285495195191,
+      0.030480412511327642,
+      0.031935119734406894,
+      0.0328878147402563,
+      0.03376044604179196,
+      0.03515075586114518,
+      0.036981003324905726
+    ],
+    "tail_median": 0.011471388166536695,
+    "tail_max": 0.012577379703589228,
+    "tail_d2_max": 0.025556901862232462,
+    "tail_d3_max": 0.036981003324905726
+  },
+  "mean_phase_velocity_rad_s": 638978.3436265271,
+  "mean_phase_winding_cycles": 0.00012872982521118024,
+  "branch_transfer": null,
+  "final_status": "REPRODUCIBLE_PHYSICAL_TRANSITION",
+  "blocker_reason": null,
+  "hb_checkpoint_summary": {
+    "x_rms": 2.1283424628945434e-15,
+    "x_max_abs": 5.775911829180584e-15,
+    "branch_psi_rms": 1.4844898053758318e-16,
+    "branch_psi_max_abs": 3.019052113289649e-16,
+    "branch_i_rms": 1.1284131946447035e-06,
+    "branch_i_max_abs": 2.1090224402941963e-06,
+    "X_h1_norm": 1.1788276811561738e-13,
+    "X_h2_norm": 1.0401841998050284e-15,
+    "X_h3_norm": 3.535921429731484e-16,
+    "X_h4_norm": 1.0278248998348952e-17,
+    "X_h5_norm": 3.699746955402044e-18,
+    "X_h6_norm": 1.010649354921908e-18,
+    "X_h7_norm": 1.6511193896031557e-19,
+    "X_h8_norm": 4.913950481718076e-20,
+    "X_h9_norm": 3.6692060872304516e-20,
+    "X_h10_norm": 5.29034773285445e-21
+  }
+}

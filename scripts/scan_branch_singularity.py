@@ -44,8 +44,9 @@ sys.path.insert(0, str(ROOT / "src"))
 from scripts import run_gain_map  # noqa: E402
 from twpa_solver.pump import hb as exp08  # noqa: E402
 from twpa_solver.pump.singularity import (  # noqa: E402
+    bordered_conditioning,
     jacobian_det_signature,
-    jacobian_min_eigenvalue,
+    jacobian_min_eigenvalue_with_estimator,
 )
 
 
@@ -59,6 +60,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--n-power", type=int, default=15)
     parser.add_argument("--arclength-ds", type=float, default=0.02)
     parser.add_argument("--arclength-max-steps", type=int, default=60)
+    parser.add_argument(
+        "--arclength-max-steps-after-fold", type=int, default=None,
+        help=(
+            "Once a fold is detected, extend the step budget to at least "
+            "fold_step + this many more steps (default None = no change from "
+            "--arclength-max-steps alone)."
+        ),
+    )
+    parser.add_argument(
+        "--arclength-rescale-every", type=int, default=0,
+        help="Recompute the arclength state_scale every N accepted steps (0 = disabled).",
+    )
     parser.add_argument("--eig-iters", type=int, default=20)
     parser.add_argument("--extra-engine-args", nargs=argparse.REMAINDER, default=[])
     return parser.parse_args()
@@ -110,6 +123,7 @@ def main() -> int:
 
     powers = np.linspace(cli.power_min_dbm, cli.power_max_dbm, cli.n_power)
     rows: list[dict[str, Any]] = []
+    step_rows: list[dict[str, Any]] = []
     prev_X: np.ndarray | None = None
     prev_current_a: float | None = None
 
@@ -140,10 +154,41 @@ def main() -> int:
             # from the last converged neighbour toward this target, at the
             # fraction of the way there that neighbour already represents.
             lam0 = min(prev_current_a / injected, 0.98) if injected > 0.0 else 0.0
+
+            step_counter = {"n": 0}
+
+            def _on_step(
+                Xc: np.ndarray, lamc: float, step_size: float,
+                Xdot: np.ndarray, lam_dot: float, state_scale: float,
+                *, _point_index: int = i,
+            ) -> None:
+                step_counter["n"] += 1
+                min_eig, min_eig_estimator = jacobian_min_eigenvalue_with_estimator(
+                    solve_problem, Xc, lamc, iters=cli.eig_iters,
+                )
+                cond = bordered_conditioning(
+                    solve_problem, Xc, lamc, Xdot, lam_dot, state_scale,
+                    iters=cli.eig_iters,
+                )
+                det_sign, log_abs_det = jacobian_det_signature(solve_problem, Xc, lamc)
+                step_rows.append({
+                    "point_index": _point_index,
+                    "step": step_counter["n"],
+                    "lam": lamc,
+                    "min_eigenvalue": min_eig,
+                    "min_eigenvalue_estimator": min_eig_estimator,
+                    "bordered_condition": cond,
+                    "det_sign": det_sign,
+                    "log_abs_det": log_abs_det,
+                })
+
             X_arc, lam_arc, arc_info = solver.solve_arclength(
                 solve_problem, prev_X, lam0,
                 ds=cli.arclength_ds, max_steps=cli.arclength_max_steps,
                 target_lam=1.0, max_wall_s=engine_args.inproc_solve_deadline_s,
+                on_step=_on_step,
+                rescale_every=cli.arclength_rescale_every,
+                max_steps_after_fold=cli.arclength_max_steps_after_fold,
             )
             arclength_used = True
             lam_reached = float(lam_arc)
@@ -155,7 +200,9 @@ def main() -> int:
 
         solve_wall_s = time.perf_counter() - t0
 
-        min_eig = jacobian_min_eigenvalue(solve_problem, X, lam_reached, iters=cli.eig_iters)
+        min_eig, min_eig_estimator = jacobian_min_eigenvalue_with_estimator(
+            solve_problem, X, lam_reached, iters=cli.eig_iters,
+        )
         det_sign, log_abs_det = jacobian_det_signature(solve_problem, X, lam_reached)
 
         X_full = solve_problem.reconstruct_full(X) if use_schur else X
@@ -177,6 +224,7 @@ def main() -> int:
             "arclength_fold_lambda": arc_info.get("fold_lambda"),
             "arclength_state_scale": arc_info.get("state_scale"),
             "min_eigenvalue": min_eig,
+            "min_eigenvalue_estimator": min_eig_estimator,
             "det_sign": det_sign,
             "log_abs_det": log_abs_det,
             "peak_i_over_ic": peak_i_over_ic,
@@ -204,9 +252,18 @@ def main() -> int:
         writer.writeheader()
         writer.writerows(rows)
 
+    steps_csv_path = cli.outdir / "singularity_scan_steps.csv"
+    if step_rows:
+        with open(steps_csv_path, "w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=list(step_rows[0].keys()))
+            writer.writeheader()
+            writer.writerows(step_rows)
+
     _write_plot(rows, cli.outdir / "singularity_scan.png", cli.pump_freq_ghz)
 
     print(f"csv={csv_path}")
+    if step_rows:
+        print(f"steps_csv={steps_csv_path}")
     return 0
 
 

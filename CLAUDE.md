@@ -570,46 +570,91 @@ borrow only, not a physics comparison; see `jc-is-not-a-reference`). Full
 plan: `docs/development/arclength_metric_fix_and_fold_test_function_plan.md`.
 
 New: `src/twpa_solver/pump/singularity.py` -- `jacobian_min_eigenvalue`
-(inverse power iteration on the exact real-packed Jacobian's factor/solve,
-same dispatch as `_linear_solver`) and `jacobian_det_signature` (sign/log|det|
-via SuperLU's `U` diagonal + permutation parity). These measure fold-vs-wall
-directly instead of inferring it from whether continuation happened to
-converge. Diagnostic driver: `scripts/scan_branch_singularity.py` (marches
-one frequency column in power, records both functions plus `peak_i_over_ic`
-per point; not wired into the production map).
+(shift-invert Arnoldi, `scipy.sparse.linalg.eigs(sigma=0)`, around the exact
+real-packed Jacobian's factor/solve as `OPinv`; falls back to the original
+inverse-power iteration if shift-invert fails to converge --
+`jacobian_min_eigenvalue_with_estimator` also returns which estimator
+produced the value), `jacobian_det_signature` (sign/log|det| via SuperLU's
+`U` diagonal + permutation parity), and `bordered_conditioning` (the
+fold-vs-branch-point discriminator: estimates the condition number of the
+same bordered system `solve_arclength`'s own corrector solves -- a fold
+leaves it well-conditioned even though `J` is singular, Keller 1977; a
+branch point, a rank-2 degeneracy, is not regularized by one border and
+degenerates the bordered system too). Diagnostic driver:
+`scripts/scan_branch_singularity.py` (marches one frequency column in power;
+`solve_arclength`'s `on_step` hook now feeds all three functions at every
+*accepted* continuation step via `singularity_scan_steps.csv`, not just once
+at the run's final endpoint -- the original single-endpoint measurement was
+comparing a healthy point on the branch to a healthy baseline and could not
+have detected a fold even where one existed; not wired into the production
+map). Full plan for the re-measurement below:
+`docs/development/arclength_fold_resolution_plan.md`.
 
-**Re-measured against the two decisive claims in
-`docs/development/2c_convergence_arclength_and_port_convention_investigation_2026-08-06.md`
-§2b/§2d**, both of which were produced by the broken instrument
-(`designs/ipm_2c_fixed`, 25 points each, -24..-18 dBm,
-`outputs/phase5_singularity_scan/{fp7p0,fp7p9}/`):
+**Both fp=7.9 GHz "confirmed NUMERICAL" and fp=7.0 GHz "genuine SNAKING"
+above are WITHDRAWN (measured 2026-08-07)** -- both verdicts were artifacts
+of the single-endpoint measurement bug just described, not of the metric
+fix itself. Re-measured with the per-step instrument on
+`designs/ipm_2c_fixed`:
 
-- **fp=7.9 GHz: confirmed NUMERICAL**, on real evidence this time. Fails only
-  from -19.0 to -18.0 dBm; `min_eigenvalue` in the failing band (1.9e5-6.6e5)
-  stays the same order as the converged baseline (2.6e5-1.4e7), `det_sign`
-  flips only 2/24 times. The Jacobian is not close to singular where Newton
-  fails -- a continuation-predictor artifact, matching the original verdict.
-- **fp=7.0 GHz: WRONG as "a genuine, tight fold" -- the real signature is
-  SNAKING.** Fails from -22.75 dBm onward (20/25 points) and never recovers;
-  `det_sign` flips 11/24 times (~every other point) and `min_eigenvalue`
-  collapses as low as 208 (vs. a 1.1e5-1.1e7 converged baseline) then
-  partially recovers and collapses again, rather than monotonically
-  approaching zero once. `peak_i_over_ic` stays flat (~0.43-0.48) throughout,
-  ruling out a critical-current mechanism. Repeated near-zero eigenvalue
-  crossings + multiple det-sign flips in one band is the Phase-6 SNAKING gate
-  criterion, not a simple fold -- consistent with this device's already-noted
-  peak-current hot-spot migrating between cells (1250-2500) rather than
-  growing smoothly in place. **No single scalar "fold power" exists to quote
-  at this frequency**; a grid point past the first snake onset may sit on a
-  branch continuation from lambda=0 can never reach. Deflation (Farrell et
-  al.), not more arclength tuning, is the indicated next tool -- scoped as a
-  separate Phase 6 plan, not started.
+- **fp=7.9 GHz: CONFIRMED genuine fold, `I_bound ~= 1.163e-05 A`.** With a
+  budget matched to where folds are actually detected
+  (`--arclength-max-steps 60`) plus a 150-step post-fold extension
+  (`docs/development/arclength_fold_resolution_plan.md` Phase 2,
+  `outputs/phase2_fold_rounding_check/singularity_scan.csv`): -22.0 through
+  -19.5 dBm now reach `target_lam=1.0` (the larger base budget alone lets
+  the corrector detect folds it previously ran out of steps before
+  reaching); at -19.0 and -18.5 dBm a fold *is* detected
+  (`fold_lambda`=0.9511/0.8984) but even 150 further steps cannot cross back
+  to target -- the budget is exhausted rounding the fold, not reaching it.
+  `I_bound = fold_lambda * injected_current` = 1.1628e-05 / 1.1633e-05 A,
+  matching this section's earlier (differently-derived) `1.1929e-05 A`
+  figure to ~2.5%. This is the device's physical pump ceiling at this
+  frequency, not a solver artifact.
+- **fp=7.0 GHz: mistuning CONFIRMED, not a branch point/snaking.** The
+  original measurement's `terminal_reason=minimum_step` with no `lam_dot`
+  sign flip, from -22.75 dBm onward, is what a mistuned arclength metric
+  looks like, not what snaking looks like. With Phase 1's periodic metric
+  rescale (`solve_arclength(..., rescale_every=5)`,
+  `outputs/phase3_rescale_classification/singularity_scan.csv`),
+  `terminal_reason=minimum_step` **never occurs** from -22.5 through
+  -21.0 dBm (24% above the old 8.640e-06 A boundary) -- the corrector makes
+  productive progress and now detects real folds (`fold_lambda`
+  0.81-0.93) instead of collapsing. Reaching `target_lam=1.0` from here is
+  the same already-solved fp=7.9 GHz fold-rounding problem, not a
+  fp=7.0-specific blocker. `bordered_conditioning` was inconclusive at this
+  measurement's `--eig-iters 5` (too few power iterations to have
+  converged at that setting) and is not needed for this verdict.
 
-Not yet re-run under the fixed instrument: the full 19-frequency
-`--fold-follow` sweep (§2d's "zero folds everywhere" was measured with the
-broken metric and is unreliable pending a re-run) and any fp=7.0 GHz fold
-*location* number from prior sessions (e.g. "lambda~0.97") -- both are open
-follow-up work, not re-affirmed results.
+**Deflation is NOT needed for either frequency** -- the decisive prior
+claim ("Deflation ... is the indicated next tool") is retracted along with
+the SNAKING verdict it was based on. Full write-up including the
+intermediate wrong turns (a first fold-rounding attempt with too small a
+base budget that never triggered the extension at all) and raw per-step
+data: `docs/development/arclength_fold_resolution_plan.md`.
+
+Still not re-run at full resolution: the 19-frequency `--fold-follow` sweep
+(§2d's "zero folds everywhere" was measured with the pre-Phase-1 metric).
+A reduced 4-point version (7.6/7.9/8.2/8.5 GHz, `--recovery-arclength-
+rescale-every 5`, `outputs/phase4_fold_follow_reduced/fold_curve.csv`) found
+real folds at 3 of 4 points (fold power -19.4 to -21.5 dBm) -- directly
+contradicting "zero folds everywhere" and corroborating the retraction
+above. `fold_power` (`solver.py`) gained the same `rescale_every` parameter
+as `solve_arclength` for this; without it, a re-run would have repeated the
+exact mistuning failure mode. Any fp=7.0 GHz fold *location* number from
+sessions before this one (e.g. "lambda~0.97") remains unreliable and not
+re-affirmed; the full-resolution 19-point sweep is still open follow-up work.
+
+`run_gain_map.py`'s `--fold-policy arclength` recovery now accepts
+`--recovery-arclength-rescale-every` (default `0`, disabled) and
+`--recovery-arclength-max-steps-after-fold` (default `0`, disabled --
+mathematically identical to `solve_arclength`'s own `None` default, not
+merely empirically so: the extension is `max(effective_max_steps, fold_step
++ N)`, and `fold_step <= effective_max_steps` always holds by the loop's own
+invariant, so `N=0` can never raise it). When a fold is detected but the
+extended budget still cannot reach `target_lam=1.0`, the cell's row records
+`pump_arclength_fold_current_a` (the fold's physical boundary current)
+instead of a bare failure, on whichever of `--inproc-fail-fast` or the final
+reseed fallback ends up returning the cell.
 
 ## Continuation-method suite (`run_gain_map.py` + `solver.py`)
 

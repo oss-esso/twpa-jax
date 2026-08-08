@@ -1,0 +1,132 @@
+{
+  "audit": {
+    "circuit_dir": "D:\\Projects\\Thesis\\twpa_jax\\designs\\ipm_2c_fixed",
+    "node_count": 6136,
+    "branch_count": 2508,
+    "c_nnz": 12671,
+    "g_nnz": 4,
+    "k_nnz": 15438,
+    "algebraic_nodes": [
+      4576
+    ],
+    "differential_nodes": 6135,
+    "c_factorable": true,
+    "algebraic_g_factorable": true,
+    "transient_integrator": "scipy.integrate.solve_ivp available; H3 uses sparse implicit trapezoid",
+    "source_convention": "peak Norton/current-source amplitude: I_p(t)=I_p cos(theta)",
+    "hb_convention": "X_k positive phasor, x(t)=2 Re sum X_k exp(+i k theta)"
+  },
+  "checkpoint": "g1_current_79\\pass\\points\\point_0012_p_m19p6842dbm_fp_7p9ghz\\pump",
+  "start_current_a": 1.1299598687329626e-05,
+  "target_current_a": 1.14e-05,
+  "ramp_periods": 10,
+  "hold_periods": 10,
+  "integrator": {
+    "success": true,
+    "message": "success",
+    "steps": 12567,
+    "newton_iterations": 12567
+  },
+  "classification": "PERIOD_1",
+  "stroboscopic": {
+    "periods": [
+      0.0,
+      1.0,
+      2.0,
+      3.0,
+      4.0,
+      5.0,
+      6.0,
+      7.0,
+      8.0,
+      9.0,
+      10.0
+    ],
+    "d1": [
+      0.0002485170745184353,
+      0.00025198040665337234,
+      0.00029199516794996993,
+      0.00034162865669821123,
+      0.0003887782123650416,
+      0.00042448371675623923,
+      0.00045399428572116433,
+      0.0004735900937876096,
+      0.0004907608948021503
+    ],
+    "d2": [
+      0.00048524047239025377,
+      0.0005366191957524487,
+      0.0006271494247493785,
+      0.0007251701459944403,
+      0.0008080212066596539,
+      0.0008725673233427107,
+      0.0009205646861652085,
+      0.0009562808792798062,
+      0.0009889713720637428
+    ],
+    "d3": [
+      0.0007559275994074601,
+      0.0008593934592468899,
+      0.0010007889391510565,
+      0.0011354125011852456,
+      0.0012463353691332952,
+      0.0013278744558687956,
+      0.0013895551921845439,
+      0.0014380548971951609
+    ],
+    "tail_median": 0.00045399428572116433,
+    "tail_max": 0.0004907608948021503,
+    "tail_d2_max": 0.0009889713720637428,
+    "tail_d3_max": 0.0014380548971951609
+  },
+  "mean_phase_velocity_rad_s": -9047.247025845305,
+  "mean_phase_winding_cycles": -1.822676057639121e-06,
+  "branch_transfer": {
+    "projection_error_rms": 0.0008545480312108813,
+    "hb_converged": false,
+    "hb_coeff_rel": 0.010512038606232654,
+    "hb_time_rel": 0.010512038606233096,
+    "hb_newton_iterations": 4,
+    "hb_runtime_s": 2.7525538000045344,
+    "transient_rj": 0.7940019033853883,
+    "hb_rj": 0.8480260413758561,
+    "hb_solution_summary": {
+      "x_rms": 2.1460936437606844e-15,
+      "x_max_abs": 5.8315682366485e-15,
+      "branch_psi_rms": 1.4905708908850128e-16,
+      "branch_psi_max_abs": 3.3313731219492423e-16,
+      "branch_i_rms": 1.1314961345141802e-06,
+      "branch_i_max_abs": 2.252545924595003e-06,
+      "X_h1_norm": 1.1886215340002187e-13,
+      "X_h2_norm": 1.3612225204031906e-15,
+      "X_h3_norm": 5.27069347574713e-16,
+      "X_h4_norm": 1.714547216260252e-17,
+      "X_h5_norm": 7.586664411248299e-18,
+      "X_h6_norm": 3.119016407833273e-18,
+      "X_h7_norm": 7.525688243999182e-19,
+      "X_h8_norm": 5.902573589252138e-19,
+      "X_h9_norm": 5.448236748609762e-19,
+      "X_h10_norm": 5.076055232252679e-19
+    }
+  },
+  "final_status": "TRANSIENT_NUMERICAL_BLOCKER",
+  "blocker_reason": "period-1 transient did not seed a converged fixed-drive HB root",
+  "hb_checkpoint_summary": {
+    "x_rms": 2.1283424628945434e-15,
+    "x_max_abs": 5.775911829180584e-15,
+    "branch_psi_rms": 1.4844898053758318e-16,
+    "branch_psi_max_abs": 3.019052113289649e-16,
+    "branch_i_rms": 1.1284131946447035e-06,
+    "branch_i_max_abs": 2.1090224402941963e-06,
+    "X_h1_norm": 1.1788276811561738e-13,
+    "X_h2_norm": 1.0401841998050284e-15,
+    "X_h3_norm": 3.535921429731484e-16,
+    "X_h4_norm": 1.0278248998348952e-17,
+    "X_h5_norm": 3.699746955402044e-18,
+    "X_h6_norm": 1.010649354921908e-18,
+    "X_h7_norm": 1.6511193896031557e-19,
+    "X_h8_norm": 4.913950481718076e-20,
+    "X_h9_norm": 3.6692060872304516e-20,
+    "X_h10_norm": 5.29034773285445e-21
+  }
+}

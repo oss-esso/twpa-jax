@@ -19,9 +19,11 @@ _SRC = Path(__file__).resolve().parents[1] / "src"
 sys.path.insert(0, str(_SRC))
 
 from twpa_solver.pump.singularity import (  # noqa: E402
+    _assembled_jacobian_matrix,
     _permutation_parity,
     jacobian_det_signature,
     jacobian_min_eigenvalue,
+    smallest_singular_triplets,
 )
 
 
@@ -133,3 +135,106 @@ def test_min_eigenvalue_invariant_under_state_rescaling() -> None:
     eig_unit = jacobian_min_eigenvalue(problem_unit, X_unit, 0.5, iters=40)
     eig_scaled = jacobian_min_eigenvalue(problem_scaled, X_scaled, 0.5, iters=40)
     assert eig_scaled == pytest.approx(eig_unit, rel=1e-6)
+
+
+class _CachedMutableFactor:
+    """Mimics the production ``FastCoupledPreconditioner``: one object,
+    mutated in place on every ``refactor``/assemble call, exactly the
+    pattern that caused the aliasing bug this test guards against."""
+
+    def __init__(self) -> None:
+        self.M = sp.csr_matrix(np.array([[1.0]], dtype=np.float64))
+
+    def solve(self, b: np.ndarray) -> np.ndarray:
+        return b / self.M[0, 0]
+
+
+class _FastCachedStubProblem:
+    """Duck-typed stand-in for ``SchurReducedProblem``: exposes
+    ``assemble_real_coupled_fast`` returning the SAME cached factor object
+    every call, mutated to reflect the tangent passed in -- the real
+    caching behavior ``_assembled_jacobian_matrix`` must not be fooled by."""
+
+    def __init__(self) -> None:
+        self._factor = _CachedMutableFactor()
+
+    def tangent_state(self, X: np.ndarray) -> np.ndarray:
+        return X
+
+    def assemble_real_coupled_fast(self, tangent: np.ndarray) -> _CachedMutableFactor:
+        self._factor.M = sp.csr_matrix(np.array([[float(tangent[0, 0])]], dtype=np.float64))
+        return self._factor
+
+
+def test_assembled_jacobian_matrix_is_not_aliased_across_calls() -> None:
+    # Regression for the Milestone F.5 bug: _assembled_jacobian_matrix used
+    # to return a direct reference to the production preconditioner's
+    # cached, in-place-mutated buffer, so two snapshots at different X
+    # silently became the SAME object once the second call ran -- any
+    # finite-difference-style comparison saw an exact-zero difference
+    # regardless of the true derivative. This is exactly what happened to
+    # the finite-difference alpha at mu~0.5253 on designs/ipm_2c_fixed
+    # (bit-identical "difference" that was really `Ma is Mb`), while the
+    # unrelated exact AFT alpha (which never calls this function) found the
+    # true value to be hugely nonzero.
+    problem = _FastCachedStubProblem()
+    Ma = _assembled_jacobian_matrix(problem, np.array([[1.0]]))
+    Mb = _assembled_jacobian_matrix(problem, np.array([[2.0]]))
+
+    assert Ma is not Mb
+    assert Ma[0, 0] == pytest.approx(1.0)
+    assert Mb[0, 0] == pytest.approx(2.0)
+
+
+def _folding_branch():
+    """Shared real-solver fixture for the smallest_singular_triplets tests
+    below: the same 1-DOF near-resonant fold used throughout
+    test_advanced_continuation.py (genuine fold at lambda~0.7808)."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from test_advanced_continuation import _build_folding_problem, _solver  # noqa: PLC0415
+
+    from twpa_solver.pump.solver import trace_branch  # noqa: PLC0415
+
+    solver = _solver()
+    problem = _build_folding_problem(pump_current=1.0)
+    branch = trace_branch(
+        solver, problem, i_ref=1.0, mu0=0.0, mu_max=1.0, ds=0.05, max_steps=250,
+    )
+    return problem, branch
+
+
+def test_smallest_singular_triplets_shrinks_near_a_known_fold() -> None:
+    # Milestone F's core premise: sigma1(J) should fall toward zero as the
+    # branch approaches a genuine fold, and stay comparatively large away
+    # from it -- this is the real-solver analogue of the eigenvalue check
+    # test_det_signature_flips_sign_across_a_turning_point already runs on a
+    # hand-built spectrum, but on the actual Jacobian this repo assembles.
+    problem, branch = _folding_branch()
+    near_fold_pt = min(branch.points, key=lambda p: abs(p.mu - 0.7808))
+    far_pt = min(branch.points, key=lambda p: abs(p.mu - 0.1))
+
+    triplet_near = smallest_singular_triplets(problem, near_fold_pt.X, k=2, iters=40)
+    triplet_far = smallest_singular_triplets(problem, far_pt.X, k=2, iters=40)
+
+    assert triplet_near.converged and triplet_near.estimator == "augmented_shift_invert"
+    assert triplet_far.converged and triplet_far.estimator == "augmented_shift_invert"
+    assert triplet_near.sigma[0] < triplet_far.sigma[0]
+
+    hat_near = triplet_near.sigma[0] / triplet_near.sigma_ref
+    hat_far = triplet_far.sigma[0] / triplet_far.sigma_ref
+    assert hat_near < hat_far
+
+
+def test_smallest_singular_triplets_vectors_are_unit_norm_and_finite() -> None:
+    problem, branch = _folding_branch()
+    near_fold_pt = min(branch.points, key=lambda p: abs(p.mu - 0.7808))
+
+    triplet = smallest_singular_triplets(problem, near_fold_pt.X, k=2, iters=40)
+
+    assert triplet.converged
+    assert len(triplet.sigma) == 2
+    assert triplet.sigma[0] <= triplet.sigma[1]
+    for u, v in zip(triplet.u, triplet.v):
+        assert np.all(np.isfinite(u)) and np.all(np.isfinite(v))
+        assert np.linalg.norm(u) == pytest.approx(1.0, rel=1e-6)
+        assert np.linalg.norm(v) == pytest.approx(1.0, rel=1e-6)

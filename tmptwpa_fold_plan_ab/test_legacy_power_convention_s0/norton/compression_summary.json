@@ -1,0 +1,158 @@
+{
+  "status": "VALID_SOLVED",
+  "stability_status": "NOT_CHECKED",
+  "stability_points": {},
+  "circuit_source": "jpa",
+  "pump_freq_ghz": 4.75001,
+  "signal_ghz": 4.75,
+  "pump_current_a": 1.13e-08,
+  "pump_current_source": "explicit_current",
+  "pump_power_dbm": null,
+  "pump_converged": true,
+  "pump_current_jc_scale": 1.0,
+  "pump_solution_dir": null,
+  "source_port": 1,
+  "pump_port": 1,
+  "out_port": 1,
+  "diagnostic_port": 1,
+  "attenuation_db": 0.0,
+  "signal_attenuation_db": 0.0,
+  "signal_current_min_a": 1e-12,
+  "signal_current_max_a": 3e-08,
+  "signal_current_source": "explicit_current",
+  "signal_power_min_dbm": null,
+  "signal_power_max_dbm": null,
+  "signal_attenuation_source": "explicit_both",
+  "pump_attenuation_db": 0.0,
+  "pump_attenuation_source": "explicit_both",
+  "attenuation_source": "explicit_both",
+  "power_convention": "norton",
+  "small_signal_gain_db": 7.402509879059095,
+  "small_signal_gain_vs_off_db": 7.402509879059095,
+  "small_signal_floor_delta_db": 0.007377821318654831,
+  "small_signal_floor_tol_db": 0.05,
+  "small_signal_floor_flat": true,
+  "pump_off_gain_db": 3.2787133862811696e-14,
+  "pump_reference_s21_real": -0.39844317828574427,
+  "pump_reference_s21_imag": -0.9171757254527512,
+  "p1db": -146.9576012582894,
+  "p1db_method": "interpolated",
+  "p1db_smooth_dbm": -146.9576012582894,
+  "p_sc_dbm": null,
+  "p1db_effective_dbm": -146.9576012582894,
+  "p1db_effective_status": "SMOOTH_COMPRESSION",
+  "p1db_interpolated_dbm": -146.9576012582894,
+  "first_1db_crossing_dbm": -134.8843810057643,
+  "number_of_crossings": 1,
+  "n_requested_power_points": 5,
+  "n_failed_power_points": 0,
+  "failed_signal_power_dbm": [],
+  "failed_power_point_statuses": [],
+  "p1db_degraded": false,
+  "p1db_refinement_failure": null,
+  "nonmonotonic_compression": true,
+  "compression_model_depletion_only_description": "dB gain from the linear-gain depletion trend; not an acceptance oracle",
+  "max_power_balance_rel_err": 2.3852742768593723e-11,
+  "max_external_power_balance_rel_err": 1.00158700238079,
+  "max_manley_rowe_rel_err": 0.0009184778892214974,
+  "max_external_manley_rowe_rel_err": 0.0041053437395688055,
+  "p1db_signal_current_a": 5.677797881273225e-10,
+  "p1db_input_dbm": -146.9576012582894,
+  "p1db_output_dbm": -140.5550913792303,
+  "p1db_state_status": "VALID_SOLVED",
+  "p1db_pump_depletion_db": -1.397674431967423,
+  "p1db_pump_depletion_all_port_db": -1.3976744319674235,
+  "p1db_pump_depletion_all_port_db_status": "TRUSTED_POST_EXP29_TRACK1",
+  "p1db_pump_net_power_delta_w": 2.1960069101050117e-16,
+  "p1db_external_supplied_power": -3.216202381477839e-25,
+  "p1db_external_power_balance_rel_err": 0.9999993868071628,
+  "message": null,
+  "multitone_preconditioner": "real_coupled_fast",
+  "multitone_backend": "full",
+  "factor_backend": "pardiso",
+  "recovery": "ladder",
+  "basis": {
+    "tones": [
+      {
+        "h": 1,
+        "q": 0
+      },
+      {
+        "h": 3,
+        "q": 0
+      },
+      {
+        "h": 5,
+        "q": 0
+      },
+      {
+        "h": 7,
+        "q": 0
+      },
+      {
+        "h": 9,
+        "q": 0
+      },
+      {
+        "h": 11,
+        "q": 0
+      },
+      {
+        "h": 13,
+        "q": 0
+      },
+      {
+        "h": 15,
+        "q": 0
+      },
+      {
+        "h": 17,
+        "q": 0
+      },
+      {
+        "h": 19,
+        "q": 0
+      },
+      {
+        "h": 1,
+        "q": 1
+      },
+      {
+        "h": 0,
+        "q": 1
+      },
+      {
+        "h": 1,
+        "q": -1
+      },
+      {
+        "h": 2,
+        "q": -1
+      },
+      {
+        "h": 3,
+        "q": -1
+      }
+    ],
+    "omega_p": 29845193040.956104,
+    "delta": 62831.85307312012,
+    "pump_tone": {
+      "h": 1,
+      "q": 0
+    },
+    "n_p": 78,
+    "n_delta": 6,
+    "real_reconstruction_factor": 2.0,
+    "phase_convention": "exp_plus_i_(h_theta_p_plus_q_theta_delta)"
+  },
+  "multitone_basis": "matched",
+  "multitone_sidebands": 2,
+  "n_signal_power": 5,
+  "resource_budget_gb": 8.0,
+  "signal_frequency_range_ghz": [
+    4.75,
+    4.75
+  ],
+  "n_signal_freq": 1,
+  "signal_workers": 1
+}

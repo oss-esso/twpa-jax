@@ -1205,6 +1205,111 @@ class InProcessEngine:
             return guess, info
         return None, info
 
+    def solve_arclength_forward(
+        self,
+        freq_ghz: float,
+        from_X: np.ndarray,
+        from_current: float,
+        to_current: float,
+        *,
+        ds: float = 0.01,
+        max_steps: int = 150,
+        max_steps_after_fold: int | None = 30,
+        deadline_s: float = 60.0,
+    ) -> tuple[np.ndarray | None, dict[str, Any]]:
+        """Local pseudo-arclength continuation from one converged state.
+
+        Milestone G0 (fold_plan.md) recovery tier 3: unlike ``solve_bridge``
+        (physical-parameter Newton march, no fold awareness) and unlike the
+        cold ``solve_arclength`` continuation option in ``solve_point``
+        (starts from ``X=0``, ``mu=0`` every time), this starts the bordered
+        corrector directly at the last converged point (``from_X``,
+        ``mu0=from_current/to_current``) and marches to ``target_mu=1.0``
+        (``i_ref=to_current``, so ``k=1`` -- ``solve_arclength_mu`` reduces
+        to ``solve_arclength`` exactly). ``solve_arclength_mu`` already stops
+        as soon as ``target_mu`` is reached, so this needs no separate
+        bracket+Newton step -- "terminate immediately once the target is
+        reached" is the underlying corrector's own behavior. Bounded
+        ``max_steps``/``max_steps_after_fold``/``deadline_s`` keep this a
+        LOCAL recovery attempt, not a full branch trace.
+        """
+        full_problem, _basis, _omega = self._build_problem(freq_ghz, to_current)
+        solve_problem = self._make_solve_problem(full_problem, freq_ghz)
+        solver = exp08.HarmonicNewtonKrylovSolver(self._settings())
+        mu0 = from_current / to_current
+        X_final, mu_final, info = solver.solve_arclength_mu(
+            solve_problem, from_X, mu0, i_ref=to_current, target_mu=1.0,
+            ds=ds, max_steps=max_steps, max_wall_s=deadline_s,
+            rescale_every=5, max_steps_after_fold=max_steps_after_fold,
+            step_control="adaptive", refine_fold=True,
+        )
+        info["mu_final"] = mu_final
+        if info.get("reached_target"):
+            return X_final, info
+        return None, info
+
+    def solve_frequency_substep(
+        self,
+        from_freq_ghz: float,
+        to_freq_ghz: float,
+        current_a: float,
+        from_X: np.ndarray,
+        *,
+        init_step_ghz: float = 0.01,
+        min_step_ghz: float = 0.0005,
+        deadline_s: float = 60.0,
+    ) -> tuple[np.ndarray | None, dict[str, Any]]:
+        """Adaptive natural-parameter continuation along frequency, fixed power.
+
+        Milestone G0 recovery tier 4: mirrors ``solve_power_substep`` exactly
+        (warm-started full-scale Newton per micro-step, grows x1.5 on
+        success, halves on failure, ``step_floor`` when it must shrink below
+        ``min_step_ghz``) but steps ``freq_ghz`` linearly at fixed
+        ``current_a`` instead of stepping current geometrically at fixed
+        frequency -- the two axes of the map are physically different
+        (dispersion vs. drive amplitude), so frequency steps additively
+        rather than in dB.
+        """
+        info: dict[str, Any] = {
+            "reached_target": False, "substeps": 0, "min_step_ghz": init_step_ghz,
+            "terminal_reason": "", "last_freq_ghz": from_freq_ghz,
+        }
+        if from_X is None or from_freq_ghz == to_freq_ghz:
+            info["terminal_reason"] = "noop"
+            return None, info
+        solver = exp08.HarmonicNewtonKrylovSolver(self._settings())
+        direction = 1.0 if to_freq_ghz > from_freq_ghz else -1.0
+        total = abs(to_freq_ghz - from_freq_ghz)
+        t0 = time.perf_counter()
+        guess = from_X
+        done = 0.0
+        step = min(init_step_ghz, total)
+        while done < total - 1e-12:
+            if time.perf_counter() - t0 > deadline_s:
+                info["terminal_reason"] = "deadline"
+                break
+            trial_done = min(done + step, total)
+            trial_freq = from_freq_ghz + direction * trial_done
+            prob, _basis, _omega = self._build_problem(trial_freq, current_a)
+            solve_prob = self._make_solve_problem(prob, trial_freq)
+            X, report = solver.solve_one(solve_prob, guess, 1.0)
+            info["substeps"] += 1
+            if report.converged:
+                guess, done = X, trial_done
+                info["last_freq_ghz"] = from_freq_ghz + direction * done
+                step = min(init_step_ghz, step * 1.5)
+            else:
+                step *= 0.5
+                info["min_step_ghz"] = min(info["min_step_ghz"], step)
+                if step < min_step_ghz:
+                    info["terminal_reason"] = "step_floor"
+                    break
+        if done >= total - 1e-12:
+            info["reached_target"] = True
+            info["terminal_reason"] = "reached"
+            return guess, info
+        return None, info
+
     def trace_column_arclength(
         self,
         freq_ghz: float,
@@ -1971,6 +2076,7 @@ def _recover(
     i, j = point.i_power, point.j_freq
     parent_i = solved.get((i - 1, j)) or solved.get((i, j - 1)) or solved.get((i - 1, j - 1))
     last_row, last_X = failed_row, failed_X
+    arclength_fold_current: float | None = None
 
     def bridge_from(cell) -> tuple[dict, np.ndarray | None, bool] | None:
         if cell is None:
@@ -2064,7 +2170,10 @@ def _recover(
         try:
             X_arc, _lam, info = solver.solve_arclength(
                 solve_problem, X0, lam0, ds=0.02, max_steps=60, target_lam=1.0,
-                max_wall_s=engine.args.inproc_solve_deadline_s)
+                max_wall_s=engine.args.inproc_solve_deadline_s,
+                rescale_every=args.recovery_arclength_rescale_every,
+                max_steps_after_fold=args.recovery_arclength_max_steps_after_fold,
+            )
         except (RuntimeError, FloatingPointError, ValueError, OverflowError) as exc:
             # solve_arclength itself now catches a singular-factor RuntimeError
             # internally and returns a terminal_reason instead of raising; this
@@ -2087,10 +2196,22 @@ def _recover(
             if ok:
                 return row, X, True, "arclength"
             last_row, last_X = row, X
+        elif info.get("fold_lambda") is not None:
+            # A real fold was found (see docs/development/
+            # arclength_fold_resolution_plan.md Phase 2) but even the
+            # extended budget could not round it back to target_lam=1 --
+            # record the fold's physical boundary current so whichever row
+            # this function ultimately returns reports it instead of a bare
+            # failure (injected just before each return below, since neither
+            # fail_fast's last_row nor the final reseed attempt's fresh row
+            # exists yet at this point).
+            arclength_fold_current = float(info["fold_lambda"]) * cur_t
 
     # Fail-fast still permits the explicitly selected cheap recovery policy,
     # but does not pay for a fresh continuation after those attempts fail.
     if args.inproc_fail_fast:
+        if arclength_fold_current is not None and last_row is not None:
+            last_row["pump_arclength_fold_current_a"] = arclength_fold_current
         logger.debug("recovery_end point=%d tag=fail_fast", point.index)
         return last_row, last_X, False, "fail_fast"
 
@@ -2099,6 +2220,8 @@ def _recover(
     # so a failing point here doesn't degrade every later point in this
     # long-lived worker (see the reseed-retry fix in run_warm_pass_inprocess).
     row, X, ok = _attempt(engine, point, pass_dir, prebuilt, mode="seed", warm_X=None)
+    if not ok and arclength_fold_current is not None:
+        row["pump_arclength_fold_current_a"] = arclength_fold_current
     gc.collect()
     logger.debug("recovery_end point=%d tag=reseed ok=%s", point.index, ok)
     return row, X, ok, "reseed"
@@ -2125,7 +2248,10 @@ def run_fold_follow(engine: InProcessEngine, freqs: np.ndarray, outdir: Path,
         full_problem, _basis, _omega = engine._build_problem(f, ref_injected)
         # Solve on the Schur-reduced problem for speed (constant retained shape).
         problem = engine._make_solve_problem(full_problem, f)
-        lam_fold = fold_power(solver, problem, max_steps=120)
+        lam_fold = fold_power(
+            solver, problem, max_steps=120,
+            rescale_every=args.recovery_arclength_rescale_every,
+        )
         fold_dbm = (peak_current_to_power_dbm(lam_fold * ref_injected / scale, f, args)
                     if lam_fold is not None else None)
         rows.append({"pump_freq_ghz": f, "fold_lambda": lam_fold,
@@ -2349,6 +2475,7 @@ def write_points_csv(path: Path, rows: list[dict[str, Any]]) -> None:
         "pump_continuation_runtime_s",
         "pump_column_arclength_fold_lambda",
         "pump_column_arclength_terminal_reason",
+        "pump_arclength_fold_current_a",
         "gain_total_runtime_s", "gain_wall_runtime_s", "gain_gamma_hat_runtime_s",
         "gain_khat_build_runtime_s", "gain_khat_off_runtime_s",
         "gain_matrix_assemble_runtime_s", "gain_factor_solve_runtime_s",
@@ -2789,6 +2916,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                    "short-circuit. 'patience' (legacy) counts every fail; the "
                    "others require cross-axis / bridge / full recovery to also fail "
                    "first; 'arclength' rounds the fold with pseudo-arclength.")
+    p.add_argument("--recovery-arclength-rescale-every", type=int, default=0,
+                   help="With --fold-policy arclength: recompute the arclength "
+                   "state_scale every N accepted steps (0 = disabled, matches "
+                   "solve_arclength's own default -- no behavior change).")
+    p.add_argument("--recovery-arclength-max-steps-after-fold", type=int, default=0,
+                   help="With --fold-policy arclength: once a fold is detected, "
+                   "extend the step budget to at least fold_step + this many more "
+                   "steps (0 = disabled -- no behavior change; see "
+                   "docs/development/arclength_fold_resolution_plan.md Phase 2/4).")
     p.add_argument("--inproc-continuation",
                    choices=["fixed", "adaptive_copy", "adaptive_secant",
                             "adaptive_tangent", "affine", "ptc", "arclength"],

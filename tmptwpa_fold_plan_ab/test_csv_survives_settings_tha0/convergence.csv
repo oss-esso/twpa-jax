@@ -1,0 +1,10 @@
+basis_kind,signal_order_max,pump_policy,pump_order,torus_scale,n_tones,n_p,n_delta,p1db_dbm,small_signal_gain_db,even_pump_fraction,runtime_s,p1db_method,status,message
+lattice,1,odd,3,1,0,0,0,nan,nan,nan,4.800000169780105e-06,none,TIMEOUT,synthetic budget stop
+lattice,2,odd,3,1,0,0,0,nan,nan,nan,3.1999989005271345e-06,none,TIMEOUT,synthetic budget stop
+lattice,3,odd,3,1,0,0,0,nan,nan,nan,1.6000012692529708e-06,none,TIMEOUT,synthetic budget stop
+lattice,3,odd,1,1,0,0,0,nan,nan,nan,1.0999992809956893e-06,none,TIMEOUT,synthetic budget stop
+lattice,3,odd,2,1,0,0,0,nan,nan,nan,1.2000000424450263e-06,none,TIMEOUT,synthetic budget stop
+lattice,3,odd,3,2,0,0,0,nan,nan,nan,1.1000010999850929e-06,none,TIMEOUT,synthetic budget stop
+three_tone,1,odd,1,1,0,0,0,nan,nan,nan,2.599999788799323e-06,none,TIMEOUT,synthetic budget stop
+lattice,1,odd,1,1,0,0,0,nan,nan,nan,1.5999994502635673e-06,none,TIMEOUT,synthetic budget stop
+lattice,3,dense,5,1,0,0,0,nan,nan,nan,8.999995770864189e-07,none,TIMEOUT,synthetic budget stop

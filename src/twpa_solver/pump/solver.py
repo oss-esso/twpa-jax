@@ -97,6 +97,75 @@ def _finite_residual(norms: dict[str, float | None]) -> bool:
     return value is not None and math.isfinite(float(value))
 
 
+def _rescale_arclength_tangent(
+    Xdot: np.ndarray,
+    lam_dot: float,
+    new_state_scale: float,
+    step_size: float,
+) -> tuple[np.ndarray, float, float, float] | None:
+    """Change the state metric while preserving the physical predictor.
+
+    ``Xdot`` and ``lam_dot`` are normalized in the old metric.  The new
+    metric sees the same physical tangent with norm ``q``; dividing the
+    tangent by ``q`` and multiplying ``step_size`` by ``q`` therefore keeps
+    ``step_size * (Xdot, lam_dot)`` unchanged.
+    """
+    if (
+        not math.isfinite(new_state_scale)
+        or new_state_scale <= 1e-300
+        or not math.isfinite(lam_dot)
+        or not math.isfinite(step_size)
+    ):
+        return None
+    q_squared = _real_dot(Xdot, Xdot) / (new_state_scale * new_state_scale)
+    q_squared += lam_dot * lam_dot
+    if not math.isfinite(q_squared) or q_squared <= 1e-600:
+        return None
+    q = math.sqrt(q_squared)
+    if not math.isfinite(q) or q <= 1e-300:
+        return None
+    return Xdot / q, lam_dot / q, step_size * q, q
+
+
+def _adaptive_step_size(
+    step_size: float,
+    used_newton: int,
+    theta_k: float,
+    *,
+    newton_target: int,
+    growth_exponent: float,
+    growth_clamp: tuple[float, float],
+    ds_max: float,
+    ds_min: float,
+) -> float:
+    """Newton-effort + curvature step control (fold_plan.md Sections 10-11).
+
+    ``q_N = (newton_target / max(used_newton, 1)) ** growth_exponent``,
+    clamped to ``growth_clamp`` -- an easy corrector grows the step modestly,
+    a hard one shrinks it, never by a huge jump in one step. The tangent
+    angle ``theta_k`` (radians, between the predicting tangent and the newly
+    accepted point's own tangent) then further caps growth as the branch
+    curves: a fold naturally produces increasing curvature and therefore a
+    shrinking step with no fold-specific special case. Table per plan
+    Section 11 (heuristic thresholds, not physics constants).
+    """
+    q_n = (newton_target / max(used_newton, 1)) ** growth_exponent
+    q_n = max(growth_clamp[0], min(growth_clamp[1], q_n))
+    ds_trial = step_size * q_n
+    theta_deg = math.degrees(theta_k)
+    if theta_deg < 5.0:
+        pass  # allow full Newton-based growth
+    elif theta_deg < 15.0:
+        pass  # no special action beyond the Newton-effort factor
+    elif theta_deg < 30.0:
+        ds_trial = min(ds_trial, step_size)  # prevent growth
+    elif theta_deg < 45.0:
+        ds_trial = min(ds_trial, step_size * 0.75)  # shrink moderately
+    else:
+        ds_trial = min(ds_trial, step_size * 0.5)  # shrink aggressively
+    return max(ds_min, min(ds_max, ds_trial))
+
+
 class GmresDeadlineExceeded(RuntimeError):
     """Raised from the GMRES callback when a wall-time budget is exceeded.
 
@@ -925,6 +994,7 @@ class HarmonicNewtonKrylovSolver:
         shift: float = 0.0,
         deadline_s: float = 0.0,
         t0: float | None = None,
+        gmres_iter_sink: list[int] | None = None,
     ):
         """Build a reusable ``J(X)+shift*I`` GMRES solver at the point ``X``.
 
@@ -938,6 +1008,13 @@ class HarmonicNewtonKrylovSolver:
         GMRES call so a single stiff solve cannot silently outrun the caller's
         wall-time budget; on expiry the returned closure raises
         ``GmresDeadlineExceeded``.
+
+        ``gmres_iter_sink`` (default ``None``, no behavior change): if given,
+        every ``solve()`` call appends one entry per inner GMRES iteration
+        (``callback_type="pr_norm"`` fires once per iteration) -- callers
+        that want per-corrector-step GMRES iteration counts for telemetry
+        read ``len(sink)`` after the calls they care about, instead of the
+        solver tracking this unconditionally.
         """
         s = self.settings
         shape = X.shape
@@ -967,11 +1044,18 @@ class HarmonicNewtonKrylovSolver:
 
         Mop = spla.LinearOperator((dim_real, dim_real), matvec=psolve, dtype=np.float64)
 
+        if gmres_iter_sink is not None:
+            def _count_iter(_n: float) -> None:
+                gmres_iter_sink.append(1)
+        else:
+            def _count_iter(_n: float) -> None:
+                pass
+
         def solve(rhs_coeffs: np.ndarray) -> np.ndarray:
             delta_real, _info = gmres_call(
                 A=Aop, b=pack_complex(rhs_coeffs), M=Mop,
                 rtol=s.gmres_rtol, atol=s.gmres_atol, restart=s.gmres_restart,
-                maxiter=s.gmres_maxiter, callback=lambda _n: None,
+                maxiter=s.gmres_maxiter, callback=_count_iter,
                 deadline_s=deadline_s, t0=t0,
             )
             return unpack_complex(delta_real, shape)
@@ -1107,6 +1191,166 @@ class HarmonicNewtonKrylovSolver:
         return X, [self._make_report(
             False, 1.0, nrm, max_it, gmres_total, 0.0, t0, "ptc max iterations reached")]
 
+    def _corrector_step(
+        self,
+        problem: FullPumpProblem,
+        X_anchor: np.ndarray,
+        lam_anchor: float,
+        Xdot: np.ndarray,
+        lam_dot: float,
+        step_size: float,
+        metric_x: Callable[[np.ndarray, np.ndarray], float],
+        S: np.ndarray,
+        newton_max: int,
+        max_wall_s: float,
+        t0: float,
+        tol: float,
+        gmres_iter_sink: list[int] | None = None,
+    ) -> tuple[bool, np.ndarray, float, int, Callable[[np.ndarray], np.ndarray] | None]:
+        """One PALC predictor + bordering-algorithm Newton corrector step.
+
+        Shared by :meth:`solve_arclength`'s main loop and
+        :meth:`_refine_fold`'s secant sub-steps -- a pure extraction, no
+        behavior change. Returns ``(converged, Xc, lamc, used_newton, lin)``
+        where ``lin`` is the last factored linear solve at ``Xc`` (``None``
+        if the corrector converged on the first check, before any factor was
+        built) so callers can reuse it for a tangent solve without a
+        redundant refactor. Raises ``GmresDeadlineExceeded`` or one of
+        ``(RuntimeError, FloatingPointError, ValueError, OverflowError)`` on
+        a genuine linear-solve failure -- callers are responsible for
+        catching these, exactly as before this was extracted.
+
+        ``gmres_iter_sink`` (default ``None``, no behavior change): forwarded
+        to every ``_linear_solver`` call made during this corrector step, so
+        a caller can read ``len(sink)`` afterward for a telemetry GMRES
+        iteration count.
+        """
+        X_pred = X_anchor + step_size * Xdot
+        lam_pred = lam_anchor + step_size * lam_dot
+        Xc, lamc = np.array(X_pred, copy=True), float(lam_pred)
+        converged = False
+        used_newton = newton_max
+        lin: Callable[[np.ndarray], np.ndarray] | None = None
+        for it in range(1, newton_max + 1):
+            R = problem.residual_coeffs(Xc, lamc)
+            n = metric_x(Xdot, Xc - X_anchor) + lam_dot * (lamc - lam_anchor) - step_size
+            rel = problem.norms(Xc, lamc, False)["coeff_rel"]
+            if rel < tol and abs(n) < tol * max(step_size, 1.0):
+                converged, used_newton = True, it - 1
+                break
+            lin = self._linear_solver(
+                problem, Xc, deadline_s=max_wall_s, t0=t0,
+                gmres_iter_sink=gmres_iter_sink,
+            )
+            matvec = self._matvec_fn(problem, Xc)
+            step_result = bordered_solve_refined(
+                matvec, lin, R, n, S, lambda v: metric_x(Xdot, v), lam_dot,
+            )
+            if step_result is None:
+                break
+            d_X, d_lam = step_result
+            Xc = Xc + d_X
+            lamc = lamc + d_lam
+        return converged, Xc, lamc, used_newton, lin
+
+    def _refine_fold(
+        self,
+        problem: FullPumpProblem,
+        X_anchor: np.ndarray,
+        lam_anchor: float,
+        Xdot_anchor: np.ndarray,
+        lam_dot_anchor: float,
+        lam_bracket_b: float,
+        t_bracket_b: float,
+        ds_ab: float,
+        metric_x: Callable[[np.ndarray, np.ndarray], float],
+        S: np.ndarray,
+        newton_max: int,
+        max_wall_s: float,
+        t0: float,
+        tol: float,
+        *,
+        t_tol: float,
+        lam_tol: float,
+        max_iter: int,
+    ) -> dict:
+        """Secant-refine a fold bracketed between the anchor and point B.
+
+        fold_plan.md Section 16: repeatedly predicts from the FIXED anchor
+        point (the last accepted point before the sign flip, with its own
+        tangent) at a secant-estimated arclength offset toward the zero of
+        the tangent's lambda-component, using the same bordering corrector as
+        the main loop (:meth:`_corrector_step`) -- no minimally augmented
+        fold system (fold_plan.md Section 17's transversality test is
+        Milestone F, not this one). Stops when ``|lambda_dot| < t_tol`` or the
+        lambda-bracket has collapsed below ``lam_tol``, whichever comes
+        first. A corrector or linear-solve failure mid-refinement stops the
+        refinement (not the caller's continuation run) and reports
+        ``converged=False`` with whatever the last successful iterate was.
+        """
+        sa, va, lam_a = 0.0, lam_dot_anchor, lam_anchor
+        sb, vb, lam_b = ds_ab, t_bracket_b, lam_bracket_b
+        X_best: np.ndarray | None = None
+        lam_best: float | None = None
+        t_best: float | None = None
+        converged = False
+        iterations = 0
+        for _ in range(max_iter):
+            iterations += 1
+            if abs(sb - sa) < 1e-300 or vb == va:
+                break
+            s_star = sa - va * (sb - sa) / (vb - va)
+            lo, hi = (sa, sb) if sa < sb else (sb, sa)
+            # Only fall back to bisection on genuine extrapolation (s_star
+            # outside the bracket, e.g. from a near-degenerate va/vb) --
+            # secant legitimately lands close to whichever edge the root is
+            # nearer to as the bracket narrows, and rejecting that in favor
+            # of a flat interior margin (the original 10%-of-width guard)
+            # forces slow bisection that never recovers secant's rate.
+            margin = 1e-9 * abs(sb - sa)
+            if not (lo + margin <= s_star <= hi - margin):
+                s_star = 0.5 * (sa + sb)
+            step_size_star = s_star - sa
+            try:
+                conv, Xc, lamc, _used, lin = self._corrector_step(
+                    problem, X_anchor, lam_anchor, Xdot_anchor, lam_dot_anchor,
+                    step_size_star, metric_x, S, newton_max, max_wall_s, t0, tol,
+                )
+            except (GmresDeadlineExceeded, RuntimeError, FloatingPointError, ValueError, OverflowError):
+                break
+            if not conv:
+                break
+            try:
+                if lin is None:
+                    lin = self._linear_solver(problem, Xc, deadline_s=max_wall_s, t0=t0)
+                Xdot_c = lin(S)
+            except (GmresDeadlineExceeded, RuntimeError, FloatingPointError, ValueError, OverflowError):
+                break
+            lam_dot_c = 1.0
+            nrm = math.sqrt(metric_x(Xdot_c, Xdot_c) + lam_dot_c * lam_dot_c)
+            if not math.isfinite(nrm) or nrm <= 1e-300:
+                break
+            Xdot_c, lam_dot_c = Xdot_c / nrm, lam_dot_c / nrm
+            if metric_x(Xdot_c, Xdot_anchor) + lam_dot_c * lam_dot_anchor < 0.0:
+                Xdot_c, lam_dot_c = -Xdot_c, -lam_dot_c
+            t_star = lam_dot_c
+            X_best, lam_best, t_best = Xc, lamc, t_star
+            if t_star * va >= 0.0:
+                sa, va, lam_a = s_star, t_star, lamc
+            else:
+                sb, vb, lam_b = s_star, t_star, lamc
+            if abs(t_star) < t_tol or abs(lam_b - lam_a) < lam_tol:
+                converged = True
+                break
+        return {
+            "converged": bool(converged),
+            "lam": lam_best,
+            "X": X_best,
+            "lam_dot": t_best,
+            "bracket_width": abs(lam_b - lam_a),
+            "iterations": iterations,
+        }
+
     def solve_arclength(
         self,
         problem: FullPumpProblem,
@@ -1118,6 +1362,19 @@ class HarmonicNewtonKrylovSolver:
         target_lam: float = 1.0,
         newton_max: int = 12,
         max_wall_s: float = 0.0,
+        on_step: Callable[[np.ndarray, float, float, np.ndarray, float, float], None] | None = None,
+        rescale_every: int = 0,
+        max_steps_after_fold: int | None = None,
+        step_control: str = "legacy",
+        newton_target: int = 4,
+        step_growth_exponent: float = 0.5,
+        step_growth_clamp: tuple[float, float] = (0.5, 1.5),
+        ds_max: float | None = None,
+        refine_fold: bool = False,
+        fold_t_tol: float = 1e-6,
+        fold_lambda_tol: float | None = None,
+        fold_refine_max_iter: int = 30,
+        step_telemetry: Callable[[dict], None] | None = None,
     ) -> tuple[np.ndarray, float, dict]:
         """Pseudo-arclength continuation in the source scale ``lambda``.
 
@@ -1134,6 +1391,63 @@ class HarmonicNewtonKrylovSolver:
         metric (``metric_x(a,b) = Re<a,b> / state_scale**2``), derived from
         the initial tangent so the state and lambda terms of the arclength
         constraint are comparable regardless of the state's physical units.
+
+        ``on_step``, if given, is called
+        ``on_step(Xc, lamc, step_size, Xdot, lam_dot, state_scale)`` once per
+        *accepted* corrector step (never on a halved/rejected attempt), at
+        the point the solver actually visited, with the tangent that
+        predicted it (not yet updated to the new point's own tangent) and the
+        metric's current ``state_scale`` -- callers that need a singularity
+        measurement along the branch (not just at the final endpoint) hook in
+        here.
+
+        ``rescale_every`` (default ``0``, disabled -- identical behavior to
+        before this parameter existed): every ``N`` accepted steps, update
+        ``state_scale`` from the robust median of recent accepted state
+        amplitudes. The proposed scale is independent of tangent orientation;
+        in particular it never contains ``1 / abs(lambda_dot)`` and therefore
+        cannot erase a fold by forcing the lambda tangent component to a fixed
+        value. When the metric changes, the tangent and next step are
+        transformed together so the physical predictor ``ds * (Xdot, lam_dot)``
+        is preserved to floating-point precision. ``info["rescale_count"]``
+        records how many times this fired and ``info["rescale_events"]`` stores
+        the corresponding predictor-invariance diagnostics.
+
+        ``max_steps_after_fold`` (default ``None`` -- no change from plain
+        ``max_steps``): once a fold is first detected (``lambda_dot`` sign
+        change), the step budget is extended to at least
+        ``step_at_fold + max_steps_after_fold`` if that is larger than the
+        original ``max_steps``. A fold consumes an a-priori-unknown number of
+        steps just to reach; without this, a run that spends most of
+        ``max_steps`` getting to the fold has too little budget left to round
+        it and find a returning branch, and reports ``terminal_reason=
+        "max_steps"`` even though a returning branch may exist just past the
+        exhausted budget.
+
+        ``step_control`` (default ``"legacy"``, byte-identical to before this
+        parameter existed): ``"adaptive"`` replaces the crude "grow 1.25x on
+        an easy corrector, cap at ``ds_initial``" rule with the Newton-effort
+        + curvature step control of fold_plan.md Sections 10-11
+        (:func:`_adaptive_step_size`) -- ``newton_target``/
+        ``step_growth_exponent``/``step_growth_clamp`` tune the Newton-effort
+        factor, ``ds_max`` (default ``None`` -> ``ds``, matching the legacy
+        cap) raises the ceiling so a well-behaved branch can accelerate past
+        its initial step. The halving-on-failure/``step_floor`` behavior
+        (Section 12) is unchanged in both modes.
+
+        ``refine_fold`` (default ``False``): once the first turning point is
+        detected, run a bounded secant refinement
+        (:meth:`_refine_fold`, fold_plan.md Section 16) instead of accepting
+        the bracketing corrector point as the fold location. Stores
+        ``info["fold_refined"]`` (``None`` if not requested or if the
+        refinement made zero successful iterations) with keys
+        ``converged``, ``lam``, ``X``, ``lam_dot``, ``bracket_width``,
+        ``iterations``. ``fold_lambda_tol`` (default ``None`` -> scales off
+        the arclength step actually taken at the fold, ``max(1e-8, step_size
+        * 1e-4)`` -- NOT off ``|lambda_fold - lambda_prev|``, which is itself
+        degenerate near a fold since ``lambda_dot -> 0`` there) is the
+        lambda-bracket stopping width; ``fold_t_tol`` is the ``|lambda_dot|``
+        stopping tolerance.
         """
         X = problem.zeros() if X0 is None else np.array(X0, dtype=np.complex128, copy=True)
         lam = float(lam0)
@@ -1142,9 +1456,13 @@ class HarmonicNewtonKrylovSolver:
         info: dict = {
             "reached_target": False,
             "fold_lambda": None,
+            "fold_refined": None,
             "steps": 0,
             "terminal_reason": "max_steps",
             "state_scale": None,
+            "rescale_count": 0,
+            "rescale_events": [],
+            "rejected_steps": 0,
         }
 
         # Initial tangent: J Xdot = S (unnormalised).
@@ -1177,6 +1495,9 @@ class HarmonicNewtonKrylovSolver:
             info["terminal_reason"] = "degenerate_tangent"
             return X, lam, info
         info["state_scale"] = state_scale
+        recent_state_norms: list[float] = []
+        if x_norm > 1e-300:
+            recent_state_norms.append(x_norm)
 
         def metric_x(a: np.ndarray, b: np.ndarray) -> float:
             return _real_dot(a, b) / (state_scale * state_scale)
@@ -1187,45 +1508,31 @@ class HarmonicNewtonKrylovSolver:
         tol = max(self.settings.newton_tol * 10.0, 1e-8)  # relative coeff tol
         ds_initial = float(ds)
         step_size = float(ds)
+        step_floor = ds_initial * 1e-6
         info["endpoint_above_newton_tol"] = None
-        for step in range(1, max_steps + 1):
+        accepted_steps = 0
+        effective_max_steps = max_steps
+        pending_rescale_event: dict[str, float] | None = None
+        step = 0
+        while step < effective_max_steps:
+            step += 1
             info["steps"] = step
             if max_wall_s > 0.0 and time.perf_counter() - t0 > max_wall_s:
                 info["terminal_reason"] = "deadline"
                 return X, lam, info
-            X_pred = X + step_size * Xdot
-            lam_pred = lam + step_size * lam_dot
-            Xc, lamc = np.array(X_pred, copy=True), float(lam_pred)
             # Full Newton: refactor at Xc every corrector iteration (a frozen
             # predictor-point factor is worst exactly where this method is
             # supposed to work -- near a fold, where the Jacobian moves fastest).
             # Each GMRES call is itself bounded by max_wall_s so one stiff
             # corrector step cannot silently outrun the budget between the
             # outer checks above.
-            converged = False
-            used_newton = newton_max
-            lin = None
+            gmres_iter_sink: list[int] | None = [] if step_telemetry is not None else None
             try:
-                for it in range(1, newton_max + 1):
-                    R = problem.residual_coeffs(Xc, lamc)
-                    n = metric_x(Xdot, Xc - X) + lam_dot * (lamc - lam) - step_size
-                    rel = problem.norms(Xc, lamc, False)["coeff_rel"]
-                    if rel < tol and abs(n) < tol * max(step_size, 1.0):
-                        converged, used_newton = True, it - 1
-                        break
-                    lin = self._linear_solver(
-                        problem, Xc, deadline_s=max_wall_s, t0=t0,
-                    )
-                    matvec = self._matvec_fn(problem, Xc)
-                    step_result = bordered_solve_refined(
-                        matvec, lin, R, n, S,
-                        lambda v: metric_x(Xdot, v), lam_dot,
-                    )
-                    if step_result is None:
-                        break
-                    d_X, d_lam = step_result
-                    Xc = Xc + d_X
-                    lamc = lamc + d_lam
+                converged, Xc, lamc, used_newton, lin = self._corrector_step(
+                    problem, X, lam, Xdot, lam_dot, step_size,
+                    metric_x, S, newton_max, max_wall_s, t0, tol,
+                    gmres_iter_sink=gmres_iter_sink,
+                )
             except GmresDeadlineExceeded:
                 info["terminal_reason"] = "deadline"
                 return X, lam, info
@@ -1234,11 +1541,14 @@ class HarmonicNewtonKrylovSolver:
                 info["error"] = repr(exc)
                 return X, lam, info
             if not converged:
+                info["rejected_steps"] += 1
                 step_size *= 0.5
-                if step_size < 1e-4:
+                if step_size < step_floor:
                     info["terminal_reason"] = "minimum_step"
                     return X, lam, info
                 continue
+            if on_step is not None:
+                on_step(Xc, lamc, step_size, Xdot, lam_dot, state_scale)
             # New tangent from the corrected point's own factor (a stale
             # predictor-point factor would be systematically O(step_size) wrong
             # for the tangent direction). Converging on the very first check
@@ -1262,9 +1572,91 @@ class HarmonicNewtonKrylovSolver:
             Xdot_new, lam_dot_new = Xdot_new / nrm, lam_dot_new / nrm
             if metric_x(Xdot_new, Xdot) + lam_dot_new * lam_dot < 0.0:
                 Xdot_new, lam_dot_new = -Xdot_new, -lam_dot_new
+            # Tangent angle between the predicting tangent and the newly
+            # accepted point's own tangent (fold_plan.md Section 11) -- cheap
+            # (metric_x is already O(n) elsewhere this iteration), computed
+            # unconditionally so it is available as telemetry regardless of
+            # step_control mode.
+            cos_theta = metric_x(Xdot, Xdot_new) + lam_dot * lam_dot_new
+            theta_k = math.acos(max(-1.0, min(1.0, cos_theta)))
+            info["theta_last_deg"] = math.degrees(theta_k)
+            if step_telemetry is not None:
+                # Recomputed here (not read out of `_corrector_step`, which
+                # only returns the boolean convergence flag) -- both are
+                # cheap function evaluations (no new factorization) relative
+                # to the corrector's own linear solves.
+                hb_residual_rel = problem.norms(Xc, lamc, False)["coeff_rel"]
+                palc_residual = (
+                    metric_x(Xdot, Xc - X) + lam_dot * (lamc - lam) - step_size
+                )
+                step_telemetry({
+                    "step": step, "lam": lamc, "step_size": step_size,
+                    "used_newton": used_newton, "theta_deg": math.degrees(theta_k),
+                    "state_scale": state_scale, "rejected_steps": info["rejected_steps"],
+                    "hb_residual_rel": float(hb_residual_rel),
+                    "palc_residual": float(palc_residual),
+                    "gmres_iterations": (
+                        len(gmres_iter_sink) if gmres_iter_sink is not None else None
+                    ),
+                    # t_lam_pred: the tangent that PREDICTED this accepted
+                    # point (same convention as BranchPoint.t_mu). t_lam_own:
+                    # this point's own freshly computed tangent -- the two
+                    # agree away from a fold and both are provided since a
+                    # traversal analysis cares about the tangent's sign AT
+                    # each point, not just the one that led into it.
+                    "t_lam_pred": float(lam_dot),
+                    "t_lam_own": float(lam_dot_new),
+                    "rescale_event": float(pending_rescale_event is not None),
+                    "rescale_norm": (
+                        pending_rescale_event["rescale_norm"]
+                        if pending_rescale_event is not None else 1.0
+                    ),
+                    "rescale_step_size_before": (
+                        pending_rescale_event["step_size_before"]
+                        if pending_rescale_event is not None else step_size
+                    ),
+                    "rescale_step_size_after": (
+                        pending_rescale_event["step_size_after"]
+                        if pending_rescale_event is not None else step_size
+                    ),
+                    "rescale_predictor_error": (
+                        pending_rescale_event["predictor_error"]
+                        if pending_rescale_event is not None else 0.0
+                    ),
+                })
+                pending_rescale_event = None
             # Fold = sign change of lam_dot.
             if lam_dot_new * lam_dot < 0.0 and info["fold_lambda"] is None:
                 info["fold_lambda"] = float(lamc)
+                if max_steps_after_fold is not None:
+                    effective_max_steps = max(
+                        effective_max_steps, step + max_steps_after_fold,
+                    )
+                if refine_fold:
+                    # Default scales off the arclength step actually taken
+                    # (well-conditioned, ~ds), not off |lamc - lam| -- that
+                    # lambda displacement is exactly what goes to zero AT a
+                    # fold (lambda_dot -> 0 there), so scaling off it makes
+                    # the default tolerance degenerate near the very point
+                    # being refined.
+                    lam_tol_eff = (
+                        fold_lambda_tol if fold_lambda_tol is not None
+                        else max(1e-8, step_size * 1e-4)
+                    )
+                    try:
+                        info["fold_refined"] = self._refine_fold(
+                            problem, X, lam, Xdot, lam_dot, lamc, lam_dot_new,
+                            step_size, metric_x, S, newton_max, max_wall_s, t0, tol,
+                            t_tol=fold_t_tol, lam_tol=lam_tol_eff,
+                            max_iter=fold_refine_max_iter,
+                        )
+                    except (
+                        GmresDeadlineExceeded, RuntimeError,
+                        FloatingPointError, ValueError, OverflowError,
+                    ) as exc:
+                        info["fold_refined"] = {
+                            "converged": False, "error": repr(exc),
+                        }
             # Target crossing (interpolate to target_lam). The interpolated
             # endpoint is consumed downstream as a warm guess for a final
             # target solve, not a converged point -- flag when it sits above
@@ -1281,10 +1673,177 @@ class HarmonicNewtonKrylovSolver:
                 info["terminal_reason"] = "target"
                 return X, target_lam, info
             X, lam, Xdot, lam_dot = Xc, lamc, Xdot_new, lam_dot_new
-            # Grow the step on a cheap corrector; keep the halving/floor above.
-            if used_newton <= 3:
-                step_size = min(ds_initial, step_size * 1.25)
+            accepted_steps += 1
+            new_x_norm = math.sqrt(_real_dot(X, X))
+            if math.isfinite(new_x_norm) and new_x_norm > 1e-300:
+                recent_state_norms.append(new_x_norm)
+                del recent_state_norms[:-9]
+            rescale_norm: float | None = None
+            rescale_scale_before: float | None = None
+            rescale_scale_after: float | None = None
+            if rescale_every > 0 and accepted_steps % rescale_every == 0:
+                if recent_state_norms:
+                    proposed_state_scale = float(np.median(recent_state_norms))
+                    # Let the metric follow changing state amplitudes without
+                    # making one update itself a geometric kink. The bounds
+                    # depend only on the previous metric, never on tangent
+                    # orientation or ``lam_dot``.
+                    new_state_scale = max(
+                        state_scale * 0.99,
+                        min(state_scale * 1.01, proposed_state_scale),
+                    )
+                    transformed = _rescale_arclength_tangent(
+                        Xdot, lam_dot, new_state_scale, step_size,
+                    )
+                    if transformed is not None:
+                        Xdot, lam_dot, _unused_step_size, rescale_norm = transformed
+                        rescale_scale_before = state_scale
+                        state_scale = new_state_scale
+                        rescale_scale_after = state_scale
+                        info["state_scale"] = state_scale
+                        info["rescale_count"] += 1
+            # Adjust the step for the next iteration; halving/floor on a
+            # failed corrector (above) is unchanged in both modes.
+            next_step_size = step_size
+            if step_control == "adaptive":
+                next_step_size = _adaptive_step_size(
+                    step_size, used_newton, theta_k,
+                    newton_target=newton_target,
+                    growth_exponent=step_growth_exponent,
+                    growth_clamp=step_growth_clamp,
+                    ds_max=ds_max if ds_max is not None else ds_initial,
+                    ds_min=step_floor,
+                )
+            elif used_newton <= 3:
+                next_step_size = min(ds_initial, step_size * 1.25)
+            if rescale_norm is not None:
+                step_size_before_rescale = next_step_size
+                next_step_size *= rescale_norm
+                predictor_error = abs(
+                    next_step_size / (step_size_before_rescale * rescale_norm) - 1.0
+                )
+                rescale_event = {
+                    "step": step,
+                    "state_scale_before": rescale_scale_before,
+                    "state_scale_after": rescale_scale_after,
+                    "rescale_norm": rescale_norm,
+                    "step_size_before": step_size_before_rescale,
+                    "step_size_after": next_step_size,
+                    "predictor_error": predictor_error,
+                }
+                info["rescale_events"].append(rescale_event)
+                pending_rescale_event = rescale_event
+            step_size = next_step_size
         return X, lam, info
+
+    def solve_arclength_mu(
+        self,
+        problem: FullPumpProblem,
+        X0: np.ndarray | None,
+        mu0: float,
+        *,
+        i_ref: float,
+        target_mu: float = 1.0,
+        ds: float = 0.1,
+        max_steps: int = 200,
+        newton_max: int = 12,
+        max_wall_s: float = 0.0,
+        on_step: Callable[[np.ndarray, float, float, np.ndarray, float, float], None] | None = None,
+        rescale_every: int = 0,
+        max_steps_after_fold: int | None = None,
+        step_control: str = "legacy",
+        newton_target: int = 4,
+        step_growth_exponent: float = 0.5,
+        step_growth_clamp: tuple[float, float] = (0.5, 1.5),
+        ds_max: float | None = None,
+        refine_fold: bool = False,
+        fold_t_tol: float = 1e-6,
+        fold_mu_tol: float | None = None,
+        fold_refine_max_iter: int = 30,
+        step_telemetry: Callable[[dict], None] | None = None,
+    ) -> tuple[np.ndarray, float, dict]:
+        """``solve_arclength`` reparameterized around a fixed physical drive.
+
+        ``solve_arclength``'s ``lambda`` is target-normalized: ``lambda=1``
+        means "``problem.pump_current_a``", a value baked into ``problem`` at
+        construction and, in production, different for every requested map
+        power (``run_gain_map.py::_build_problem`` is called once per grid
+        cell with that cell's own target current). Two map points at the same
+        frequency therefore each define a *different* arclength problem for
+        the same physical branch (docs/development/fold_plan.md Section 1).
+
+        This wrapper introduces ``mu = I_physical / i_ref``, a coordinate
+        whose meaning is fixed by the caller's choice of ``i_ref`` and does
+        not depend on ``problem.pump_current_a`` at all -- the same traced
+        branch (and the same ``i_ref``) can be reused to bracket any number
+        of physical target currents (see :func:`trace_branch`). It changes
+        no physics: ``R(X, mu) := R(X, mu * k)`` where ``k = i_ref /
+        problem.pump_current_a`` is a fixed scalar, computed once and applied
+        only to the corrector's ``lambda``-valued inputs/outputs (``mu0``,
+        ``target_mu``, ``ds``, and ``fold_lambda``/``on_step``'s ``lamc``).
+        The underlying ``solve_arclength`` -- metric, bordered corrector,
+        fold detection, rescale, post-fold budget -- runs completely
+        unmodified. ``k=1`` (``i_ref == problem.pump_current_a``) reduces to
+        calling ``solve_arclength`` directly, bit-for-bit.
+
+        ``step_control``/``newton_target``/``step_growth_exponent``/
+        ``step_growth_clamp``/``ds_max`` and ``refine_fold``/``fold_t_tol``/
+        ``fold_mu_tol``/``fold_refine_max_iter`` forward to the same-named
+        (Milestone C/D) ``solve_arclength`` parameters -- ``ds_max`` and
+        ``fold_mu_tol`` are given in ``mu`` units and converted by ``k`` at
+        the boundary like every other lambda-valued input here.
+
+        ``step_telemetry`` (default ``None``): forwarded to
+        ``solve_arclength``'s same-named parameter with its ``lam``/
+        ``step_size`` entries converted to ``mu`` units (divided by ``k``,
+        same convention as ``on_step`` above); every other entry (residuals,
+        Newton/GMRES counts, tangent components) is dimensionless or already
+        metric-normalized and passes through unchanged.
+        """
+        k = float(i_ref) / float(problem.pump_current_a)
+
+        def _lambda_on_step(
+            Xc: np.ndarray, lamc: float, step_size: float,
+            Xdot: np.ndarray, lam_dot: float, state_scale: float,
+        ) -> None:
+            on_step(Xc, lamc / k, step_size / k, Xdot, lam_dot, state_scale)
+
+        def _lambda_step_telemetry(payload: dict) -> None:
+            converted = dict(payload)
+            converted["mu"] = converted.pop("lam") / k
+            converted["step_size"] = converted["step_size"] / k
+            step_telemetry(converted)
+
+        X, lam, info = self.solve_arclength(
+            problem, X0, mu0 * k,
+            ds=ds * k, max_steps=max_steps, target_lam=target_mu * k,
+            newton_max=newton_max, max_wall_s=max_wall_s,
+            on_step=_lambda_on_step if on_step is not None else None,
+            rescale_every=rescale_every,
+            max_steps_after_fold=max_steps_after_fold,
+            step_control=step_control,
+            newton_target=newton_target,
+            step_growth_exponent=step_growth_exponent,
+            step_growth_clamp=step_growth_clamp,
+            ds_max=ds_max * k if ds_max is not None else None,
+            refine_fold=refine_fold,
+            fold_t_tol=fold_t_tol,
+            fold_lambda_tol=fold_mu_tol * k if fold_mu_tol is not None else None,
+            fold_refine_max_iter=fold_refine_max_iter,
+            step_telemetry=_lambda_step_telemetry if step_telemetry is not None else None,
+        )
+        mu = lam / k
+        info = dict(info)
+        info["mu_ref_current_a"] = i_ref
+        fold_lambda = info.get("fold_lambda")
+        info["fold_mu"] = float(fold_lambda) / k if fold_lambda is not None else None
+        fold_refined = info.get("fold_refined")
+        if fold_refined is not None and fold_refined.get("lam") is not None:
+            fr = dict(fold_refined)
+            fr["mu"] = fr.pop("lam") / k
+            fr["bracket_width"] = fr["bracket_width"] / k
+            info["fold_refined"] = fr
+        return X, mu, info
 
     def trace_arclength_from_two_points(
         self,
@@ -1503,6 +2062,7 @@ def fold_power(
     *,
     ds: float = 0.1,
     max_steps: int = 300,
+    rescale_every: int = 0,
 ) -> float | None:
     """Locate the harmonic-balance fold in the source scale ``lambda``.
 
@@ -1512,10 +2072,389 @@ def fold_power(
     pseudo-arclength from ``lambda=0`` and returns the ``lambda`` at the first
     turning point (sign change of ``lambda_dot``), or ``None`` if none is found
     within ``max_steps`` (branch has no fold in range).
+
+    ``rescale_every`` (default ``0``, disabled) forwards to
+    ``solve_arclength``'s periodic metric rescale
+    (docs/development/arclength_fold_resolution_plan.md Phase 1) -- a
+    mistuned metric can make the corrector die (``minimum_step``) before
+    ever reaching a real fold, which reads identically to "no fold in range"
+    without this.
     """
     _X, _lam, info = solver.solve_arclength(
         problem, problem.zeros(), 0.0, ds=ds, max_steps=max_steps,
         target_lam=float("inf"),  # never "reach" target -> run until fold/steps
+        rescale_every=rescale_every,
     )
     fold = info.get("fold_lambda")
     return float(fold) if fold is not None else None
+
+
+@dataclass
+class BranchPoint:
+    """One accepted pseudo-arclength point on a physical-mu branch.
+
+    ``s`` is a step-index proxy (cumulative ``step_size``), not a
+    metric-exact arclength -- it only orders points within one trace and is
+    not comparable across a metric rescale event (see
+    docs/development/fold_plan.md Section 4; a fully metric-consistent ``s``
+    is deferred to Milestone C's adaptive-step work). ``t_mu`` is the raw
+    ``lam_dot`` component ``solve_arclength_mu`` forwards from its inner
+    ``solve_arclength`` call, in the inner lambda-parametrization -- its
+    *sign* is exactly the mu-tangent's sign (the wrapper's ``k`` is a
+    positive constant), which is all fold detection needs; its magnitude is
+    not separately mu-normalized.
+    """
+
+    s: float
+    mu: float
+    X: np.ndarray
+    t_mu: float
+    step_size: float
+
+
+@dataclass
+class ContinuationBranch:
+    """A traced solution branch in a fixed physical-current coordinate ``mu``.
+
+    ``points`` are accepted continuation states in traversal order -- not
+    necessarily monotonic in ``mu`` (a folded branch reverses direction
+    partway through). ``i_ref`` is the physical reference current that
+    defines this branch's ``mu = I_physical / i_ref``; it is fixed for the
+    whole branch and independent of any particular map target (plan Section
+    1/23) -- the same branch can be queried for any number of target
+    currents via :func:`resolve_target_on_branch` instead of each target
+    re-running its own ``lambda: 0 -> 1`` continuation problem.
+    """
+
+    i_ref: float
+    points: list[BranchPoint]
+    info: dict
+
+
+def trace_branch(
+    solver: HarmonicNewtonKrylovSolver,
+    problem: FullPumpProblem,
+    *,
+    i_ref: float,
+    X0: np.ndarray | None = None,
+    mu0: float = 0.0,
+    mu_max: float = 1.0,
+    ds: float = 0.1,
+    max_steps: int = 300,
+    newton_max: int = 12,
+    max_wall_s: float = 0.0,
+    rescale_every: int = 0,
+    max_steps_after_fold: int | None = None,
+    step_control: str = "legacy",
+    newton_target: int = 4,
+    step_growth_exponent: float = 0.5,
+    step_growth_clamp: tuple[float, float] = (0.5, 1.5),
+    ds_max: float | None = None,
+    refine_fold: bool = False,
+    fold_t_tol: float = 1e-6,
+    fold_mu_tol: float | None = None,
+    fold_refine_max_iter: int = 30,
+    step_telemetry: Callable[[dict], None] | None = None,
+) -> ContinuationBranch:
+    """Trace one physical-``mu`` branch, storing every accepted point.
+
+    Milestone B (docs/development/fold_plan.md Section 20/23): the branch
+    becomes the primary numerical object. This calls ``solve_arclength_mu``
+    exactly once (target ``mu_max``, or the branch runs until a fold/step
+    budget if ``mu_max`` is never reached) and collects each accepted point
+    via the existing ``on_step`` hook -- no change to the corrector itself.
+
+    ``step_control``/``refine_fold`` and their tuning parameters (Milestone
+    C/D) forward to ``solve_arclength_mu`` unchanged; both default to the
+    pre-Milestone-C/D behavior (``"legacy"`` step growth, no fold
+    refinement), so an un-opted-in caller sees no change.
+
+    ``step_telemetry`` (Milestone G2, default ``None``): passed straight
+    through to ``solve_arclength_mu`` (already mu-unit-converted there) --
+    fires once per accepted step with residuals/Newton/GMRES/tangent detail
+    that ``BranchPoint`` does not carry, for callers building a per-step
+    traversal diagnostic (docs/development/fold_plan.md Milestone G2)
+    without needing to correlate against ``branch.points`` by index.
+    """
+    points: list[BranchPoint] = []
+    s_cum = 0.0
+
+    def _on_step(
+        Xc: np.ndarray, muc: float, step_size: float,
+        Xdot: np.ndarray, mu_dot: float, state_scale: float,
+    ) -> None:
+        nonlocal s_cum
+        s_cum += step_size
+        points.append(BranchPoint(
+            s=s_cum, mu=muc, X=np.array(Xc, copy=True),
+            t_mu=mu_dot, step_size=step_size,
+        ))
+
+    X, mu, info = solver.solve_arclength_mu(
+        problem, X0, mu0, i_ref=i_ref, target_mu=mu_max, ds=ds,
+        max_steps=max_steps, newton_max=newton_max, max_wall_s=max_wall_s,
+        on_step=_on_step, rescale_every=rescale_every,
+        max_steps_after_fold=max_steps_after_fold,
+        step_control=step_control,
+        newton_target=newton_target,
+        step_growth_exponent=step_growth_exponent,
+        step_growth_clamp=step_growth_clamp,
+        ds_max=ds_max,
+        refine_fold=refine_fold,
+        fold_t_tol=fold_t_tol,
+        fold_mu_tol=fold_mu_tol,
+        fold_refine_max_iter=fold_refine_max_iter,
+        step_telemetry=step_telemetry,
+    )
+    if info.get("reached_target"):
+        points.append(BranchPoint(
+            s=s_cum, mu=mu, X=np.array(X, copy=True),
+            t_mu=points[-1].t_mu if points else 0.0, step_size=0.0,
+        ))
+    return ContinuationBranch(i_ref=i_ref, points=points, info=info)
+
+
+def bracket_target(
+    branch: ContinuationBranch, mu_target: float,
+) -> tuple[BranchPoint, BranchPoint] | None:
+    """Return the two consecutive accepted points bracketing ``mu_target``.
+
+    Scans in traversal order, so a target crossed twice (past a fold, once
+    outgoing and once on the returning segment) returns the *first*
+    crossing. Returns ``None`` if ``mu_target`` is not bracketed anywhere on
+    the traced branch (e.g. beyond a fold with no returning branch traced).
+    """
+    pts = branch.points
+    for a, b in zip(pts, pts[1:]):
+        if (a.mu - mu_target) * (b.mu - mu_target) <= 0.0 and a.mu != b.mu:
+            return a, b
+    return None
+
+
+def resolve_target_on_branch(
+    solver: HarmonicNewtonKrylovSolver,
+    problem: FullPumpProblem,
+    branch: ContinuationBranch,
+    mu_target: float,
+) -> tuple[np.ndarray, StepReport] | None:
+    """Bracket ``mu_target`` on ``branch`` and run the exact fixed-mu Newton solve.
+
+    Plan Section 19: PALC discovers branch geometry; ordinary Newton (via the
+    existing ``solve_one``, unmodified) gives the exact requested map sample
+    from a linearly-interpolated warm guess. Returns ``None`` if
+    ``mu_target`` is not bracketed on this branch -- callers should treat
+    that as "beyond this branch's traced extent", not as a solver failure.
+    """
+    bracket = bracket_target(branch, mu_target)
+    if bracket is None:
+        return None
+    a, b = bracket
+    alpha = (mu_target - a.mu) / (b.mu - a.mu)
+    X_guess = (1.0 - alpha) * a.X + alpha * b.X
+    k = branch.i_ref / problem.pump_current_a
+    return solver.solve_one(problem, X_guess, mu_target * k)
+
+
+# Milestone E (fold_plan.md): production reachability semantics.
+#
+# ``solve_arclength``/``solve_arclength_mu`` never intentionally stop at a
+# fold -- they only ever fail to reach ``target_mu`` via a genuine corrector
+# failure (minimum_step), the step/deadline budget, or a singular Jacobian.
+# ``info["fold_lambda"]``/``info["fold_refined"]`` record only the FIRST
+# tangent-sign flip on a trace.
+#
+# The functions below detect and classify what these tangent-sign flips mean,
+# using the multistability probe from the Milestone D.5 validation campaign
+# (docs/development/fold_plan.md, memory fold-plan-ad-validation-narrow-feature
+# / fold-plan-d5-e-multistability-gate): three fixed-mu Newton solves seeded
+# from the segment before, inside, and after a candidate pair.
+#
+# Naming is deliberately epistemic, revised after D.5's own measurement on
+# designs/ipm_2c_fixed at 7.9 GHz (mu~0.5253): a detected second tangent-sign
+# flip is NOT by itself evidence of a genuine bifurcation, let alone a
+# specifically degenerate one (corank/transversality failure -- untested
+# here, Milestone F's scope). There, the "inside" and "after" segment seeds
+# converged to the SAME root (1.2e-9 relative apart) despite a clean second
+# sign flip, while only the "before" seed differed materially (0.44%) --
+# evidence the region is numerically UNRESOLVED at the tested step sizes, not
+# evidence of a specific mathematical degeneracy. The intended hierarchy
+# going into Milestone F is:
+#
+#     tangent sign flip -> fold candidate -> validated bifurcation event
+#     -> classified event (SIMPLE_FOLD / BRANCH_POINT / HIGHER_DEGENERACY / ...)
+#
+# not "sign flip -> fold". Every ``FoldCandidate`` below carries
+# ``kind``/``validation`` fields as placeholders for that later promotion;
+# nothing in Milestone E promotes them.
+
+FOLD_TOPOLOGY_LOCAL_PAIR = "LOCAL_FOLD_PAIR"
+FOLD_TOPOLOGY_UNRESOLVED = "UNRESOLVED_NEAR_FOLD"
+
+FOLD_CANDIDATE_KIND_TANGENT_SIGN_FLIP = "TANGENT_SIGN_FLIP"
+FOLD_CANDIDATE_VALIDATION_UNVALIDATED = "UNVALIDATED"
+
+
+@dataclass
+class FoldCandidate:
+    """One tangent-sign change (``t_mu`` crossing zero) on a traced branch.
+
+    Named "candidate", not "fold": a sign change alone does not establish a
+    genuine bifurcation (Milestone D.5). ``kind``/``validation`` are
+    placeholders for Milestone F's later classification hierarchy; nothing
+    here promotes them.
+
+    ``index`` is the position in ``branch.points`` of the point AFTER the
+    sign change (``points[index - 1]`` is the point before).
+    """
+
+    index: int
+    mu_before: float
+    mu_after: float
+    s_before: float
+    s_after: float
+    kind: str = FOLD_CANDIDATE_KIND_TANGENT_SIGN_FLIP
+    validation: str = FOLD_CANDIDATE_VALIDATION_UNVALIDATED
+
+
+def find_fold_candidates(branch: ContinuationBranch) -> list[FoldCandidate]:
+    """Every ``t_mu`` sign change on ``branch``, in traversal order.
+
+    Detected purely from consecutive ``BranchPoint.t_mu`` signs already
+    stored on the branch -- no new continuation solves. Recovers every
+    candidate on the trace, unlike ``solve_arclength``'s own
+    ``info["fold_lambda"]``, which only ever records the first.
+    """
+    candidates: list[FoldCandidate] = []
+    pts = branch.points
+    for i in range(1, len(pts)):
+        a, b = pts[i - 1], pts[i]
+        if (a.t_mu >= 0) != (b.t_mu >= 0):
+            candidates.append(FoldCandidate(
+                index=i, mu_before=a.mu, mu_after=b.mu, s_before=a.s, s_after=b.s,
+            ))
+    return candidates
+
+
+def classify_fold_pair(
+    solver: HarmonicNewtonKrylovSolver,
+    problem: FullPumpProblem,
+    branch: ContinuationBranch,
+    candidate_a: FoldCandidate,
+    candidate_b: FoldCandidate,
+    *,
+    newton_max: int = 15,
+    distinctness_tol: float = 1e-6,
+) -> dict:
+    """Multistability-gated classification of one candidate local fold pair.
+
+    ``candidate_a``/``candidate_b`` bracket three branch segments (before/
+    inside/after) -- consecutive candidates always alternate sign by
+    construction, so this works for either orientation (a middle dip between
+    two higher segments, or a middle bump between two lower ones). The
+    before/inside/after mu-overlap is the general triple-interval
+    intersection ``[max(min_i), min(max_i)]`` over the three segments, not a
+    shape-specific formula.
+
+    Picks ``mu_star`` inside that overlap and runs ordinary fixed-mu Newton
+    (``solve_one``) from a seed on each segment. Returns
+    ``status=FOLD_TOPOLOGY_LOCAL_PAIR`` only if all three solves converge AND
+    every pairwise relative state distance exceeds ``distinctness_tol``
+    (three materially different coexisting solutions);
+    ``status=FOLD_TOPOLOGY_UNRESOLVED`` otherwise, with a ``reason`` -- this
+    is a report of insufficient/inconsistent evidence, not a claim that the
+    event is mathematically degenerate (Milestone F territory).
+    """
+    pts = branch.points
+    before_pts = pts[:candidate_a.index]
+    inside_pts = pts[candidate_a.index:candidate_b.index]
+    after_pts = pts[candidate_b.index:]
+    if not before_pts or not inside_pts or not after_pts:
+        return {"status": FOLD_TOPOLOGY_UNRESOLVED, "reason": "insufficient points around the pair"}
+
+    segments = (before_pts, inside_pts, after_pts)
+    mu_lo = max(min(p.mu for p in seg) for seg in segments)
+    mu_hi = min(max(p.mu for p in seg) for seg in segments)
+    if mu_hi <= mu_lo:
+        return {"status": FOLD_TOPOLOGY_UNRESOLVED, "reason": f"no mu overlap (lo={mu_lo}, hi={mu_hi})"}
+    mu_star = 0.5 * (mu_lo + mu_hi)
+
+    def nearest(points_: list[BranchPoint]) -> BranchPoint:
+        return min(points_, key=lambda p: abs(p.mu - mu_star))
+
+    seeds = {"before": nearest(before_pts), "inside": nearest(inside_pts), "after": nearest(after_pts)}
+    k = branch.i_ref / problem.pump_current_a
+    roots: dict[str, dict] = {}
+    for label, seed in seeds.items():
+        X_star, report = solver.solve_one(problem, seed.X, mu_star * k)
+        roots[label] = {
+            "converged": report.converged, "coeff_rel": report.coeff_rel,
+            "X": X_star, "norm": float(np.linalg.norm(X_star)), "seed_mu": seed.mu,
+        }
+
+    def _public(r: dict) -> dict:
+        return {k_: v for k_, v in r.items() if k_ != "X"}
+
+    if not all(r["converged"] for r in roots.values()):
+        return {
+            "status": FOLD_TOPOLOGY_UNRESOLVED, "mu_star": mu_star,
+            "reason": "a segment seed failed to converge",
+            "roots": {k_: _public(v) for k_, v in roots.items()},
+        }
+
+    labels = list(roots)
+    pairwise: dict[str, float] = {}
+    distinct = True
+    for i in range(len(labels)):
+        for j in range(i + 1, len(labels)):
+            li, lj = labels[i], labels[j]
+            d = float(np.linalg.norm(roots[li]["X"] - roots[lj]["X"])) / max(
+                float(np.linalg.norm(roots[li]["X"])), 1e-300,
+            )
+            pairwise[f"{li}_{lj}"] = d
+            if d < distinctness_tol:
+                distinct = False
+
+    status = FOLD_TOPOLOGY_LOCAL_PAIR if distinct else FOLD_TOPOLOGY_UNRESOLVED
+    return {
+        "status": status, "mu_star": mu_star, "mu_lo": mu_lo, "mu_hi": mu_hi,
+        "pairwise": pairwise, "roots": {k_: _public(v) for k_, v in roots.items()},
+    }
+
+
+def classify_adjacent_fold_candidate_pairs(
+    solver: HarmonicNewtonKrylovSolver,
+    problem: FullPumpProblem,
+    branch: ContinuationBranch,
+    *,
+    newton_max: int = 15,
+    distinctness_tol: float = 1e-6,
+) -> list[dict]:
+    """Classify every ADJACENT pair of fold candidates on ``branch``.
+
+    Tests ``(E0,E1), (E1,E2), (E2,E3), ...`` -- every consecutive
+    combination, not a disjoint two-at-a-time grouping
+    (``(E0,E1), (E2,E3), ...``). Disjoint pairing can silently miss the
+    meaningful pair: if the real sequence is [noise, fold A, fold B],
+    disjoint pairing tests (noise, foldA) and leaves foldB trailing
+    unclassified, when (foldA, foldB) is the pair that actually matters.
+    Adjacent pairing surfaces every consecutive combination and leaves the
+    judgment of which candidates are "real" to the caller (or Milestone F).
+
+    Each result carries ``candidate_a_id``/``candidate_b_id`` (0-indexed
+    position in ``find_fold_candidates(branch)``, i.e. E0/E1/...) so a
+    result can be traced back to its two candidates.
+    """
+    candidates = find_fold_candidates(branch)
+    out: list[dict] = []
+    for i in range(len(candidates) - 1):
+        candidate_a, candidate_b = candidates[i], candidates[i + 1]
+        result = classify_fold_pair(
+            solver, problem, branch, candidate_a, candidate_b,
+            newton_max=newton_max, distinctness_tol=distinctness_tol,
+        )
+        result["candidate_a_id"] = i
+        result["candidate_b_id"] = i + 1
+        result["candidate_a_mu"] = 0.5 * (candidate_a.mu_before + candidate_a.mu_after)
+        result["candidate_b_mu"] = 0.5 * (candidate_b.mu_before + candidate_b.mu_after)
+        out.append(result)
+    return out

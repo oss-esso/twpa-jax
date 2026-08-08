@@ -1,0 +1,127 @@
+{
+  "cases": [
+    {
+      "checkpoint": "D:\\Projects\\Thesis\\twpa_jax\\g1_current_79\\pass\\points\\point_0004_p_m23p8947dbm_fp_7p9ghz\\pump",
+      "current_a": 6.958837637355967e-06,
+      "step_theta": 0.2,
+      "periods": 4,
+      "integration": {
+        "success": true,
+        "message": "success",
+        "steps": 126,
+        "newton_iterations": 289
+      },
+      "e_x_rms": 0.4017045111563922,
+      "e_x_max": 0.515086438972985,
+      "e_v_rms": 28.838665417201078,
+      "e_X": 0.4499513588910594,
+      "strobe_max": 39.86564100855855,
+      "strobe_periods": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "strobe_errors": [
+        0.0,
+        30.68714510882066,
+        35.3150697868959,
+        38.34169815491445,
+        39.86564100855855
+      ],
+      "dae_constraint_max": 0.1603497508762109,
+      "observables": {
+        "td_rj": 0.5664216509795212,
+        "hb_rj": 0.5717485786933646,
+        "td_max_phi": 0.6021572955710236,
+        "hb_max_phi": 0.6086355746751759,
+        "td_min_cos": 0.8241155946234929,
+        "hb_min_cos": 0.8204288895218875
+      }
+    },
+    {
+      "checkpoint": "D:\\Projects\\Thesis\\twpa_jax\\g1_current_79\\pass\\points\\point_0012_p_m19p6842dbm_fp_7p9ghz\\pump",
+      "current_a": 1.1299598687329626e-05,
+      "step_theta": 0.2,
+      "periods": 4,
+      "integration": {
+        "success": true,
+        "message": "success",
+        "steps": 126,
+        "newton_iterations": 333
+      },
+      "e_x_rms": 0.38371969843899706,
+      "e_x_max": 0.47525120002270976,
+      "e_v_rms": 27.64142006571645,
+      "e_X": 0.4233010368435389,
+      "strobe_max": 36.33755728109247,
+      "strobe_periods": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "strobe_errors": [
+        0.0,
+        29.415116950424828,
+        32.86946990078036,
+        35.23200320671499,
+        36.33755728109247
+      ],
+      "dae_constraint_max": 0.12001936068306182,
+      "observables": {
+        "td_rj": 0.7518638411391109,
+        "hb_rj": 0.7984469051679643,
+        "td_max_phi": 0.8508844618709706,
+        "hb_max_phi": 0.9247111752546275,
+        "td_min_cos": 0.6593184089554469,
+        "hb_min_cos": 0.6020652287150452
+      }
+    }
+  ],
+  "refinement": [
+    {
+      "checkpoint": "D:\\Projects\\Thesis\\twpa_jax\\g1_current_79\\pass\\points\\point_0012_p_m19p6842dbm_fp_7p9ghz\\pump",
+      "current_a": 1.1299598687329626e-05,
+      "step_theta": 0.2,
+      "periods": 4,
+      "integration": {
+        "success": true,
+        "message": "success",
+        "steps": 126,
+        "newton_iterations": 333
+      },
+      "e_x_rms": 0.38371969843899706,
+      "e_x_max": 0.47525120002270976,
+      "e_v_rms": 27.64142006571645,
+      "e_X": 0.4233010368435389,
+      "strobe_max": 36.33755728109247,
+      "strobe_periods": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "strobe_errors": [
+        0.0,
+        29.415116950424828,
+        32.86946990078036,
+        35.23200320671499,
+        36.33755728109247
+      ],
+      "dae_constraint_max": 0.12001936068306182,
+      "observables": {
+        "td_rj": 0.7518638411391109,
+        "hb_rj": 0.7984469051679643,
+        "td_max_phi": 0.8508844618709706,
+        "hb_max_phi": 0.9247111752546275,
+        "td_min_cos": 0.6593184089554469,
+        "hb_min_cos": 0.6020652287150452
+      }
+    }
+  ],
+  "validated": false
+}
