@@ -395,9 +395,15 @@ def checkpoint_dc_flux(
 
 def make_observables(system: TransientSystem, theta: np.ndarray, states: np.ndarray) -> dict[str, np.ndarray]:
     out: dict[str, list[float]] = {"theta": [], "mu": [], "source_current_a": [], "max_abs_sin_phi": [], "max_abs_phi": [], "min_cos_phi": [], "strongest_branch": [], "state_norm": [], "pump_node_flux": []}
+    dc_flux = np.asarray(
+        getattr(system.branch, "dc_flux", np.zeros(system.circuit.branch_count)),
+        dtype=float,
+    ).reshape(-1)
     for angle, y in zip(theta, states.T):
         q, p = system.unpack(y)
-        phi = np.asarray(system.circuit.Bphi.T @ (system.phi0 * q)) / system.phi0
+        phi = (
+            np.asarray(system.circuit.Bphi.T @ (system.phi0 * q)) + dc_flux
+        ) / system.phi0
         sin_phi = np.sin(phi)
         idx = int(np.argmax(np.abs(sin_phi)))
         out["theta"].append(float(angle))
