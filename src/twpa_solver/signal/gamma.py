@@ -21,7 +21,7 @@ def synthesize_real_from_positive_harmonics(
     modes: list[int] | np.ndarray | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     logger.debug("gamma_waveform_synthesis_start X_shape=%s omega=%s nt=%d modes=%r", X.shape, omega, nt, modes)
-    """Reconstruct the real pump waveform x(t) = 2 Re sum_k X_k exp(+i k omega t).
+    """Reconstruct x(t) = X_0 + 2 Re sum_{k>0} X_k exp(+i k omega t).
 
     `modes` are the positive integer pump-harmonic indices (one per row of X).
     Defaults to dense [1, 2, ..., H] for legacy solutions.
@@ -35,7 +35,8 @@ def synthesize_real_from_positive_harmonics(
             raise ValueError(f"modes length {k.size} != pump rows {H}")
     t = np.arange(nt, dtype=float) * (2.0 * np.pi / omega) / nt
     E = np.exp(1j * omega * t[:, None] * k[None, :])
-    x_t = 2.0 * np.real(E @ X)
+    weights = np.where(k == 0.0, 1.0, 2.0)
+    x_t = np.real(E @ (weights[:, None] * X))
     logger.debug("gamma_waveform_synthesis_complete t_shape=%s waveform_shape=%s max_abs=%s", t.shape, x_t.shape, np.max(np.abs(x_t)))
     return t, x_t
 

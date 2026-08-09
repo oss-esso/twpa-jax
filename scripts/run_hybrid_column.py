@@ -260,7 +260,11 @@ class ProductionPeriodicBackend:
                 # bridge, which needs the last valid HB report and state as its
                 # physical anchor.
                 if self.retained_checkpoint is not None and self.retained_checkpoint != checkpoint:
-                    for name in ("pump_solution.npz", "pump_report.json"):
+                    for name in (
+                        "pump_solution.npz",
+                        "pump_report.json",
+                        "hybrid_fixture_config.json",
+                    ):
                         (self.retained_checkpoint / name).unlink(missing_ok=True)
                 (checkpoint / "hybrid_point_summary.json").write_text(
                     json.dumps(
@@ -268,10 +272,32 @@ class ProductionPeriodicBackend:
                         indent=2, default=str,
                     ), encoding="utf-8",
                 )
+                # Persist the exact production fixture metadata used by the
+                # HB solve.  The TD bridge must not reconstruct DC bias or
+                # source conventions independently from nominal CLI values.
+                (checkpoint / "hybrid_fixture_config.json").write_text(
+                    json.dumps(
+                        {
+                            "pump_port": int(self.args.pump_port),
+                            "frequency_hz": float(point.pump_freq_ghz) * 1e9,
+                            "pump_current_a": float(point.current_a * self.scale),
+                            "dc_branch_flux": np.asarray(
+                                self.engine.dc_branch_flux, dtype=float
+                            ).tolist(),
+                            "source_convention": "peak Norton current, cos(omega t)",
+                            "source_mode": 1,
+                        },
+                        indent=2,
+                    ), encoding="utf-8",
+                )
                 self.retained_checkpoint = checkpoint
             else:
-                (checkpoint / "pump_solution.npz").unlink(missing_ok=True)
-                (checkpoint / "pump_report.json").unlink(missing_ok=True)
+                for name in (
+                    "pump_solution.npz",
+                    "pump_report.json",
+                    "hybrid_fixture_config.json",
+                ):
+                    (checkpoint / name).unlink(missing_ok=True)
         if not hasattr(self, "map_rows"):
             self.map_rows = {}
         self.map_rows[point.index] = {
@@ -421,6 +447,15 @@ def main(argv: list[str] | None = None) -> int:
         point for point in run_gain_map.build_points(gain_args)[0]
     ], args.outdir)
     h1_args = h1.parse_args([])
+    # Keep the transient bridge on the same physical port and external-flux
+    # convention as the HB/gain column.  H1 has historically defaulted to the
+    # four-port IPM pump (port 4), which is not present in compact RF-SQUID
+    # validation designs.
+    h1_args.pump_port = int(gain_args.pump_port)
+    h1_args.dc_flux_over_phi0 = float(
+        gain_args.dc_branch_flux_over_phi0
+        if gain_args.dc_branch_flux_over_phi0 is not None else 0.0
+    )
     dynamic = H1DynamicBackend(
         args.circuit_dir, args.freq_ghz, h1_args,
         gain_args.pump_current_jc_scale,

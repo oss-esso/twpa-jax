@@ -41,7 +41,12 @@ def build_args(ns: argparse.Namespace) -> argparse.Namespace:
         "--pump-power-max-dbm", str(ns.power_max_dbm),
         "--pump-freq-min-ghz", str(ns.freq_min_ghz),
         "--pump-freq-max-ghz", str(ns.freq_max_ghz),
+        "--attenuation-db", str(ns.attenuation_db),
         "--pump-mode-count", str(ns.pump_mode_count), "--nt", str(ns.nt),
+        "--pump-mode-policy", ns.pump_mode_policy,
+        "--mixing-order", str(ns.mixing_order), "--harmonics", str(ns.harmonics),
+        "--pump-port", str(ns.pump_port), "--source-port", str(ns.source_port),
+        "--out-port", str(ns.out_port),
         "--signal-detuning-mhz", str(ns.signal_detuning_mhz),
         "--no-signal-spectrum",
         "--signal-offset-count-per-side", str(ns.signal_offset_count_per_side),
@@ -53,7 +58,11 @@ def build_args(ns: argparse.Namespace) -> argparse.Namespace:
         "--inproc-max-newton", str(ns.inproc_max_newton),
         "--inproc-fail-fast", "--overwrite", "--log-level", "WARNING",
     ]
+    if ns.dc_branch_flux_over_phi0 is not None:
+        argv.extend(["--dc-branch-flux-over-phi0", str(ns.dc_branch_flux_over_phi0)])
     parsed = run_gain_map.parse_args(argv)
+    if ns.signal_ghz is not None:
+        parsed.signal_ghz = float(ns.signal_ghz)
     parsed.workflow_mode = "slow"
     return parsed
 
@@ -329,7 +338,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--power-max-dbm", type=float, default=-16.0)
     parser.add_argument("--freq-min-ghz", type=float, default=7.6)
     parser.add_argument("--freq-max-ghz", type=float, default=7.85)
+    parser.add_argument("--attenuation-db", type=float, default=0.0)
     parser.add_argument("--pump-mode-count", type=int, default=10)
+    parser.add_argument("--pump-mode-policy", default="positive_odd_jc")
+    parser.add_argument("--mixing-order", type=int, choices=(3, 4), default=4)
+    parser.add_argument("--harmonics", type=int, default=3)
+    parser.add_argument("--pump-port", type=int, default=4)
+    parser.add_argument("--source-port", type=int, default=1)
+    parser.add_argument("--out-port", type=int, default=2)
+    parser.add_argument("--dc-branch-flux-over-phi0", type=float, default=None)
+    parser.add_argument("--signal-ghz", type=float, default=None)
     parser.add_argument("--nt", type=int, default=40)
     parser.add_argument("--signal-detuning-mhz", type=float, default=500.0)
     parser.add_argument("--signal-offset-count-per-side", type=int, default=5)
@@ -347,6 +365,7 @@ def main(argv: list[str] | None = None) -> int:
         help="Independent frequency-column child processes (slow mode).",
     )
     parser.add_argument("--no-isolate-columns", dest="isolate_columns", action="store_false")
+    parser.add_argument("--log-level", default="INFO")
     parser.add_argument("--_single-column", action="store_true", help=argparse.SUPPRESS)
     parser.set_defaults(isolate_columns=True)
     args = parser.parse_args(argv)
@@ -378,6 +397,11 @@ def main(argv: list[str] | None = None) -> int:
             gain_args, points, column_dir
         )
         h1_args = hybrid.h1.parse_args([])
+        h1_args.pump_port = int(gain_args.pump_port)
+        h1_args.dc_flux_over_phi0 = float(
+            gain_args.dc_branch_flux_over_phi0
+            if gain_args.dc_branch_flux_over_phi0 is not None else 0.0
+        )
         dynamic = hybrid.H1DynamicBackend(
             args.circuit_dir, freq, h1_args,
             gain_args.pump_current_jc_scale,
