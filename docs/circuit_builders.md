@@ -101,9 +101,17 @@ not interchangeable — a design built with one is not reproduced by another.**
 
 | Mode | Behavior | Cost |
 | --- | --- | --- |
-| `cached` (default) | Uses the stored CPW cross-section, discretized by `calculate_discrete_params` | fast |
+| `auto` (design-file default) | Optimizes the requested coupling/frequency and selects two-line or centre-ground three-line CPW geometry | slow |
+| `cached` | Uses the stored CPW cross-section, discretized by `calculate_discrete_params` | fast |
 | `optimize` | L-BFGS-B search over (width, gap, gap-to-ground) to hit `coupling_dB` and `Z0` | slow |
 | `ideal` | No geometry at all: even/odd impedances set directly from the target coupling, discretized to a quarter wave at `coupler_freq_hz` | fast |
+
+`auto` is the recommended design-file mode. It always optimizes from the
+YAML `coupling_dB`, `coupler_freq_hz`, and `Z0` values. Targets at or above
+approximately -18 dB use the two-line CPW model; weaker-coupling targets use
+the centre-ground three-line model. The selected model and optimized geometry
+are retained in the resolved design metadata. `cached`, `optimize`, and
+`ideal` remain available for compatibility and controlled comparisons.
 
 `ideal` still produces a *distributed* coupler (many short cells), so it stays
 broadband, unlike a single lumped cell that only matches at one frequency.

@@ -41,6 +41,13 @@ the preset, and `design_resolved.json` records the final values. A design may
 inherit from one parent with `extends: parent.yaml`; child mappings override
 parent mappings deterministically.
 
+Directional couplers use the design's `coupling_dB`, `coupler_freq_hz`, and
+`Z0` values. With `coupler_mode: auto`, compilation optimizes the geometry and
+selects the two-line model for stronger coupling (approximately -18 dB and
+above) or the centre-ground three-line model for weaker coupling. The selected
+geometry is retained in resolved metadata; `cached` and `ideal` remain
+available for legacy and controlled-comparison builds.
+
 Deterministic spatial profiles are part of the design:
 
 ```yaml

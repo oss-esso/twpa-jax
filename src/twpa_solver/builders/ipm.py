@@ -70,6 +70,8 @@ import numpy as np
 import scipy.sparse as sp
 from scipy.optimize import minimize
 
+from twpa_solver.builders.cpw_coupler import CPWConformalCoupler, optimize_cpw_coupler
+
 from twpa_solver.builders.profiles import (
     Segment,
     evaluate_profile,
@@ -140,6 +142,7 @@ class CouplerGeometry:
     length_um: float
     k_db: float
     z_input_ohm: float
+    model: str = "two_line"
 
 
 @dataclass
@@ -474,6 +477,31 @@ def calculate_discrete_params(
     )
 
 
+def calculate_conformal_discrete_params(result, cell_length_um: float = 10.0) -> CouplerDiscrete:
+    """Discretize a conformal-mapping CPW result into the normal coupler IR."""
+    cpw = CPWConformalCoupler(list(result.gaps_um), list(result.widths_um), result.length_um)
+    values = cpw.parameters()
+    cell_length_m = cell_length_um * 1e-6
+    geom = CouplerGeometry(
+        width_um=float(result.widths_um[0]),
+        gap_between_lines_um=float(result.gaps_um[1]),
+        gap_to_ground_um=float(result.gaps_um[0]),
+        length_um=float(result.length_um),
+        k_db=float(result.coupling_db),
+        z_input_ohm=float(result.z_eff_ohm),
+        model=str(result.model),
+    )
+    return CouplerDiscrete(
+        L_cell=float(values["L_self"] * cell_length_m),
+        Cc_cell=float(values["C_mutual"] * cell_length_m),
+        C_gnd_cell=float(values["C_self"] * cell_length_m),
+        K_ind=float(values["L_mutual"] / values["L_self"]),
+        N_coupled=max(1, int(round(result.length_um / cell_length_um))),
+        N_uncoupled=30,
+        geometry=geom,
+    )
+
+
 def make_ideal_coupler(
     coupling_dB: float = -14.0,
     freq_hz: float = 8.0e9,
@@ -703,6 +731,15 @@ def add_edge_coupled_directional_coupler(
 
 
 def make_coupler_discrete(params: IPMParams, mode: str) -> CouplerDiscrete:
+    if mode in {"auto", "optimized", "optimize_cpw"}:
+        result = optimize_cpw_coupler(
+            coupling_db=params.coupling_dB,
+            frequency_hz=params.coupler_freq_hz,
+            z0=params.Z0,
+            model="auto",
+        )
+        return calculate_conformal_discrete_params(result, params.cell_length_um)
+
     if mode == "cached":
         return calculate_discrete_params(
             params.cached_coupler_width_um,

@@ -334,7 +334,7 @@ def compile_design(spec: Mapping[str, Any], *, coupler_mode: str | None = None,
             raise DesignParameterError(f"parameters: declared but unused {unused}")
     cursors = {str(key): int(value) for key, value in spec["cursors"].items()}
     coupler_choice = str(coupler_mode or spec.get(
-        "coupler_mode", parameters.get("coupler_mode", "cached")))
+        "coupler_mode", parameters.get("coupler_mode", "auto")))
     effective_plan = plan or _design_plan(spec, parameters)
     ctx = BuildContext([], dict(cursors), 0, int(spec["ground"]),
                        coupler=make_coupler_discrete(
@@ -405,6 +405,15 @@ def compile_design(spec: Mapping[str, Any], *, coupler_mode: str | None = None,
                            "technology": spec.get("technology"),
                            "technology_parameters": spec.get("_technology_parameters", {}),
                            "coupler_mode": coupler_choice, "source": spec.get("_source"),
+                           "coupler_geometry": ({
+                               "width_um": ctx.coupler.geometry.width_um,
+                               "gap_between_lines_um": ctx.coupler.geometry.gap_between_lines_um,
+                               "gap_to_ground_um": ctx.coupler.geometry.gap_to_ground_um,
+                               "length_um": ctx.coupler.geometry.length_um,
+                               "coupling_db": ctx.coupler.geometry.k_db,
+                               "z_input_ohm": ctx.coupler.geometry.z_input_ohm,
+                               "model": ctx.coupler.geometry.model,
+                           } if ctx.coupler is not None else {}),
                            "profiles": spec.get("profiles", {}),
                            "component_plan": (effective_plan.metadata
                                               if effective_plan is not None else {})},

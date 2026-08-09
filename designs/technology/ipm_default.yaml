@@ -1,5 +1,5 @@
 name: ipm_default
-coupler_mode: cached
+coupler_mode: auto
 parameters:
   Ll: 4.24e-12
   Cl: 1.695e-15
