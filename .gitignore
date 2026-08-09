@@ -11,6 +11,11 @@ pytest-of-*/
 .hybrid_outputs/
 /.pytest*/
 /pytest-of-*/
+/g1_current_*/
+/h1_*/
+/h2_*/
+/h3_*/
+/tmptw*/
 industrial_completion_outputs/
 references/**/__pycache__/
 
