@@ -21,7 +21,8 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--design", required=True)
     parser.add_argument("--outdir", required=True)
     parser.add_argument("--write-matrices", action="store_true")
-    parser.add_argument("--coupler-mode", default=None, choices=("cached", "ideal", "optimize"))
+    parser.add_argument("--coupler-mode", default=None,
+                        choices=("auto", "cached", "ideal", "optimize"))
     parser.add_argument("--overwrite", action="store_true")
     parser.add_argument("--strict", action="store_true")
     parser.add_argument("--profile-json")
