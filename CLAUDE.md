@@ -9,6 +9,19 @@ parametric templates.
 The checked-in `designs/` tree is source-only; generated matrices, plots, and
 resolved artifacts belong under `outputs/` or another disposable build path.
 
+## Branch and artifact policy
+
+`main` is the clean, installable package branch. `dev` is the development and
+cross-machine synchronization branch and may contain experiments, generated
+artifacts, and incomplete work. `.gitignore` is not a branch boundary: ignored
+files are not synchronized, and tracked files merge normally.
+
+Never merge `dev` wholesale into `main`. Keep production changes in focused
+commits and promote only those commits with `git cherry-pick` or a manually
+curated merge. Before promotion, check that development-only paths are absent
+from the destination. Generated outputs belong under ignored `outputs/` (or
+another disposable path); source design YAML belongs under `designs/`.
+
 ## Design-independent saturation validation status (2026-07-29)
 
 Do not use JosephsonCircuits.jl or the Themis measurement cube as physical
