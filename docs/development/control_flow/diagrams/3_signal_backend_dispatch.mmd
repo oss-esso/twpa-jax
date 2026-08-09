@@ -1,0 +1,17 @@
+%% Diagram 3: Signal-solver backend dispatch
+%% _gain L980; _solve_signal L1059; floquet.py
+flowchart TD
+  GS["_gain L980: load_pump L984 -> compute_gamma_hat L988 -> build_khat L994\nkhat_off_0 L997; assemble_khat_conversion_base L1010 (spectrum)"] --> ONE["_solve_signal L1059"]
+  ONE --> SB{"--signal-backend"}
+  SB -->|"direct (default)"| D["solve_gain_one floquet.py L217\nfull (2S+1)*n; assemble_conversion_matrix[_from_base] L115/L103;\nblock(m,q)=khat[m-q]+D(w_s+m w_p) diag; always baselines"]
+  SB -->|"schur"| S["solve_gain_one_schur floquet.py L377\nreduced (2S+1)*m; build_signal_schur_partition L359 (cached L1063);\nblock+part.schur[m]; baselines optional (--skip-baselines L447)"]
+  D --> LS{"--signal-solver: solve_linear_system L199"}
+  S --> LS
+  LS -->|"superlu (default)"| SU["scipy spla.spsolve L201"]
+  LS -->|"pardiso"| PA["_pardiso_spsolve_reuse L59 (real-embed complex, TLS symbolic reuse)"]
+  SU --> EX["phi_out -> vout_on=i w_s phi_out; gain_db_from_s(port_s...) gain.py L16 / linear.py L69"]
+  PA --> EX
+  EX --> VAL{"isfinite & rel_residual<=1e-7? L318/L487"}
+  VAL -->|yes| VS["GainResult.status=VALID_SOLVED"]
+  VAL -->|no| CK["GainResult.status=CHECK"]
+  ONE --> PAR["ThreadPoolExecutor(--signal-workers=6) over spectrum offsets L1025"]

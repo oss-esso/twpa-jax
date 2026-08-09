@@ -1,0 +1,12 @@
+flowchart TD
+  FAIL["cell solve fails (not PASS)"] --> RECOV["recovery chain (§6.2 column / §6.3 traversal)"]
+  RECOV --> EV{"fold evidence?"}
+  EV --> E1["continuation_failure_is_fold_evidence L1175<br/>(adaptive method, reached_target False, >=2 steps)"]
+  EV --> E2["power substep step_floor L1379<br/>(step-independent stall -> verified_fold=True)"]
+  EV --> E3["column arclength fold_lambdas L1309<br/>(sign change of lambda_dot)"]
+  EV --> E4["fold-policy arclength: solve_arclength reached_target L1657"]
+  E1 --> COUNT{"patience>0 & verified_fold &<br/>consec_fail>=patience? L1410"}
+  E2 --> COUNT
+  E3 --> COUNT
+  COUNT -->|trip| SKIP["past_fold_skip_row L1152<br/>pump_status/gain_status/status = SKIP_PAST_FOLD<br/>gain = None/NaN; remaining higher-power cells skipped; break column L1423"]
+  COUNT -->|no trip| KEEP["keep FAILED row (gain NaN), continue"]

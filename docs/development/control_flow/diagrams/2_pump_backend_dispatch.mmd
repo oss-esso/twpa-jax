@@ -1,0 +1,17 @@
+%% Diagram 2: Pump-solver backend dispatch
+%% _make_solve_problem L561; solve_point mode dispatch L640; solver.py
+flowchart TD
+  MSP["_make_solve_problem L561"] --> Q{"--inproc-pump-backend"}
+  Q -->|"full"| FULL["FullPumpProblem unchanged (problem.py L89)\nunknown (H,n); residual L177; JVP L195 (analytic AFT);\nprecond real_coupled/mean_tangent/spectral_coupled/linear;\nreal_coupled_fast -> NotImplementedError (solve_one L242)"]
+  Q -->|"schur_cpu_mt (default)"| SCH["build_schur_problem (schur_operators.py L300)"]
+  SCH --> PART["build_partition (schur_partition.py L79): factor D_ee,k once/harmonic"]
+  PART --> ASM["assemble_schur_complements L149: S_k = D_nn - D_ne D_ee^-1 D_en"]
+  ASM --> SRP["SchurReducedProblem L43\nunknown (H,m) retained; residual L124; JVP L138;\nreconstruct_full L200 post-convergence"]
+  SRP --> PC["precond: real_coupled_fast -> assemble_real_coupled_fast L240\n-> FastCoupledPreconditioner (fast_coupled.py L129, PARDISO/SuperLU)"]
+  SRP --> LRU["LRU cache per pump freq L571-579 (--inproc-schur-cache-size=2)"]
+  FULL --> MODE{"solve mode L640"}
+  SRP --> MODE
+  MODE -->|"warm + warm_X"| DIR["solve_direct L453 (single Newton lambda=1)"]
+  MODE -->|"seed/cold"| CONT["intra-cell continuation (Diagram 4)"]
+  DIR --> NK["Newton-Krylov solve_one L131 (Diagram 5)"]
+  CONT --> NK

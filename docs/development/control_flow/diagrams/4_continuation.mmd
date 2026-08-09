@@ -1,0 +1,30 @@
+%% Diagram 4: Continuation controller (intra-cell + inter-cell)
+%% solve_point L643; solver.py; run_warm_pass_inprocess L1195; run_map_traversal L1717
+flowchart TD
+  subgraph INTRA["Intra-cell (--inproc-continuation, solve_point L643)"]
+    IC{"value"} --> F["fixed -> solve_continuation L472 (linspace 1/N..1)"]
+    IC --> AC["adaptive_copy -> solve_adaptive_continuation L537 (copy)"]
+    IC --> AS["adaptive_secant (default) L537 (secant predictor L591)"]
+    IC --> AT["adaptive_tangent L537 (tangent_predictor L812: J Xdot=S)"]
+    IC --> AF["affine -> solve_affine_continuation L700 (newton_contraction L654)"]
+    IC --> PT["ptc -> solve_pseudo_transient L836 (SER timestep L904)"]
+    IC --> AL["arclength -> solve_arclength L910 then solve_direct L676"]
+  end
+  AS --> STEP["adaptive step control L537:\ngrow x1.5 on converge (L661); shrink x0.5 on fail (L666);\nmin_step floor -> fixed fallback solve_continuation(fallback_fixed_steps) L682;\ndeadline max_wall_s L573; predictor guard L601 (reject bad->copy)"]
+  subgraph INTER_P["Inter-cell power axis (run_warm_pass_inprocess L1195)"]
+    COL["per column ascending power"] --> SGP["--inproc-fold-predictor secant: secant_guess L1111"]
+    SGP --> WD["solve_point warm -> solve_direct (single Newton)"]
+    WD --> RECC["recovery: arclength L1287 -> reseed L1346 -> power-substep L1357"]
+    RECC --> SUB["solve_power_substep L875 (dBm micro-steps; step_floor=verified_fold L1379)"]
+  end
+  subgraph INTER_2D["Inter-cell 2-D traversal (run_map_traversal L1717)"]
+    ORD["--traversal order _traversal_order L1439"] --> PRED["--predictor _select_guess L1563 (copy/power_secant/freq_secant/corner/plane/portfolio)"]
+    PRED --> ATT["_attempt L1590"]
+    ATT --> REC2["--recovery _recover L1595 (none/reseed/alt_parent/bridge/ladder)"]
+    REC2 --> BR["solve_bridge L813 (diagonal/freq_first/power_first/adaptive)"]
+    REC2 --> FP["--fold-policy L1644 (patience/cross_axis/bridge_gate/combined/arclength)"]
+  end
+  subgraph FOLD_SPECIAL["Near-fold special paths"]
+    FA["solve_arclength L910 (bordering algo, J a=-R & J b=S, fold=lambda_dot sign change L1010)"]
+    FB["fold_power L1225 (--fold-follow, run until fold or max_steps)"]
+  end

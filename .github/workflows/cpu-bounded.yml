@@ -1,0 +1,32 @@
+name: cpu-bounded
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  foundation:
+    strategy:
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: python -m pip install -e .
+      - run: python -m pytest -q
+      - name: Bounded matrix-free pump equivalence
+        run: >-
+          python scripts/run_resource_bounded.py
+          --timeout-s 90
+          --max-memory-mib 1200
+          --max-disk-mib 16
+          --disk-root outputs/ci_resource_smoke
+          --log-json outputs/ci_resource_smoke/pump_equivalence.json
+          --
+          python -m pytest -q
+          tests/test_resource_safety.py::test_tiny_pump_newton_krylov_matches_dense_reference
+          --run-slow
+

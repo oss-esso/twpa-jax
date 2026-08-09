@@ -1,0 +1,337 @@
+#!/usr/bin/env python3
+"""
+Run the current Python harmonic-pump/gain solver on the JosephsonCircuits.jl
+documentation designs exported by exp10_jc_doc_python_design_builders.py.
+
+This is intentionally a probe runner, not a certification script.
+It runs only the cases that the current one-pump/no-DC/real-valued solver can
+honestly attempt first:
+  - jc_jpa       one-pump one-port reflection-like probe
+  - jc_jtwpa     one-pump transmission probe
+  - jc_fqjtwpa   one-pump transmission probe
+
+It records the other four cases as unsupported for the current path:
+  - jc_dpjpa        multi-pump
+  - jc_fxjpa        DC / flux operating point
+  - jc_fqjtwpa_diss complex-valued dissipative capacitance/loss
+  - jc_fxjtwpa      DC / flux operating point + pump line
+
+Assumptions about the existing repo scripts:
+  - experiments/exp08_full_ipm_pump_solve.py supports --ipm-dir, --pump-port,
+    --pump-freq-ghz, --pump-current-ratio-ic, --continuation-steps,
+    --continuation-predictor, --newton-tol, --gmres-rtol, --jvp-mode,
+    --skip-time-residual, --quiet, --outdir.
+  - experiments/exp09_full_ipm_gain_from_pump.py supports --pump-dir, --sweep,
+    --signal-start-ghz, --signal-stop-ghz, --points, --sidebands, --gamma-nt,
+    --source-port, --out-port, --outdir.
+
+If one of those args is missing, the script prints the exact missing capability.
+"""
+
+from __future__ import annotations
+
+import argparse
+import csv
+import json
+import re
+import subprocess
+import sys
+from pathlib import Path
+from typing import Any
+
+
+SUPPORTED_NOW = {"jc_jpa", "jc_jtwpa", "jc_fqjtwpa",
+    "jc_fqjtwpa_diss",
+}
+
+CASE_SWEEPS = {
+    # Keep these coarse first. Once smoke is green, increase points.
+    "jc_jpa": {"source_port": 1, "out_port": 1, "start": 4.5, "stop": 5.0, "points": 21, "sidebands": 2},
+    "jc_jtwpa": {"source_port": 1, "out_port": 2, "start": 1.0, "stop": 14.0, "points": 27, "sidebands": 2},
+    "jc_fqjtwpa": {"source_port": 1, "out_port": 2, "start": 1.0, "stop": 14.0, "points": 27, "sidebands": 2},
+    "jc_fqjtwpa_diss": {"source_port": 1, "out_port": 2, "start": 1.0, "stop": 14.0, "points": 27, "sidebands": 2},
+}
+
+
+def run(cmd: list[str], cwd: Path, echo: bool = True) -> tuple[int, str]:
+    if echo:
+        print("\n" + "=" * 110)
+        print(" ".join(str(x) for x in cmd))
+        print("=" * 110)
+    p = subprocess.run(
+        cmd,
+        cwd=cwd,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+    )
+    if echo:
+        print(p.stdout)
+    return p.returncode, p.stdout
+
+
+def grab_float(text: str, key: str) -> float | None:
+    m = re.search(rf"{re.escape(key)}=([-+0-9.eE]+)", text)
+    return None if m is None else float(m.group(1))
+
+
+def grab_str(text: str, key: str) -> str | None:
+    m = re.search(rf"{re.escape(key)}=([^\s]+)", text)
+    return None if m is None else m.group(1)
+
+
+def help_text(script: Path, root: Path) -> str:
+    code, out = run([sys.executable, str(script), "--help"], cwd=root, echo=False)
+    return out if code == 0 else out
+
+
+def require_args(script_name: str, help_out: str, args: list[str]) -> list[str]:
+    missing = [a for a in args if a not in help_out]
+    if missing:
+        print(f"\nMISSING_ARGS in {script_name}: {missing}")
+    return missing
+
+
+def load_json(path: Path) -> dict[str, Any]:
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def unsupported_reason(summary: dict[str, Any]) -> str:
+    features = summary.get("metadata", {}).get("features", {})
+    reasons: list[str] = []
+    if features.get("multi_pump"):
+        reasons.append("multi_pump")
+    if features.get("needs_dc"):
+        reasons.append("needs_dc_or_flux_operating_point")
+    if features.get("complex_valued") or summary.get("complex_valued"):
+        reasons.append("complex_valued_loss")
+    if not features.get("single_pump"):
+        reasons.append("not_single_pump")
+    return "+".join(reasons) if reasons else "not_in_first_supported_set"
+
+
+def pump_ratio_from_summary(summary: dict[str, Any]) -> tuple[int, float, float, float]:
+    md = summary["metadata"]
+    source = md["pump_sources"][0]
+    port = int(source["port"])
+    current_a = float(source["current_a"])
+    freq_ghz = float(md["pump_freqs_ghz"][0])
+    ic_med = float(summary["Ic_median"])
+    if ic_med <= 0:
+        raise ValueError(f"bad Ic_median for {summary['case']}: {ic_med}")
+    return port, current_a / ic_med, current_a, freq_ghz
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--design-root", default="outputs/jc_doc_python_designs")
+    ap.add_argument("--outroot", default="outputs/exp11_jc_doc_solver_probe")
+    ap.add_argument("--cases", nargs="*", default=["jc_jpa", "jc_jtwpa", "jc_fqjtwpa", "jc_fqjtwpa_diss"])
+    ap.add_argument("--build-if-missing", action="store_true")
+    ap.add_argument("--exp10", default="experiments/exp10_jc_doc_python_design_builders.py")
+    ap.add_argument("--exp08", default="experiments/exp08_full_ipm_pump_solve.py")
+    ap.add_argument("--exp09", default="experiments/exp09_full_ipm_gain_from_pump.py")
+    ap.add_argument("--harmonics", type=int, default=7)
+    ap.add_argument("--nt", type=int, default=96)
+    ap.add_argument("--continuation-steps", type=int, default=10)
+    ap.add_argument("--newton-tol", default="3e-6")
+    ap.add_argument("--gmres-rtol", default="3e-4")
+    ap.add_argument("--gamma-nt", type=int, default=96)
+    ap.add_argument("--audit-time-residual", action="store_true", help="Do not pass --skip-time-residual to Exp08")
+    args = ap.parse_args()
+
+    root = Path.cwd()
+    design_root = root / args.design_root
+    outroot = root / args.outroot
+    outroot.mkdir(parents=True, exist_ok=True)
+
+    exp10 = root / args.exp10
+    exp08 = root / args.exp08
+    exp09 = root / args.exp09
+
+    if args.build_if_missing and not (design_root / "build_manifest.json").exists():
+        if not exp10.exists():
+            raise SystemExit(f"cannot build missing designs; exp10 not found: {exp10}")
+        code, _out = run([sys.executable, str(exp10), "--outdir", str(design_root)], cwd=root)
+        if code != 0:
+            raise SystemExit("exp10 builder failed")
+
+    if not design_root.exists():
+        raise SystemExit(f"design root missing: {design_root}; run exp10 builder first")
+
+    if not exp08.exists():
+        raise SystemExit(f"missing Exp08 script: {exp08}")
+    if not exp09.exists():
+        raise SystemExit(f"missing Exp09 script: {exp09}")
+
+    exp08_help = help_text(exp08, root)
+    exp09_help = help_text(exp09, root)
+
+    missing = []
+    missing += require_args("Exp08", exp08_help, [
+        "--ipm-dir", "--pump-port", "--pump-freq-ghz", "--pump-current-ratio-ic",
+        "--continuation-steps", "--continuation-predictor", "--newton-tol", "--gmres-rtol",
+        "--jvp-mode", "--outdir",
+    ])
+    if not args.audit_time_residual:
+        missing += require_args("Exp08", exp08_help, ["--skip-time-residual"])
+    missing += require_args("Exp09", exp09_help, [
+        "--pump-dir", "--ipm-dir", "--sweep", "--signal-start-ghz", "--signal-stop-ghz", "--points",
+        "--sidebands", "--gamma-nt", "--source-port", "--out-port", "--outdir",
+    ])
+    if missing:
+        raise SystemExit("Required CLI support is missing. Patch Exp08/Exp09 before running this probe.")
+
+    rows: list[dict[str, Any]] = []
+
+    # Also write explicit unsupported rows for all manifest cases if manifest exists.
+    manifest_path = design_root / "build_manifest.json"
+    manifest_cases: list[str] = []
+    if manifest_path.exists():
+        manifest_cases = [str(x["case"]) for x in json.loads(manifest_path.read_text(encoding="utf-8"))]
+
+    for case in manifest_cases:
+        if case in SUPPORTED_NOW:
+            continue
+        spath = design_root / case / "summary.json"
+        if spath.exists():
+            summary = load_json(spath)
+            rows.append({
+                "case": case,
+                "attempted": False,
+                "status": "UNSUPPORTED_CURRENT_SOLVER",
+                "reason": unsupported_reason(summary),
+                "nodes": summary.get("nodes"),
+                "jj": summary.get("Bphi_shape", [None, None])[1],
+                "pump_runtime_s": None,
+                "final_coeff_rel": None,
+                "final_gmres": None,
+                "branch_i_max_abs": None,
+                "branch_psi_max_abs": None,
+                "gain_all_status_valid": None,
+                "max_gain_vs_off_db": None,
+                "max_gain_vs_pumpdiag_db": None,
+                "gain_runtime_s": None,
+            })
+
+    for case in args.cases:
+        case_dir = design_root / case
+        summary_path = case_dir / "summary.json"
+        if not summary_path.exists():
+            rows.append({"case": case, "attempted": False, "status": "MISSING_DESIGN", "reason": str(summary_path)})
+            continue
+
+        summary = load_json(summary_path)
+        if case not in SUPPORTED_NOW:
+            rows.append({
+                "case": case,
+                "attempted": False,
+                "status": "UNSUPPORTED_CURRENT_SOLVER",
+                "reason": unsupported_reason(summary),
+                "nodes": summary.get("nodes"),
+                "jj": summary.get("Bphi_shape", [None, None])[1],
+            })
+            continue
+
+        pump_port, pump_ratio, pump_current_a, pump_freq_ghz = pump_ratio_from_summary(summary)
+        sweep = CASE_SWEEPS[case]
+        pump_dir = outroot / f"pump_{case}"
+        gain_dir = outroot / f"gain_{case}"
+
+        pump_cmd = [
+            sys.executable, str(exp08),
+            "--ipm-dir", str(case_dir),
+            "--pump-port", str(pump_port),
+            "--pump-freq-ghz", str(pump_freq_ghz),
+            "--pump-current-ratio-ic", f"{pump_ratio:.17g}",
+            "--harmonics", str(args.harmonics),
+            "--nt", str(args.nt),
+            "--continuation-steps", str(args.continuation_steps),
+            "--continuation-predictor", "secant",
+            "--newton-tol", str(args.newton_tol),
+            "--gmres-rtol", str(args.gmres_rtol),
+            "--jvp-mode", "aft",
+            "--quiet",
+            "--outdir", str(pump_dir),
+        ]
+        if not args.audit_time_residual:
+            pump_cmd.insert(-2, "--skip-time-residual")
+
+        pump_code, pump_out = run(pump_cmd, cwd=root)
+        pump_status = grab_str(pump_out, "status")
+
+        row: dict[str, Any] = {
+            "case": case,
+            "attempted": True,
+            "status": pump_status,
+            "reason": None,
+            "nodes": summary.get("nodes"),
+            "jj": summary.get("Bphi_shape", [None, None])[1],
+            "pump_port": pump_port,
+            "pump_freq_ghz": pump_freq_ghz,
+            "pump_current_a": pump_current_a,
+            "pump_current_ratio_ic_median": pump_ratio,
+            "pump_returncode": pump_code,
+            "pump_runtime_s": grab_float(pump_out, "total_runtime_s"),
+            "final_coeff_rel": grab_float(pump_out, "final_coeff_rel"),
+            "final_time_rel": grab_float(pump_out, "final_time_rel"),
+            "final_gmres": grab_float(pump_out, "final_gmres_iterations_last_step"),
+            "final_newton": grab_float(pump_out, "final_newton_iterations_last_step"),
+            "branch_i_max_abs": grab_float(pump_out, "branch_i_max_abs"),
+            "branch_psi_max_abs": grab_float(pump_out, "branch_psi_max_abs"),
+            "gain_all_status_valid": None,
+            "max_gain_vs_off_db": None,
+            "max_gain_vs_pumpdiag_db": None,
+            "gain_runtime_s": None,
+        }
+
+        if pump_code == 0 and pump_status == "VALID_CONVERGED":
+            gain_cmd = [
+                sys.executable, str(exp09),
+                "--pump-dir", str(pump_dir),
+                "--ipm-dir", str(case_dir),
+                "--sweep",
+                "--signal-start-ghz", str(sweep["start"]),
+                "--signal-stop-ghz", str(sweep["stop"]),
+                "--points", str(sweep["points"]),
+                "--sidebands", str(sweep["sidebands"]),
+                "--gamma-nt", str(args.gamma_nt),
+                "--source-port", str(sweep["source_port"]),
+                "--out-port", str(sweep["out_port"]),
+                "--outdir", str(gain_dir),
+            ]
+            gain_code, gain_out = run(gain_cmd, cwd=root)
+            row["gain_returncode"] = gain_code
+            row["gain_all_status_valid"] = grab_str(gain_out, "all_status_valid")
+            row["max_gain_vs_off_db"] = grab_float(gain_out, "max_gain_vs_off_db")
+            row["max_gain_vs_pumpdiag_db"] = grab_float(gain_out, "max_gain_vs_pumpdiag_db")
+            row["gain_runtime_s"] = grab_float(gain_out, "total_runtime_s")
+        else:
+            row["reason"] = "pump_not_valid_converged"
+
+        rows.append(row)
+
+        # Incremental write.
+        csv_path = outroot / "summary.csv"
+        fieldnames = sorted({k for r in rows for k in r.keys()})
+        with csv_path.open("w", newline="", encoding="utf-8") as f:
+            w = csv.DictWriter(f, fieldnames=fieldnames)
+            w.writeheader()
+            w.writerows(rows)
+        (outroot / "summary.json").write_text(json.dumps(rows, indent=2), encoding="utf-8")
+
+    print("\n" + "=" * 110)
+    print("EXP11 SUMMARY")
+    print("=" * 110)
+    for r in rows:
+        print(
+            f"{str(r.get('case')):16s} {str(r.get('status')):28s} "
+            f"pump_s={r.get('pump_runtime_s')} coeff={r.get('final_coeff_rel')} "
+            f"gain_diag={r.get('max_gain_vs_pumpdiag_db')} reason={r.get('reason')}"
+        )
+    print(f"\nwrote_summary_csv={outroot / 'summary.csv'}")
+    print(f"wrote_summary_json={outroot / 'summary.json'}")
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,128 @@
+{
+  "status": "PYTHON_IPM_BUILD_OK",
+  "total_elements": 24023,
+  "non_ground_nodes": 9242,
+  "min_node": 1,
+  "max_node": 12416,
+  "counts": {
+    "port": 4,
+    "resistor": 4,
+    "capacitor": 13140,
+    "linear_inductor": 5352,
+    "coupling_capacitor": 819,
+    "mutual_inductor_k": 816,
+    "josephson_inductor": 3888
+  },
+  "params": {
+    "start_node_top": 1,
+    "start_node_bot": 10000,
+    "ground": 0,
+    "array_length": 648,
+    "num_rows": 6,
+    "arrays_per_dc": 2,
+    "coupling_dB": -20.0,
+    "Z0": 50.0,
+    "coupler_freq_hz": 10000000000.0,
+    "length_of_long_TL": 900,
+    "length_of_short_TL": 90,
+    "coupler_section_length": 800,
+    "len1": 0,
+    "len2": 50,
+    "len3": 0,
+    "len4": 0,
+    "Lj": 1.239e-10,
+    "Cj": 1.4500000000000001e-13,
+    "Cg": 6.600000000000001e-14,
+    "Cl_per_um": 1.6950000000000002e-16,
+    "Ll_per_um": 4.2399999999999996e-13,
+    "Rleft": 50.0,
+    "Rright": 50.0,
+    "Rm": 50.0,
+    "cell_length_um": 10.0,
+    "cached_coupler_width_um": 18.440643056739127,
+    "cached_coupler_gap_um": 230.78410199779088,
+    "cached_coupler_gap_to_ground_um": 5.0,
+    "cached_coupler_length_um": 2715.595049267589
+  },
+  "coupler": {
+    "L_cell": 4.611661665494401e-12,
+    "Cc_cell": 3.7062196533078923e-16,
+    "C_gnd_cell": 1.4936126130945421e-15,
+    "K_ind": 0.03868434869536279,
+    "N_coupled": 272,
+    "N_uncoupled": 30,
+    "geometry": {
+      "width_um": 18.440643056739127,
+      "gap_between_lines_um": 230.78410199779088,
+      "gap_to_ground_um": 5.0,
+      "length_um": 2715.595049267589,
+      "k_db": -18.451001487858974,
+      "z_input_ohm": 50.222024231357
+    }
+  },
+  "ends": {
+    "top_end_node": 6825,
+    "bottom_end_node": 12416,
+    "jj_mod_used": 3888
+  },
+  "interpretation": {
+    "port1": "top signal input",
+    "port2": "top signal output",
+    "port3": "bottom pump rail left/reference side",
+    "port4": "bottom pump source side; counter-propagating relative to signal 1->2"
+  },
+  "lj_scatter_enabled": false,
+  "lj_scatter_sigma": 0.0,
+  "lj_scatter_seed": 1,
+  "lj_scatter_count": 3888,
+  "lj_scatter_clip_min": 0.5,
+  "lj_scatter_clip_max": 1.5,
+  "matrices": {
+    "C_shape": [
+      9242,
+      9242
+    ],
+    "C_nnz": 18655,
+    "G_shape": [
+      9242,
+      9242
+    ],
+    "G_nnz": 4,
+    "K_shape": [
+      9242,
+      9242
+    ],
+    "K_nnz": 20966,
+    "Bphi_shape": [
+      9242,
+      3888
+    ],
+    "Bphi_nnz": 7776,
+    "Ic_min": 2.6562225859720336e-06,
+    "Ic_max": 2.6562225859720336e-06,
+    "ports": {
+      "1": [
+        1,
+        0
+      ],
+      "3": [
+        10000,
+        0
+      ],
+      "2": [
+        6825,
+        0
+      ],
+      "4": [
+        12416,
+        0
+      ]
+    },
+    "port_vectors": {
+      "1": 0,
+      "3": 6825,
+      "2": 6824,
+      "4": 9241
+    }
+  }
+}

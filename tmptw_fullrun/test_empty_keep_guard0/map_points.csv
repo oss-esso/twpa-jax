@@ -1,0 +1,7 @@
+point_index,status,gain_db,pump_freq_ghz,pump_power_dbm,pump_dir
+0,ERROR,5.0,7.5,-30,test_empty_keep_guard0\chunks\chunk_000_cols_000_000\warm\points\point_0000_p_m30dbm_fp_7p5ghz\pump
+1,ERROR,30.0,7.5,-30,test_empty_keep_guard0\chunks\chunk_000_cols_000_000\warm\points\point_0001_p_m30dbm_fp_7p5ghz\pump
+2,ERROR,8.0,7.5,-30,test_empty_keep_guard0\chunks\chunk_000_cols_000_000\warm\points\point_0002_p_m30dbm_fp_7p5ghz\pump
+3,ERROR,12.0,7.5,-30,test_empty_keep_guard0\chunks\chunk_001_cols_001_001\warm\points\point_0000_p_m30dbm_fp_7p5ghz\pump
+4,ERROR,40.0,7.5,-30,test_empty_keep_guard0\chunks\chunk_001_cols_001_001\warm\points\point_0001_p_m30dbm_fp_7p5ghz\pump
+5,ERROR,9.0,7.5,-30,test_empty_keep_guard0\chunks\chunk_001_cols_001_001\warm\points\point_0002_p_m30dbm_fp_7p5ghz\pump

@@ -1,0 +1,14 @@
+stateDiagram-v2
+  [*] --> PumpSolve
+  PumpSolve --> VALID_CONVERGED: reports[-1].converged & |lambda-1|<1e-12 (solve_point L724/L748)
+  PumpSolve --> FAIL: else (any solve_one failure_reason, §7)
+  VALID_CONVERGED --> GainSolve
+  FAIL --> ERRcell: gain skipped unless force_gain
+  GainSolve --> VALID_SOLVED: GainResult.status==VALID_SOLVED (floquet L317/L486)
+  GainSolve --> CHECK: nonfinite gain or linear_rel_residual>1e-7
+  VALID_SOLVED --> PASS: pump VALID_CONVERGED & gain VALID_SOLVED (solve_point L805)
+  CHECK --> ERRcell
+  ERRcell --> SKIP_PAST_FOLD: fold short-circuit (past_fold_skip_row L1152)
+  PASS --> [*]
+  ERRcell --> [*]
+  SKIP_PAST_FOLD --> [*]

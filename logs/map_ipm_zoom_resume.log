@@ -1,0 +1,20 @@
+
+=== chunk 0 : already complete, skipping ===
+
+=== chunk 1 : already complete, skipping ===
+
+=== chunk 2 : cols [20..29] fp 7.2224..7.2776 GHz (10 cols) ===
+chunk 2 rc=0 elapsed=1281.0s
+
+=== chunk 3 : cols [30..39] fp 7.2837..7.3388 GHz (10 cols) ===
+chunk 3 rc=0 elapsed=1963.2s
+
+=== chunk 4 : cols [40..49] fp 7.3449..7.4000 GHz (10 cols) ===
+chunk 4 rc=0 elapsed=2057.8s
+
+=== MERGED ===
+converged 1313/2500
+peak {'gain_db': 31.8015096531156, 'pump_power_dbm': -19.836734693877553, 'pump_freq_ghz': 7.253061224489796}
+wrote outputs\exp10_pump_map_trailing_50x50_ipm_m24_m18_71_74\map_summary.json
+
+TOTAL elapsed 5302.2s

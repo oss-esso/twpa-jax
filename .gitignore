@@ -1,118 +1,35 @@
-# =============================================================================
-# main-branch .gitignore
-#
-# main carries the production surface only: solver, designs, docs, workflows,
-# scripts, tests. Development material lives on the dev branch.
-#
-# Several rules below are allowlists (ignore a directory, then re-include the
-# specific paths main keeps). They exist because `git add -A` from a working
-# tree that also has dev content would otherwise silently re-commit ~270 files
-# that were deliberately removed. Ignoring never affects already-tracked files,
-# so checking out dev still works normally.
-# =============================================================================
-
-# --- Python ------------------------------------------------------------------
 __pycache__/
 *.py[cod]
-*.egg-info/
-.eggs/
-build/
-dist/
-.venv/
-venv/
-env/
-.ipynb_checkpoints/
-# Branch-private Claude/GitHub/reference material
-/CLAUDE.md
-/.github/
-/references/
-
-# --- Test scratch ------------------------------------------------------------
 .pytest_cache/
-.pytest_tmp*/
+.pytest_tmp/
 pytest-of-*/
-.coverage
-htmlcov/
-.mypy_cache/
-.ruff_cache/
-references/**/__pycache__/
-
-# --- Generated run artifacts -------------------------------------------------
-# Solver output. Never commit these: an old output directory is not a design,
-# and treating one as such is how several campaigns ended up on a stale circuit.
-outputs/
-# Keep generated map/transient outputs ignored even if broader rules change.
+*.egg-info/
+# All repository-root runtime/generated artifacts are ignored.  Keep this
+# explicit so nested outputs are covered even if broader rules change.
 /outputs/
 /outputs/**
 .hybrid_outputs/
 /.pytest*/
 /pytest-of-*/
-/g1_current_*/
-/h1_*/
-/h2_*/
-/h3_*/
-/tmptw*/
-diagnostics/
-plots/
-logs/
 industrial_completion_outputs/
-
-# --- Scratch and temp run directories ----------------------------------------
-tmp*/
-tmp_*
-*.tmp
-
-# --- Stray root-level data ---------------------------------------------------
-# Data belongs in docs/ or an output directory, never loose at the root.
-/*.csv
-/*.npz
-/*.npy
-/*.jl
-
-# --- Editor backups and pre-edit snapshots -----------------------------------
-*.before_*
-*.orig
-*.rej
-*~
-* copy.*
-*.swp
-.vscode/
-.idea/
-.DS_Store
-Thumbs.db
+references/**/__pycache__/
 
 # --- LaTeX build artifacts ---------------------------------------------------
-*.aux
-*.toc
-*.out
-*.fls
-*.fdb_latexmk
-*.synctex.gz
-# Scoped to docs/ so it catches LaTeX build logs without shadowing the tracked
-# run logs kept as reference artifacts under references/.
-docs/**/*.log
-
-# --- experiments/ : allowlist ------------------------------------------------
-# main keeps only the modules the production drivers and tests actually import.
-# Everything else in this directory is history and lives on dev.
-experiments/*
-!experiments/pump_solvers/
-!experiments/TWPA_THEORY.pdf
-!experiments/exp07_python_ipm_design_builder.py
-!experiments/exp08_full_ipm_pump_solve.py
-!experiments/exp09_full_ipm_gain_from_pump.py
-!experiments/exp10_full_ipm_pump_map_warmstart.py
-!experiments/exp10_jc_doc_python_design_builders.py
-!experiments/exp20_multitone_compression.py
-!experiments/exp22_spatial_attribution.py
-!experiments/pump_basis.py
-!experiments/ripple_common.py
-
-# --- designs/ : keep the production design only ------------------------------
-/designs/*
-!/designs/ipm_2c_fixed/
-!/designs/ipm_2c_fixed/**
-
-# --- docs/development/ : development material -------------------------------
-/docs/development/
-
+# Every rule is scoped to thesis/, never blanket. Blanket *.aux/*.out/*.toc
+# would shadow the tracked build products of the reports under
+# docs/development/reports/, and a blanket *.log would shadow the run logs kept
+# as reference artifacts under references/.
+# The sources are tracked; everything a compiler regenerates is not. main.pdf
+# is excluded too -- committing a build product makes every rebuild a diff.
+thesis/*.aux
+thesis/*.bbl
+thesis/*.blg
+thesis/*.fdb_latexmk
+thesis/*.fls
+thesis/*.lof
+thesis/*.log
+thesis/*.lot
+thesis/*.out
+thesis/*.pdf
+thesis/*.synctex.gz
+thesis/*.toc

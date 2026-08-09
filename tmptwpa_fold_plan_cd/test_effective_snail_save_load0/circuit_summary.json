@@ -1,0 +1,51 @@
+{
+  "nodes": 5,
+  "jj_branches": 4,
+  "C_nnz": 13,
+  "G_nnz": 5,
+  "K_nnz": 0,
+  "Bphi_nnz": 8,
+  "ports": {
+    "1": 0,
+    "2": 4
+  },
+  "metadata": {
+    "model": "effective_snail_line",
+    "cells": 4,
+    "cell_length_m": 8.7e-06,
+    "snail_capacitance_f": 3.1e-14,
+    "ground_capacitance_f": 2.235e-13,
+    "port_impedance_ohm": 62.4,
+    "branch_law": {
+      "type": "effective_snail",
+      "phi0": 3.2910597840193497e-16,
+      "equilibrium_flux": [
+        1.033916924e-15,
+        1.033916924e-15,
+        1.033916924e-15,
+        1.033916924e-15
+      ],
+      "external_flux_on_small_junction": false
+    },
+    "equilibrium_flux_rad": [
+      3.141592653589793,
+      3.141592653589793,
+      3.141592653589793,
+      3.141592653589793
+    ],
+    "linear_inductance_h": 8.663723545154484e-10,
+    "shunt_conductance_s": 0.0,
+    "external_flux_on_small_junction": false
+  },
+  "branch_law": {
+    "type": "effective_snail",
+    "phi0": 3.2910597840193497e-16,
+    "equilibrium_flux": [
+      1.033916924e-15,
+      1.033916924e-15,
+      1.033916924e-15,
+      1.033916924e-15
+    ],
+    "external_flux_on_small_junction": false
+  }
+}

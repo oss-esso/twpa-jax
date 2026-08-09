@@ -1,0 +1,1083 @@
+{
+  "revision": "8ac9016f475e38a1d65911dd5d515b73e586b3d8",
+  "entry_point": "scripts/run_gain_map.py (+ resume_column_force_gain.py)",
+  "count": 90,
+  "flags": [
+    {
+      "flag": "--mode",
+      "accepted_values": [
+        "cold",
+        "warmstart",
+        "both"
+      ],
+      "default": "warmstart",
+      "scope": "exec",
+      "dispatch_location": "run_gain_map.py:main:2827",
+      "effect": "which passes run + gate",
+      "status": [
+        "production"
+      ]
+    },
+    {
+      "flag": "--executor",
+      "accepted_values": [
+        "subprocess",
+        "inprocess"
+      ],
+      "default": "inprocess",
+      "scope": "exec",
+      "dispatch_location": "run_gain_map.py:main:2815",
+      "effect": "in-process engine vs exp08/exp09 subprocess",
+      "status": [
+        "production"
+      ]
+    },
+    {
+      "flag": "--inproc-pump-backend",
+      "accepted_values": [
+        "full",
+        "schur_cpu_mt"
+      ],
+      "default": "schur_cpu_mt",
+      "scope": "pump",
+      "dispatch_location": "run_gain_map.py:_make_solve_problem:569",
+      "effect": "full vs Schur-reduced problem",
+      "status": [
+        "production"
+      ]
+    },
+    {
+      "flag": "--inproc-preconditioner",
+      "accepted_values": [
+        "mean_tangent",
+        "real_coupled",
+        "real_coupled_fast",
+        "spectral_coupled",
+        "linear"
+      ],
+      "default": "real_coupled_fast",
+      "scope": "precond",
+      "dispatch_location": "solver.py:solve_one:233",
+      "effect": "pump preconditioner",
+      "status": [
+        "production",
+        "real_coupled_fast_schur_only"
+      ]
+    },
+    {
+      "flag": "--inproc-continuation",
+      "accepted_values": [
+        "fixed",
+        "adaptive_copy",
+        "adaptive_secant",
+        "adaptive_tangent",
+        "affine",
+        "ptc",
+        "arclength"
+      ],
+      "default": "adaptive_secant",
+      "scope": "continuation",
+      "dispatch_location": "run_gain_map.py:solve_point:643",
+      "effect": "intra-cell continuation method",
+      "status": [
+        "production",
+        "arclength_experimental"
+      ]
+    },
+    {
+      "flag": "--inproc-schur-cache-size",
+      "accepted_values": "int",
+      "default": "2",
+      "scope": "resource",
+      "dispatch_location": "run_gain_map.py:InProcessEngine:518",
+      "effect": "LRU bound of Schur partitions",
+      "status": [
+        "production"
+      ]
+    },
+    {
+      "flag": "--inproc-precond-reuse",
+      "accepted_values": "int",
+      "default": "1",
+      "scope": "precond",
+      "dispatch_location": "solver.py:solve_one:217",
+      "effect": "modified-Newton factor reuse",
+      "status": [
+        "production"
+      ]
+    },
+    {
+      "flag": "--inproc-precond-refresh-gmres",
+      "accepted_values": "int",
+      "default": "0",
+      "scope": "precond",
+      "dispatch_location": "solver.py:solve_one:221",
+      "effect": "staleness refresh trigger",
+      "status": [
+        "production"
+      ]
+    },
+    {
+      "flag": "--inproc-fold-predictor",
+      "accepted_values": [
+        "none",
+        "secant"
+      ],
+      "default": "secant",
+      "scope": "continuation",
+      "dispatch_location": "run_gain_map.py:run_warm_pass_inprocess:1214",
+      "effect": "column secant predictor",
+      "status": [
+        "production"
+      ]
+    },
+    {
+      "flag": "--inproc-gmres-maxiter",
+      "accepted_values": "int",
+      "default": "80",
+      "scope": "resource",
+      "dispatch_location": "run_gain_map.py:_settings:537",
+      "effect": "GMRES restart cycles",
+      "status": [
+        "production"
+      ]
+    },
+    {
+      "flag": "--inproc-solve-deadline-s",
+      "accepted_values": "float",
+      "default": "0.0",
+      "scope": "resource",
+      "dispatch_location": "solver.py:solve_one:183",
+      "effect": "per-solve wall budget (0=off)",
+      "status": [
+        "production"
+      ]
+    },
+    {
+      "flag": "--inproc-max-newton",
+      "accepted_values": "int",
+      "default": "16",
+      "scope": "resource",
+      "dispatch_location": "run_gain_map.py:_settings:536",
+      "effect": "max Newton iterations",
+      "status": [
+        "production"
+      ]
+    },
+    {
+      "flag": "--inproc-fallback-fixed-steps",
+      "accepted_values": "int",
+      "default": "20",
+      "scope": "continuation",
+      "dispatch_location": "run_gain_map.py:solve_point:697",
+      "effect": "fixed ladder after adaptive gives up",
+      "status": [
+        "production"
+      ]
+    },
+    {
+      "flag": "--inproc-continuation-deadline-s",
+      "accepted_values": "float",
+      "default": "0.0",
+      "scope": "resource",
+      "dispatch_location": "run_gain_map.py:solve_point:686",
+      "effect": "adaptive/affine budget (0 inherits solve-deadline)",
+      "status": [
+        "production"
+      ]
+    },
+    {
+      "flag": "--inproc-fail-fast",
+      "accepted_values": "flag",
+      "default": "off",
+      "scope": "recovery",
+      "dispatch_location": "run_gain_map.py:run_warm_pass_inprocess:1197",
+      "effect": "skip recovery chain from last converged",
+      "status": [
+        "production"
+      ]
+    },
+    {
+      "flag": "--initial-pump-dir",
+      "accepted_values": "path",
+      "default": "None",
+      "scope": "recovery",
+      "dispatch_location": "run_gain_map.py:run_warm_pass_inprocess:1217",
+      "effect": "seed each column first cell",
+      "status": [
+        "production",
+        "single_column_only"
+      ]
+    },
+    {
+      "flag": "--initial-pump-power-dbm",
+      "accepted_values": "float",
+      "default": "None",
+      "scope": "recovery",
+      "dispatch_location": "run_gain_map.py:run_warm_pass_inprocess:1239",
+      "effect": "power coord of seed",
+      "status": [
+        "production",
+        "required_with_initial_pump_dir"
+      ]
+    },
+    {
+      "flag": "--fold-skip-patience",
+      "accepted_values": "int",
+      "default": "0",
+      "scope": "recovery",
+      "dispatch_location": "run_gain_map.py:run_warm_pass_inprocess:1216",
+      "effect": "fold short-circuit patience (0=off)",
+      "status": [
+        "production"
+      ]
+    },
+    {
+      "flag": "--column-arclength-recovery",
+      "accepted_values": "flag",
+      "default": "off",
+      "scope": "recovery",
+      "dispatch_location": "run_gain_map.py:run_warm_pass_inprocess:1289",
+      "effect": "per-cell arclength crossings as guesses",
+      "status": [
+        "experimental"
+      ]
+    },
+    {
+      "flag": "--column-arclength-ds",
+      "accepted_values": "float",
+      "default": "0.02",
+      "scope": "continuation",
+      "dispatch_location": "run_gain_map.py:trace_column_arclength:963",
+      "effect": "arclength step",
+      "status": [
+        "experimental"
+      ]
+    },
+    {
+      "flag": "--column-arclength-max-steps",
+      "accepted_values": "int",
+      "default": "80",
+      "scope": "continuation",
+      "dispatch_location": "run_gain_map.py:trace_column_arclength:964",
+      "effect": "arclength steps",
+      "status": [
+        "experimental"
+      ]
+    },
+    {
+      "flag": "--column-arclength-deadline-s",
+      "accepted_values": "float",
+      "default": "180.0",
+      "scope": "resource",
+      "dispatch_location": "run_gain_map.py:trace_column_arclength:965",
+      "effect": "arclength trace budget",
+      "status": [
+        "experimental"
+      ]
+    },
+    {
+      "flag": "--column-power-substep",
+      "accepted_values": "flag",
+      "default": "off",
+      "scope": "recovery",
+      "dispatch_location": "run_gain_map.py:run_warm_pass_inprocess:1359",
+      "effect": "adaptive power-axis micro-continuation",
+      "status": [
+        "production"
+      ]
+    },
+    {
+      "flag": "--column-power-substep-init-db",
+      "accepted_values": "float",
+      "default": "0.1",
+      "scope": "continuation",
+      "dispatch_location": "run_gain_map.py:solve_power_substep:882",
+      "effect": "init/max dBm micro-step",
+      "status": [
+        "production"
+      ]
+    },
+    {
+      "flag": "--column-power-substep-min-db",
+      "accepted_values": "float",
+      "default": "0.005",
+      "scope": "continuation",
+      "dispatch_location": "run_gain_map.py:solve_power_substep:883",
+      "effect": "stall floor (fold evidence)",
+      "status": [
+        "production"
+      ]
+    },
+    {
+      "flag": "--column-power-substep-deadline-s",
+      "accepted_values": "float",
+      "default": "120.0",
+      "scope": "resource",
+      "dispatch_location": "run_gain_map.py:solve_power_substep:884",
+      "effect": "per-target budget",
+      "status": [
+        "production"
+      ]
+    },
+    {
+      "flag": "--traversal",
+      "accepted_values": [
+        "column",
+        "backbone",
+        "nearest",
+        "serpentine",
+        "floodfill"
+      ],
+      "default": "column",
+      "scope": "traversal",
+      "dispatch_location": "run_gain_map.py:_traversal_order:1439",
+      "effect": "map order; non-column forces chunk_size 0",
+      "status": [
+        "production",
+        "non_column_experimental"
+      ]
+    },
+    {
+      "flag": "--backbone-direction",
+      "accepted_values": [
+        "ltr",
+        "rtl",
+        "center_out",
+        "two_ended"
+      ],
+      "default": "center_out",
+      "scope": "traversal",
+      "dispatch_location": "run_gain_map.py:_traversal_order:1451",
+      "effect": "backbone row order",
+      "status": [
+        "production"
+      ]
+    },
+    {
+      "flag": "--predictor",
+      "accepted_values": [
+        "copy",
+        "power_secant",
+        "freq_secant",
+        "corner",
+        "plane",
+        "portfolio"
+      ],
+      "default": "power_secant",
+      "scope": "continuation",
+      "dispatch_location": "run_gain_map.py:_select_guess:1563",
+      "effect": "inter-cell guess (traversal only)",
+      "status": [
+        "production"
+      ]
+    },
+    {
+      "flag": "--portfolio-policy",
+      "accepted_values": [
+        "best",
+        "ranked"
+      ],
+      "default": "best",
+      "scope": "continuation",
+      "dispatch_location": "run_gain_map.py:run_map_traversal:1753",
+      "effect": "portfolio retry policy",
+      "status": [
+        "production"
+      ]
+    },
+    {
+      "flag": "--recovery",
+      "accepted_values": [
+        "none",
+        "reseed",
+        "alt_parent",
+        "bridge",
+        "ladder"
+      ],
+      "default": "reseed",
+      "scope": "recovery",
+      "dispatch_location": "run_gain_map.py:_recover:1620",
+      "effect": "failed-cell recovery ladder",
+      "status": [
+        "production"
+      ]
+    },
+    {
+      "flag": "--bridge-steps",
+      "accepted_values": "int",
+      "default": "4",
+      "scope": "recovery",
+      "dispatch_location": "run_gain_map.py:solve_bridge:837",
+      "effect": "bridge sub-steps",
+      "status": [
+        "production"
+      ]
+    },
+    {
+      "flag": "--bridge-mode",
+      "accepted_values": [
+        "diagonal",
+        "freq_first",
+        "power_first",
+        "adaptive"
+      ],
+      "default": "adaptive",
+      "scope": "recovery",
+      "dispatch_location": "run_gain_map.py:solve_bridge:855",
+      "effect": "bridge path",
+      "status": [
+        "production"
+      ]
+    },
+    {
+      "flag": "--fold-policy",
+      "accepted_values": [
+        "patience",
+        "cross_axis",
+        "bridge_gate",
+        "combined",
+        "arclength"
+      ],
+      "default": "patience",
+      "scope": "recovery",
+      "dispatch_location": "run_gain_map.py:_recover:1644",
+      "effect": "when a fail counts toward fold",
+      "status": [
+        "production",
+        "arclength_experimental"
+      ]
+    },
+    {
+      "flag": "--inproc-arclength-ds",
+      "accepted_values": "float",
+      "default": "0.1",
+      "scope": "continuation",
+      "dispatch_location": "run_gain_map.py:solve_point:671",
+      "effect": "intra-cell arclength ds",
+      "status": [
+        "experimental"
+      ]
+    },
+    {
+      "flag": "--inproc-arclength-max-steps",
+      "accepted_values": "int",
+      "default": "80",
+      "scope": "continuation",
+      "dispatch_location": "run_gain_map.py:solve_point:672",
+      "effect": "intra-cell arclength steps",
+      "status": [
+        "experimental"
+      ]
+    },
+    {
+      "flag": "--fold-follow",
+      "accepted_values": "flag",
+      "default": "off",
+      "scope": "output",
+      "dispatch_location": "run_gain_map.py:run_fold_follow:1680",
+      "effect": "trace fold curve no gain map",
+      "status": [
+        "diagnostic"
+      ]
+    },
+    {
+      "flag": "--outdir",
+      "accepted_values": "path",
+      "default": "outputs/exp10_pump_map_warmstart",
+      "scope": "output",
+      "dispatch_location": "run_gain_map.py:main:2756",
+      "effect": "output dir",
+      "status": [
+        "production"
+      ]
+    },
+    {
+      "flag": "--circuit-dir",
+      "accepted_values": "path",
+      "default": "outputs/ipm_python_design",
+      "scope": "pump/signal",
+      "dispatch_location": "run_gain_map.py:InProcessEngine:503",
+      "effect": "circuit matrices dir (alias --ipm-dir)",
+      "status": [
+        "production"
+      ]
+    },
+    {
+      "flag": "--n-power",
+      "accepted_values": "int",
+      "default": "50",
+      "scope": "traversal",
+      "dispatch_location": "run_gain_map.py:build_points:2455",
+      "effect": "power grid size",
+      "status": [
+        "production"
+      ]
+    },
+    {
+      "flag": "--n-frequency",
+      "accepted_values": "int",
+      "default": "50",
+      "scope": "traversal",
+      "dispatch_location": "run_gain_map.py:build_points:2455",
+      "effect": "freq grid size",
+      "status": [
+        "production"
+      ]
+    },
+    {
+      "flag": "--frequency-chunk-size",
+      "accepted_values": "int",
+      "default": "10",
+      "scope": "parallelism",
+      "dispatch_location": "run_gain_map.py:run_frequency_chunks:2687",
+      "effect": "subprocess column chunks (0=off)",
+      "status": [
+        "production"
+      ]
+    },
+    {
+      "flag": "--local-traversal-chunks",
+      "accepted_values": "flag",
+      "default": "off",
+      "scope": "parallelism",
+      "dispatch_location": "run_gain_map.py:main:2764",
+      "effect": "allow non-column traversal in chunks",
+      "status": [
+        "experimental"
+      ]
+    },
+    {
+      "flag": "--resume-chunks",
+      "accepted_values": "bool",
+      "default": "True",
+      "scope": "exec",
+      "dispatch_location": "run_gain_map.py:run_frequency_chunks:2703",
+      "effect": "skip complete chunks",
+      "status": [
+        "production"
+      ]
+    },
+    {
+      "flag": "--chunk-worker",
+      "accepted_values": "flag",
+      "default": "off",
+      "scope": "exec",
+      "dispatch_location": "run_gain_map.py:main:2763",
+      "effect": "internal worker marker (SUPPRESS)",
+      "status": [
+        "internal"
+      ]
+    },
+    {
+      "flag": "--frequency-index-start",
+      "accepted_values": "int",
+      "default": "None",
+      "scope": "exec",
+      "dispatch_location": "run_gain_map.py:main:2793",
+      "effect": "internal chunk slice (SUPPRESS)",
+      "status": [
+        "internal"
+      ]
+    },
+    {
+      "flag": "--frequency-index-stop",
+      "accepted_values": "int",
+      "default": "None",
+      "scope": "exec",
+      "dispatch_location": "run_gain_map.py:main:2793",
+      "effect": "internal chunk slice (SUPPRESS)",
+      "status": [
+        "internal"
+      ]
+    },
+    {
+      "flag": "--pump-power-min-dbm",
+      "accepted_values": "float",
+      "default": "-30.0",
+      "scope": "pump",
+      "dispatch_location": "run_gain_map.py:build_points:2455",
+      "effect": "power window min",
+      "status": [
+        "production"
+      ]
+    },
+    {
+      "flag": "--pump-power-max-dbm",
+      "accepted_values": "float",
+      "default": "-20.0",
+      "scope": "pump",
+      "dispatch_location": "run_gain_map.py:build_points:2455",
+      "effect": "power window max",
+      "status": [
+        "production"
+      ]
+    },
+    {
+      "flag": "--pump-freq-min-ghz",
+      "accepted_values": "float",
+      "default": "7.0",
+      "scope": "pump",
+      "dispatch_location": "run_gain_map.py:build_points:2455",
+      "effect": "freq window min",
+      "status": [
+        "production"
+      ]
+    },
+    {
+      "flag": "--pump-freq-max-ghz",
+      "accepted_values": "float",
+      "default": "8.0",
+      "scope": "pump",
+      "dispatch_location": "run_gain_map.py:build_points:2455",
+      "effect": "freq window max",
+      "status": [
+        "production"
+      ]
+    },
+    {
+      "flag": "--attenuation-db",
+      "accepted_values": "float",
+      "default": "None",
+      "scope": "pump",
+      "dispatch_location": "run_gain_map.py:attenuation_db_for:97",
+      "effect": "flat loss override (None=loss model)",
+      "status": [
+        "production"
+      ]
+    },
+    {
+      "flag": "--z0-ohm",
+      "accepted_values": "float",
+      "default": "50.0",
+      "scope": "signal",
+      "dispatch_location": "run_gain_map.py:_solve_signal:1087",
+      "effect": "reference impedance",
+      "status": [
+        "production"
+      ]
+    },
+    {
+      "flag": "--signal-ghz",
+      "accepted_values": "float",
+      "default": "None",
+      "scope": "signal",
+      "dispatch_location": "run_gain_map.py:signal_ghz_for:109",
+      "effect": "fixed signal freq",
+      "status": [
+        "production"
+      ]
+    },
+    {
+      "flag": "--signal-detuning-mhz",
+      "accepted_values": "float",
+      "default": "100.0",
+      "scope": "signal",
+      "dispatch_location": "run_gain_map.py:signal_ghz_for:109",
+      "effect": "pump-tracking detuning",
+      "status": [
+        "production"
+      ]
+    },
+    {
+      "flag": "--signal-spectrum",
+      "accepted_values": "bool",
+      "default": "True",
+      "scope": "signal",
+      "dispatch_location": "run_gain_map.py:_gain:1008",
+      "effect": "per-cell signal spectrum",
+      "status": [
+        "production"
+      ]
+    },
+    {
+      "flag": "--signal-offset-start-mhz",
+      "accepted_values": "float",
+      "default": "100.0",
+      "scope": "signal",
+      "dispatch_location": "run_gain_map.py:spectrum_offsets_mhz:121",
+      "effect": "first offset",
+      "status": [
+        "production"
+      ]
+    },
+    {
+      "flag": "--signal-offset-step-mhz",
+      "accepted_values": "float",
+      "default": "500.0",
+      "scope": "signal",
+      "dispatch_location": "run_gain_map.py:spectrum_offsets_mhz:121",
+      "effect": "offset spacing",
+      "status": [
+        "production"
+      ]
+    },
+    {
+      "flag": "--signal-offset-count-per-side",
+      "accepted_values": "int",
+      "default": "5",
+      "scope": "signal",
+      "dispatch_location": "run_gain_map.py:spectrum_offsets_mhz:121",
+      "effect": "offsets per side",
+      "status": [
+        "production"
+      ]
+    },
+    {
+      "flag": "--signal-workers",
+      "accepted_values": "int",
+      "default": "6",
+      "scope": "parallelism",
+      "dispatch_location": "run_gain_map.py:_gain:1025",
+      "effect": "spectrum thread pool size",
+      "status": [
+        "production"
+      ]
+    },
+    {
+      "flag": "--signal-backend",
+      "accepted_values": [
+        "direct",
+        "schur"
+      ],
+      "default": "direct",
+      "scope": "signal",
+      "dispatch_location": "run_gain_map.py:_solve_signal:1062",
+      "effect": "direct vs Schur-reduced signal solve",
+      "status": [
+        "production"
+      ]
+    },
+    {
+      "flag": "--signal-solver",
+      "accepted_values": [
+        "superlu",
+        "pardiso"
+      ],
+      "default": "superlu",
+      "scope": "sparse",
+      "dispatch_location": "floquet.py:solve_linear_system:199",
+      "effect": "signal sparse solver",
+      "status": [
+        "production"
+      ]
+    },
+    {
+      "flag": "--skip-baselines",
+      "accepted_values": "flag",
+      "default": "off",
+      "scope": "signal",
+      "dispatch_location": "run_gain_map.py:_solve_signal:1092",
+      "effect": "skip off/pumpdiag baselines (schur only)",
+      "status": [
+        "production"
+      ]
+    },
+    {
+      "flag": "--pump-port",
+      "accepted_values": "int",
+      "default": "4",
+      "scope": "pump",
+      "dispatch_location": "run_gain_map.py:InProcessEngine:506",
+      "effect": "pump drive node",
+      "status": [
+        "production"
+      ]
+    },
+    {
+      "flag": "--source-port",
+      "accepted_values": "int",
+      "default": "1",
+      "scope": "signal",
+      "dispatch_location": "run_gain_map.py:InProcessEngine:507",
+      "effect": "signal source node",
+      "status": [
+        "production"
+      ]
+    },
+    {
+      "flag": "--out-port",
+      "accepted_values": "int",
+      "default": "2",
+      "scope": "signal",
+      "dispatch_location": "run_gain_map.py:InProcessEngine:508",
+      "effect": "signal output node",
+      "status": [
+        "production"
+      ]
+    },
+    {
+      "flag": "--pump-mode-policy",
+      "accepted_values": [
+        "dense_real",
+        "positive_phasor_explicit",
+        "positive_odd_jc",
+        "auto_jc"
+      ],
+      "default": "positive_odd_jc",
+      "scope": "pump",
+      "dispatch_location": "basis.py:resolve_pump_basis:195",
+      "effect": "pump-mode basis policy",
+      "status": [
+        "production",
+        "no_argparse_choices"
+      ]
+    },
+    {
+      "flag": "--pump-mode-count",
+      "accepted_values": "int",
+      "default": "10",
+      "scope": "pump",
+      "dispatch_location": "run_gain_map.py:_build_problem:550",
+      "effect": "K for odd basis",
+      "status": [
+        "production"
+      ]
+    },
+    {
+      "flag": "--harmonics",
+      "accepted_values": "int",
+      "default": "3",
+      "scope": "pump",
+      "dispatch_location": "run_gain_map.py:_build_problem:550",
+      "effect": "dense H when mode-count unset",
+      "status": [
+        "production"
+      ]
+    },
+    {
+      "flag": "--nt",
+      "accepted_values": "int",
+      "default": "40",
+      "scope": "pump",
+      "dispatch_location": "problem.py:HarmonicGrid:24",
+      "effect": "time samples (>=2*maxmode+1)",
+      "status": [
+        "production"
+      ]
+    },
+    {
+      "flag": "--sidebands",
+      "accepted_values": "int",
+      "default": "6",
+      "scope": "signal",
+      "dispatch_location": "floquet.py:sideband_list:84",
+      "effect": "+/-S conversion blocks",
+      "status": [
+        "production"
+      ]
+    },
+    {
+      "flag": "--gamma-nt",
+      "accepted_values": "int",
+      "default": "96",
+      "scope": "signal",
+      "dispatch_location": "gamma.py:compute_gamma_hat:64",
+      "effect": "gamma(t) samples",
+      "status": [
+        "production"
+      ]
+    },
+    {
+      "flag": "--pump-current-jc-scale",
+      "accepted_values": "float",
+      "default": "2.0",
+      "scope": "pump",
+      "dispatch_location": "run_gain_map.py:build_problem_for:589",
+      "effect": "JC positive-phasor 2x scale",
+      "status": [
+        "production"
+      ]
+    },
+    {
+      "flag": "--continuation-steps",
+      "accepted_values": "int",
+      "default": "20",
+      "scope": "continuation",
+      "dispatch_location": "run_gain_map.py:solve_point:650",
+      "effect": "fixed continuation steps",
+      "status": [
+        "production"
+      ]
+    },
+    {
+      "flag": "--newton-tol",
+      "accepted_values": "float",
+      "default": "1e-9",
+      "scope": "continuation",
+      "dispatch_location": "run_gain_map.py:_settings:536",
+      "effect": "Newton tolerance",
+      "status": [
+        "production"
+      ]
+    },
+    {
+      "flag": "--linear-seed-maxiter",
+      "accepted_values": "int",
+      "default": "5",
+      "scope": "continuation",
+      "dispatch_location": "seeds.py:build_linear_phasor_seed:46",
+      "effect": "unused in in-process path",
+      "status": [
+        "parsed_but_unused"
+      ]
+    },
+    {
+      "flag": "--adaptive-initial-step",
+      "accepted_values": "float",
+      "default": "1.0",
+      "scope": "continuation",
+      "dispatch_location": "run_gain_map.py:solve_point:695",
+      "effect": "adaptive init step",
+      "status": [
+        "production"
+      ]
+    },
+    {
+      "flag": "--adaptive-min-step",
+      "accepted_values": "float",
+      "default": "0.05",
+      "scope": "continuation",
+      "dispatch_location": "run_gain_map.py:solve_point:696",
+      "effect": "adaptive min step",
+      "status": [
+        "production"
+      ]
+    },
+    {
+      "flag": "--gate-gain-db",
+      "accepted_values": "float",
+      "default": "0.01",
+      "scope": "output",
+      "dispatch_location": "run_gain_map.py:evaluate_gate:1835",
+      "effect": "gate gain-drift tolerance",
+      "status": [
+        "production"
+      ]
+    },
+    {
+      "flag": "--gate-min-converged-frac",
+      "accepted_values": "float",
+      "default": "0.98",
+      "scope": "output",
+      "dispatch_location": "run_gain_map.py:evaluate_gate:1835",
+      "effect": "gate min converged fraction",
+      "status": [
+        "production"
+      ]
+    },
+    {
+      "flag": "--gate-spotcheck",
+      "accepted_values": "int",
+      "default": "0",
+      "scope": "output",
+      "dispatch_location": "run_gain_map.py:main:2833",
+      "effect": "N cold recomputes for gate",
+      "status": [
+        "production"
+      ]
+    },
+    {
+      "flag": "--pump-timeout-s",
+      "accepted_values": "float",
+      "default": "600.0",
+      "scope": "resource",
+      "dispatch_location": "run_gain_map.py:run_point:343",
+      "effect": "pump subprocess timeout",
+      "status": [
+        "production",
+        "subprocess_only"
+      ]
+    },
+    {
+      "flag": "--gain-timeout-s",
+      "accepted_values": "float",
+      "default": "300.0",
+      "scope": "resource",
+      "dispatch_location": "run_gain_map.py:run_point:368",
+      "effect": "gain subprocess timeout",
+      "status": [
+        "production",
+        "subprocess_only"
+      ]
+    },
+    {
+      "flag": "--python-executable",
+      "accepted_values": "str",
+      "default": "sys.executable",
+      "scope": "exec",
+      "dispatch_location": "run_gain_map.py:run_point:320",
+      "effect": "worker python",
+      "status": [
+        "production",
+        "subprocess_only"
+      ]
+    },
+    {
+      "flag": "--overwrite",
+      "accepted_values": "flag",
+      "default": "off",
+      "scope": "output",
+      "dispatch_location": "run_gain_map.py:main:2780",
+      "effect": "rmtree outdir",
+      "status": [
+        "production"
+      ]
+    },
+    {
+      "flag": "--allow-superlu-fallback",
+      "accepted_values": "flag",
+      "default": "off",
+      "scope": "precond",
+      "dispatch_location": "run_gain_map.py:main:2749",
+      "effect": "permit PARDISO->SuperLU fallback",
+      "status": [
+        "debug"
+      ]
+    },
+    {
+      "flag": "--log-factor-backend",
+      "accepted_values": "flag",
+      "default": "off",
+      "scope": "precond",
+      "dispatch_location": "run_gain_map.py:main:2754",
+      "effect": "log PARDISO vs SuperLU",
+      "status": [
+        "debug"
+      ]
+    },
+    {
+      "flag": "--column-freq-ghz",
+      "accepted_values": "float",
+      "default": "None",
+      "scope": "recovery",
+      "dispatch_location": "resume_column_force_gain.py:main:176",
+      "effect": "force-gain column selector (None=all)",
+      "status": [
+        "diagnostic"
+      ]
+    },
+    {
+      "flag": "--force-out",
+      "accepted_values": "path",
+      "default": "required",
+      "scope": "output",
+      "dispatch_location": "resume_column_force_gain.py:main:178",
+      "effect": "force-gain output dir",
+      "status": [
+        "diagnostic"
+      ]
+    },
+    {
+      "flag": "--force-max-nonfinite",
+      "accepted_values": "int",
+      "default": "3",
+      "scope": "resource",
+      "dispatch_location": "resume_column_force_gain.py:main:180",
+      "effect": "stop after N nonfinite pump states",
+      "status": [
+        "diagnostic"
+      ]
+    }
+  ]
+}

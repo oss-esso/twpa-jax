@@ -1,0 +1,20 @@
+flowchart TD
+  CV["converged pump X (pump_solution.npz)"] --> LP["load_pump floquet io L48<br/>reconstruct basis + omega_p"]
+  LP --> GH["compute_gamma_hat gamma.py L64<br/>x(t)=2 Re sum X_k e^{ik w t}; gamma=cos(psi/phi0) Ic/phi0;<br/>gamma_hat[ell] over gamma_nt samples"]
+  GH --> KH["build_khat gamma.py L153<br/>khat[ell]=Bphi diag(gamma_hat[ell]) BphiT"]
+  KH --> OFF["khat_off_0 = Bphi diag(Ic/phi0) BphiT  (_gain L997)"]
+  KH --> BASE{"--signal-spectrum?"}
+  BASE -->|yes| KB["assemble_khat_conversion_base floquet L88<br/>(signal-freq-independent, reused per spectrum point)"]
+  BASE --> LOOPF["for each signal offset (ThreadPool, --signal-workers) L1025"]
+  KB --> LOOPF
+  LOOPF --> ONE["_solve_signal L1059"]
+  ONE --> ASMB["assemble_conversion_matrix[_from_base]<br/>block(m,q)=khat[m-q]+D(w_s+m w_p) on diag  (§5.1)"]
+  ASMB --> RHS["build_rhs L149: unit current at (signal_m=0, source node)"]
+  ASMB --> SOLV["solve_linear_system L199 (superlu|pardiso)"]
+  RHS --> SOLV
+  SOLV --> EX["extract phi_out at (signal_m, out node) → vout_on=i w_s phi_out"]
+  EX --> BL["baselines: off (khat_off_0) + pumpdiag (khat[0])<br/>solve_single_block_transfer L176"]
+  BL --> GN["gain_db_from_s(port_s_from_unit_current_response)  gain.py L16 / linear.py L69"]
+  GN --> VAL{"isfinite & rel_residual<=1e-7?  L318/L487"}
+  VAL -->|yes| VS["status VALID_SOLVED"]
+  VAL -->|no| CK["status CHECK"]

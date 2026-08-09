@@ -1,0 +1,20 @@
+{
+  "measurement (14.18.08_Themis_SetupAug25_noVTS_transmission_15mK)": {
+    "n_high_gain_streaks": 7,
+    "fft_period_ghz": 0.1670843776106897,
+    "n_periods_fft": 5.985000000000133,
+    "span_ghz": 1.0
+  },
+  "exp10_pump_map_trailing_50x50_m30_m20_123p9_cg66_halfcurrent_run_gain_map": {
+    "n_high_gain_streaks": 14,
+    "fft_period_ghz": 0.20050125313282763,
+    "n_periods_fft": 4.987500000000111,
+    "span_ghz": 1.0
+  },
+  "exp10_pump_map_trailing_50x50_m30_m20_recovered79_cg33_run_gain_map": {
+    "n_high_gain_streaks": 8,
+    "fft_period_ghz": 0.25062656641603454,
+    "n_periods_fft": 3.9900000000000886,
+    "span_ghz": 1.0
+  }
+}

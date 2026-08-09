@@ -1,0 +1,72 @@
+{
+  "mode": "warmstart",
+  "output_dir": "diagnostics\\2c_measurement_comparison\\raw_7043_boundary_ultrafine",
+  "grid": {
+    "n_power": 29,
+    "n_frequency": 1
+  },
+  "pump_power_dbm": [
+    -30.24,
+    -30.1
+  ],
+  "pump_freq_ghz": [
+    7.043,
+    7.043
+  ],
+  "attenuation_db": null,
+  "attenuation_model": "loss_A10 c + a*sqrt(f) + b*f",
+  "z0_ohm": 50.0,
+  "signal_ghz": null,
+  "signal_detuning_mhz": 100.0,
+  "signal_convention": "ws = wp - 100.0 MHz",
+  "current_convention": "I_peak = sqrt(2 * P_W / Z0), P = P_dbm - attenuation_db",
+  "cold_status_counts": {},
+  "warm_status_counts": {
+    "PASS": 29
+  },
+  "cold_pump_runtime_s": null,
+  "warm_pump_runtime_s": 26.0045986000041,
+  "cold_gain_runtime_s": null,
+  "warm_gain_runtime_s": 15.658091300167143,
+  "cold_timing_totals": {},
+  "warm_timing_totals": {
+    "pump_wall_runtime_s": 29.173981100000674,
+    "pump_runtime_s": 26.0045986000041,
+    "pump_setup_runtime_s": 0.268299899995327,
+    "pump_schur_setup_runtime_s": 0.1379625999252312,
+    "pump_solve_wall_runtime_s": 26.052352199913003,
+    "pump_write_runtime_s": 2.5709886999393348,
+    "pump_factor_runtime_s": 14.278470500052208,
+    "pump_preconditioner_assembly_runtime_s": 4.371415899833664,
+    "pump_preconditioner_numeric_factor_runtime_s": 9.03409170001396,
+    "gain_wall_runtime_s": 15.658064400195144,
+    "gain_total_runtime_s": 15.658091300167143,
+    "gain_gamma_hat_runtime_s": 3.3159333999210503,
+    "gain_khat_build_runtime_s": 0.5322857999708503,
+    "gain_khat_off_runtime_s": 0.01982959988527,
+    "gain_matrix_assemble_runtime_s": 3.126318700000411,
+    "gain_factor_solve_runtime_s": 6.89301449994673,
+    "gain_baseline_off_runtime_s": 0.16686960004153661,
+    "gain_baseline_pumpdiag_runtime_s": 0.15902710004593246,
+    "elapsed_s": 46.19719720000285
+  },
+  "elapsed_s": 46.33816139999544,
+  "gate": {
+    "evaluated": false,
+    "passed": false,
+    "reasons": [
+      "gate not applicable for this mode"
+    ],
+    "gate_gain_db": 0.01,
+    "max_gain_drift_db": null,
+    "n_compared": 0,
+    "min_converged_frac": 0.98,
+    "warm_converged_frac": null,
+    "n_warm_failed": 0,
+    "pump_speedup_per_point": null,
+    "cold_pump_mean_s": null,
+    "warm_pump_mean_s": null,
+    "cold_pump_runtime_s": null,
+    "warm_pump_runtime_s": null
+  }
+}

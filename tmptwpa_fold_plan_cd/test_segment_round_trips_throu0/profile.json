@@ -1,0 +1,1 @@
+{"Lj": [{"shape": "const", "start": 1.5e-10, "end": null, "select": {"rows": [0, 2]}, "domain": "selection", "params": {}, "expression": null}, {"shape": "sine", "start": 1.0, "end": 2.0, "select": {"fraction": [0.0, 0.5]}, "domain": "per_row", "params": {"periods": 3.0}, "expression": null}], "Cg": []}

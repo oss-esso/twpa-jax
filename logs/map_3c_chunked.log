@@ -1,0 +1,22 @@
+
+=== chunk 0 : cols [0..9] fp 7.0000..7.1837 GHz (10 cols) ===
+chunk 0 rc=0 elapsed=735.9s
+
+=== chunk 1 : cols [10..19] fp 7.2041..7.3878 GHz (10 cols) ===
+chunk 1 rc=0 elapsed=818.0s
+
+=== chunk 2 : cols [20..29] fp 7.4082..7.5918 GHz (10 cols) ===
+chunk 2 rc=0 elapsed=767.4s
+
+=== chunk 3 : cols [30..39] fp 7.6122..7.7959 GHz (10 cols) ===
+chunk 3 rc=0 elapsed=807.6s
+
+=== chunk 4 : cols [40..49] fp 7.8163..8.0000 GHz (10 cols) ===
+chunk 4 rc=0 elapsed=829.0s
+
+=== MERGED ===
+converged 2438/2500
+peak {'gain_db': 20.8421098943652, 'pump_power_dbm': -28.0, 'pump_freq_ghz': 7.979591836734694}
+wrote C:\Users\Edoardo\Documents\EPFL\Thesis\twpa_jax\outputs\exp10_pump_map_trailing_50x50_3c\map_summary.json
+
+TOTAL elapsed 3958.1s

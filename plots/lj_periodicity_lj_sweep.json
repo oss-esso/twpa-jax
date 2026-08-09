@@ -1,0 +1,19 @@
+{
+  "measurement_target_power_dbm": -25.0,
+  "measurement_selected_power_dbm": -25.058666666666667,
+  "signal_band_ghz": [
+    4.0,
+    12.0
+  ],
+  "frequency_shift_ghz": 0.99,
+  "map_dirs": [
+    "outputs\\lj_periodicity_maps\\map_lj70_cg66",
+    "outputs\\lj_periodicity_maps\\map_lj80_cg66",
+    "outputs\\lj_periodicity_maps\\map_lj90_cg66",
+    "outputs\\lj_periodicity_maps\\map_lj100_cg66",
+    "outputs\\lj_periodicity_maps\\map_lj110_cg66",
+    "outputs\\lj_periodicity_maps\\map_lj123p9_cg66",
+    "outputs\\lj_periodicity_maps\\map_lj140_cg66",
+    "outputs\\lj_periodicity_maps\\map_lj160_cg66"
+  ]
+}

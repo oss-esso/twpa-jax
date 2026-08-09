@@ -1,0 +1,21 @@
+%% Diagram 9: Failure-status state machine
+%% solve_point L724/L748/L781/L805; floquet L317/L486; past_fold_skip_row L1152
+stateDiagram-v2
+  [*] --> PumpSolve
+  PumpSolve --> VALID_CONVERGED: reports[-1].converged & |lambda-1|<1e-12 (L724/L748)
+  PumpSolve --> FAIL: else (solve_one failure_reason: stalled / line search failed / max newton / deadline / non-finite / GMRES info)
+  VALID_CONVERGED --> GainSolve
+  FAIL --> ERRcell: gain skipped unless force_gain (L786)
+  GainSolve --> VALID_SOLVED: GainResult.status==VALID_SOLVED (floquet L317/L486)
+  GainSolve --> CHECK: nonfinite gain or linear_rel_residual>1e-7 (L318/L487)
+  VALID_SOLVED --> PASS: pump VALID_CONVERGED & gain VALID_SOLVED (L805)
+  CHECK --> ERRcell: mapped to gain_status=ERROR (L781/L798)
+  ERRcell --> SKIP_PAST_FOLD: fold short-circuit patience trip (L1410/L1785)
+  PASS --> [*]
+  ERRcell --> [*]
+  SKIP_PAST_FOLD --> [*]
+  note right of FAIL
+    Exit code: per-cell FAIL does NOT set nonzero exit.
+    main returns 1 only if gate evaluated and failed (L2891).
+    Chunk worker failure -> RuntimeError (L2740).
+  end note

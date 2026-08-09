@@ -1,0 +1,700 @@
+This is pdfTeX, Version 3.141592653-2.6-1.40.29 (MiKTeX 26.5) (preloaded format=pdflatex 2026.5.25)  10 JUL 2026 14:14
+entering extended mode
+ restricted \write18 enabled.
+ %&-line parsing enabled.
+**./pump_map_continuation_methods.tex
+(pump_map_continuation_methods.tex
+LaTeX2e <2025-11-01>
+L3 programming layer <2026-04-28>
+(C:\Users\Edoardo\AppData\Local\Programs\MiKTeX\tex/latex/base\article.cls
+Document Class: article 2025/01/22 v1.4n Standard LaTeX document class
+(C:\Users\Edoardo\AppData\Local\Programs\MiKTeX\tex/latex/base\size11.clo
+File: size11.clo 2025/01/22 v1.4n Standard LaTeX file (size option)
+)
+\c@part=\count276
+\c@section=\count277
+\c@subsection=\count278
+\c@subsubsection=\count279
+\c@paragraph=\count280
+\c@subparagraph=\count281
+\c@figure=\count282
+\c@table=\count283
+\abovecaptionskip=\skip49
+\belowcaptionskip=\skip50
+\bibindent=\dimen150
+)
+(C:\Users\Edoardo\AppData\Local\Programs\MiKTeX\tex/latex/geometry\geometry.sty
+Package: geometry 2026/03/07 v6.0 Page Geometry
+(C:\Users\Edoardo\AppData\Local\Programs\MiKTeX\tex/latex/graphics\keyval.sty
+Package: keyval 2022/05/29 v1.15 key=value parser (DPC)
+\KV@toks@=\toks17
+)
+(C:\Users\Edoardo\AppData\Local\Programs\MiKTeX\tex/generic/iftex\ifvtex.sty
+Package: ifvtex 2019/10/25 v1.7 ifvtex legacy package. Use iftex instead.
+
+(C:\Users\Edoardo\AppData\Local\Programs\MiKTeX\tex/generic/iftex\iftex.sty
+Package: iftex 2024/12/12 v1.0g TeX engine tests
+))
+\Gm@cnth=\count284
+\Gm@cntv=\count285
+\c@Gm@tempcnt=\count286
+\Gm@bindingoffset=\dimen151
+\Gm@wd@mp=\dimen152
+\Gm@odd@mp=\dimen153
+\Gm@even@mp=\dimen154
+\Gm@layoutwidth=\dimen155
+\Gm@layoutheight=\dimen156
+\Gm@layouthoffset=\dimen157
+\Gm@layoutvoffset=\dimen158
+\Gm@dimlist=\toks18
+
+(C:\Users\Edoardo\AppData\Local\Programs\MiKTeX\tex/latex/geometry\geometry.cfg
+))
+(C:\Users\Edoardo\AppData\Local\Programs\MiKTeX\tex/latex/amsmath\amsmath.sty
+Package: amsmath 2025/07/09 v2.17z AMS math features
+\@mathmargin=\skip51
+
+For additional information on amsmath, use the `?' option.
+(C:\Users\Edoardo\AppData\Local\Programs\MiKTeX\tex/latex/amsmath\amstext.sty
+Package: amstext 2024/11/17 v2.01 AMS text
+
+(C:\Users\Edoardo\AppData\Local\Programs\MiKTeX\tex/latex/amsmath\amsgen.sty
+File: amsgen.sty 1999/11/30 v2.0 generic functions
+\@emptytoks=\toks19
+\ex@=\dimen159
+))
+(C:\Users\Edoardo\AppData\Local\Programs\MiKTeX\tex/latex/amsmath\amsbsy.sty
+Package: amsbsy 1999/11/29 v1.2d Bold Symbols
+\pmbraise@=\dimen160
+)
+(C:\Users\Edoardo\AppData\Local\Programs\MiKTeX\tex/latex/amsmath\amsopn.sty
+Package: amsopn 2022/04/08 v2.04 operator names
+)
+\inf@bad=\count287
+LaTeX Info: Redefining \frac on input line 233.
+\uproot@=\count288
+\leftroot@=\count289
+LaTeX Info: Redefining \overline on input line 398.
+LaTeX Info: Redefining \colon on input line 409.
+\classnum@=\count290
+\DOTSCASE@=\count291
+LaTeX Info: Redefining \ldots on input line 495.
+LaTeX Info: Redefining \dots on input line 498.
+LaTeX Info: Redefining \cdots on input line 619.
+\Mathstrutbox@=\box53
+\strutbox@=\box54
+LaTeX Info: Redefining \big on input line 721.
+LaTeX Info: Redefining \Big on input line 722.
+LaTeX Info: Redefining \bigg on input line 723.
+LaTeX Info: Redefining \Bigg on input line 724.
+\big@size=\dimen161
+LaTeX Font Info:    Redeclaring font encoding OML on input line 742.
+LaTeX Font Info:    Redeclaring font encoding OMS on input line 743.
+\macc@depth=\count292
+LaTeX Info: Redefining \bmod on input line 904.
+LaTeX Info: Redefining \pmod on input line 909.
+LaTeX Info: Redefining \smash on input line 939.
+LaTeX Info: Redefining \relbar on input line 969.
+LaTeX Info: Redefining \Relbar on input line 970.
+\c@MaxMatrixCols=\count293
+\dotsspace@=\muskip17
+\c@parentequation=\count294
+\dspbrk@lvl=\count295
+\tag@help=\toks20
+\row@=\count296
+\column@=\count297
+\maxfields@=\count298
+\andhelp@=\toks21
+\eqnshift@=\dimen162
+\alignsep@=\dimen163
+\tagshift@=\dimen164
+\tagwidth@=\dimen165
+\totwidth@=\dimen166
+\lineht@=\dimen167
+\@envbody=\toks22
+\multlinegap=\skip52
+\multlinetaggap=\skip53
+\mathdisplay@stack=\toks23
+LaTeX Info: Redefining \[ on input line 2950.
+LaTeX Info: Redefining \] on input line 2951.
+)
+(C:\Users\Edoardo\AppData\Local\Programs\MiKTeX\tex/latex/amsfonts\amssymb.sty
+Package: amssymb 2013/01/14 v3.01 AMS font symbols
+
+(C:\Users\Edoardo\AppData\Local\Programs\MiKTeX\tex/latex/amsfonts\amsfonts.sty
+Package: amsfonts 2013/01/14 v3.01 Basic AMSFonts support
+\symAMSa=\mathgroup4
+\symAMSb=\mathgroup5
+LaTeX Font Info:    Redeclaring math symbol \hbar on input line 98.
+LaTeX Font Info:    Overwriting math alphabet `\mathfrak' in version `bold'
+(Font)                  U/euf/m/n --> U/euf/b/n on input line 106.
+))
+(C:\Users\Edoardo\AppData\Local\Programs\MiKTeX\tex/latex/booktabs\booktabs.sty
+Package: booktabs 2020/01/12 v1.61803398 Publication quality tables
+\heavyrulewidth=\dimen168
+\lightrulewidth=\dimen169
+\cmidrulewidth=\dimen170
+\belowrulesep=\dimen171
+\belowbottomsep=\dimen172
+\aboverulesep=\dimen173
+\abovetopsep=\dimen174
+\cmidrulesep=\dimen175
+\cmidrulekern=\dimen176
+\defaultaddspace=\dimen177
+\@cmidla=\count299
+\@cmidlb=\count300
+\@aboverulesep=\dimen178
+\@belowrulesep=\dimen179
+\@thisruleclass=\count301
+\@lastruleclass=\count302
+\@thisrulewidth=\dimen180
+) (C:\Users\Edoardo\AppData\Local\Programs\MiKTeX\tex/latex/tools\array.sty
+Package: array 2025/09/25 v2.6n Tabular extension package (FMi)
+\col@sep=\dimen181
+\ar@mcellbox=\box55
+\extrarowheight=\dimen182
+\NC@list=\toks24
+\extratabsurround=\skip54
+\backup@length=\skip55
+\ar@cellbox=\box56
+)
+(C:\Users\Edoardo\AppData\Local\Programs\MiKTeX\tex/latex/xcolor\xcolor.sty
+Package: xcolor 2024/09/29 v3.02 LaTeX color extensions (UK)
+
+(C:\Users\Edoardo\AppData\Local\Programs\MiKTeX\tex/latex/graphics-cfg\color.cf
+g
+File: color.cfg 2016/01/02 v1.6 sample color configuration
+)
+Package xcolor Info: Driver file: pdftex.def on input line 274.
+
+(C:\Users\Edoardo\AppData\Local\Programs\MiKTeX\tex/latex/graphics-def\pdftex.d
+ef
+File: pdftex.def 2025/09/29 v1.2d Graphics/color driver for pdftex
+)
+(C:\Users\Edoardo\AppData\Local\Programs\MiKTeX\tex/latex/graphics\mathcolor.lt
+x)
+Package xcolor Info: Model `cmy' substituted by `cmy0' on input line 1349.
+Package xcolor Info: Model `hsb' substituted by `rgb' on input line 1353.
+Package xcolor Info: Model `RGB' extended on input line 1365.
+Package xcolor Info: Model `HTML' substituted by `rgb' on input line 1367.
+Package xcolor Info: Model `Hsb' substituted by `hsb' on input line 1368.
+Package xcolor Info: Model `tHsb' substituted by `hsb' on input line 1369.
+Package xcolor Info: Model `HSB' substituted by `hsb' on input line 1370.
+Package xcolor Info: Model `Gray' substituted by `gray' on input line 1371.
+Package xcolor Info: Model `wave' substituted by `hsb' on input line 1372.
+)
+(C:\Users\Edoardo\AppData\Local\Programs\MiKTeX\tex/latex/listings\listings.sty
+\lst@mode=\count303
+\lst@gtempboxa=\box57
+\lst@token=\toks25
+\lst@length=\count304
+\lst@currlwidth=\dimen183
+\lst@column=\count305
+\lst@pos=\count306
+\lst@lostspace=\dimen184
+\lst@width=\dimen185
+\lst@newlines=\count307
+\lst@lineno=\count308
+\lst@maxwidth=\dimen186
+
+(C:\Users\Edoardo\AppData\Local\Programs\MiKTeX\tex/latex/listings\lstpatch.sty
+File: lstpatch.sty 2025/11/14 1.11b (Carsten Heinz)
+)
+(C:\Users\Edoardo\AppData\Local\Programs\MiKTeX\tex/latex/listings\lstmisc.sty
+File: lstmisc.sty 2025/11/14 1.11b (Carsten Heinz)
+\c@lstnumber=\count309
+\lst@skipnumbers=\count310
+\lst@framebox=\box58
+)
+(C:\Users\Edoardo\AppData\Local\Programs\MiKTeX\tex/latex/listings\listings.cfg
+File: listings.cfg 2025/11/14 1.11b listings configuration
+))
+Package: listings 2025/11/14 1.11b (Carsten Heinz)
+
+==> First Aid for listings.sty no longer applied!
+    Expected:
+        2024/09/23 1.10c (Carsten Heinz)
+    but found:
+        2025/11/14 1.11b (Carsten Heinz)
+    so I'm assuming it got fixed.
+
+(C:\Users\Edoardo\AppData\Local\Programs\MiKTeX\tex/latex/enumitem\enumitem.sty
+Package: enumitem 2025/02/06 v3.11 Customized lists
+\labelindent=\skip56
+\enit@outerparindent=\dimen187
+\enit@toks=\toks26
+\enit@inbox=\box59
+\enit@count@id=\count311
+\enitdp@description=\count312
+)
+(C:\Users\Edoardo\AppData\Local\Programs\MiKTeX\tex/latex/hyperref\hyperref.sty
+Package: hyperref 2026-04-24 v7.01q Hypertext links for LaTeX
+
+(C:\Users\Edoardo\AppData\Local\Programs\MiKTeX\tex/latex/kvsetkeys\kvsetkeys.s
+ty
+Package: kvsetkeys 2022-10-05 v1.19 Key value parser (HO)
+)
+(C:\Users\Edoardo\AppData\Local\Programs\MiKTeX\tex/generic/kvdefinekeys\kvdefi
+nekeys.sty
+Package: kvdefinekeys 2019-12-19 v1.6 Define keys (HO)
+)
+(C:\Users\Edoardo\AppData\Local\Programs\MiKTeX\tex/generic/pdfescape\pdfescape
+.sty
+Package: pdfescape 2019/12/09 v1.15 Implements pdfTeX's escape features (HO)
+
+(C:\Users\Edoardo\AppData\Local\Programs\MiKTeX\tex/generic/ltxcmds\ltxcmds.sty
+Package: ltxcmds 2023-12-04 v1.26 LaTeX kernel commands for general use (HO)
+)
+(C:\Users\Edoardo\AppData\Local\Programs\MiKTeX\tex/generic/pdftexcmds\pdftexcm
+ds.sty
+Package: pdftexcmds 2020-06-27 v0.33 Utility functions of pdfTeX for LuaTeX (HO
+)
+
+(C:\Users\Edoardo\AppData\Local\Programs\MiKTeX\tex/generic/infwarerr\infwarerr
+.sty
+Package: infwarerr 2019/12/03 v1.5 Providing info/warning/error messages (HO)
+)
+Package pdftexcmds Info: \pdf@primitive is available.
+Package pdftexcmds Info: \pdf@ifprimitive is available.
+Package pdftexcmds Info: \pdfdraftmode found.
+))
+(C:\Users\Edoardo\AppData\Local\Programs\MiKTeX\tex/latex/hycolor\hycolor.sty
+Package: hycolor 2020-01-27 v1.10 Color options for hyperref/bookmark (HO)
+)
+(C:\Users\Edoardo\AppData\Local\Programs\MiKTeX\tex/latex/hyperref\nameref.sty
+Package: nameref 2026-01-29 v2.58 Cross-referencing by name of section
+
+(C:\Users\Edoardo\AppData\Local\Programs\MiKTeX\tex/latex/refcount\refcount.sty
+Package: refcount 2019/12/15 v3.6 Data extraction from label references (HO)
+)
+(C:\Users\Edoardo\AppData\Local\Programs\MiKTeX\tex/generic/gettitlestring\gett
+itlestring.sty
+Package: gettitlestring 2019/12/15 v1.6 Cleanup title references (HO)
+
+(C:\Users\Edoardo\AppData\Local\Programs\MiKTeX\tex/latex/kvoptions\kvoptions.s
+ty
+Package: kvoptions 2022-06-15 v3.15 Key value format for package options (HO)
+))
+\c@section@level=\count313
+)
+(C:\Users\Edoardo\AppData\Local\Programs\MiKTeX\tex/latex/etoolbox\etoolbox.sty
+Package: etoolbox 2025/10/02 v2.5m e-TeX tools for LaTeX (JAW)
+\etb@tempcnta=\count314
+)
+(C:\Users\Edoardo\AppData\Local\Programs\MiKTeX\tex/generic/stringenc\stringenc
+.sty
+Package: stringenc 2019/11/29 v1.12 Convert strings between diff. encodings (HO
+)
+)
+\@linkdim=\dimen188
+\Hy@linkcounter=\count315
+\Hy@pagecounter=\count316
+
+(C:\Users\Edoardo\AppData\Local\Programs\MiKTeX\tex/latex/hyperref\pd1enc.def
+File: pd1enc.def 2026-04-24 v7.01q Hyperref: PDFDocEncoding definition (HO)
+Now handling font encoding PD1 ...
+... no UTF-8 mapping file for font encoding PD1
+)
+(C:\Users\Edoardo\AppData\Local\Programs\MiKTeX\tex/generic/intcalc\intcalc.sty
+Package: intcalc 2019/12/15 v1.3 Expandable calculations with integers (HO)
+)
+\Hy@SavedSpaceFactor=\count317
+ (C:\Users\Edoardo\AppData\Local\Programs\MiKTeX\tex/latex/hyperref\puenc.def
+File: puenc.def 2026-04-24 v7.01q Hyperref: PDF Unicode definition (HO)
+Now handling font encoding PU ...
+... no UTF-8 mapping file for font encoding PU
+)
+Package hyperref Info: Hyper figures OFF on input line 4199.
+Package hyperref Info: Link nesting OFF on input line 4204.
+Package hyperref Info: Hyper index ON on input line 4207.
+Package hyperref Info: Plain pages OFF on input line 4214.
+Package hyperref Info: Backreferencing OFF on input line 4219.
+Package hyperref Info: Implicit mode ON; LaTeX internals redefined.
+Package hyperref Info: Bookmarks ON on input line 4466.
+\c@Hy@tempcnt=\count318
+(C:\Users\Edoardo\AppData\Local\Programs\MiKTeX\tex/latex/url\url.sty
+\Urlmuskip=\muskip18
+Package: url 2013/09/16  ver 3.4  Verb mode for urls, etc.
+)
+LaTeX Info: Redefining \url on input line 4805.
+\XeTeXLinkMargin=\dimen189
+
+(C:\Users\Edoardo\AppData\Local\Programs\MiKTeX\tex/generic/bitset\bitset.sty
+Package: bitset 2019/12/09 v1.3 Handle bit-vector datatype (HO)
+
+(C:\Users\Edoardo\AppData\Local\Programs\MiKTeX\tex/generic/bigintcalc\bigintca
+lc.sty
+Package: bigintcalc 2019/12/15 v1.5 Expandable calculations on big integers (HO
+)
+))
+\Fld@menulength=\count319
+\Field@Width=\dimen190
+\Fld@charsize=\dimen191
+Package hyperref Info: Hyper figures OFF on input line 6091.
+Package hyperref Info: Link nesting OFF on input line 6096.
+Package hyperref Info: Hyper index ON on input line 6099.
+Package hyperref Info: backreferencing OFF on input line 6106.
+Package hyperref Info: Link coloring OFF on input line 6111.
+Package hyperref Info: Link coloring with OCG OFF on input line 6116.
+Package hyperref Info: PDF/A mode OFF on input line 6121.
+\Hy@abspage=\count320
+\c@Item=\count321
+\c@Hfootnote=\count322
+)
+Package hyperref Info: Driver (autodetected): hpdftex.
+
+(C:\Users\Edoardo\AppData\Local\Programs\MiKTeX\tex/latex/hyperref\hpdftex.def
+File: hpdftex.def 2026-04-24 v7.01q Hyperref driver for pdfTeX
+\Fld@listcount=\count323
+\c@bookmark@seq@number=\count324
+
+(C:\Users\Edoardo\AppData\Local\Programs\MiKTeX\tex/latex/rerunfilecheck\rerunf
+ilecheck.sty
+Package: rerunfilecheck 2025-06-21 v1.11 Rerun checks for auxiliary files (HO)
+
+(C:\Users\Edoardo\AppData\Local\Programs\MiKTeX\tex/generic/uniquecounter\uniqu
+ecounter.sty
+Package: uniquecounter 2019/12/15 v1.4 Provide unlimited unique counter (HO)
+)
+Package uniquecounter Info: New unique counter `rerunfilecheck' on input line 2
+84.
+)
+\Hy@SectionHShift=\skip57
+)
+(C:\Users\Edoardo\AppData\Local\Programs\MiKTeX\tex/latex/l3backend\l3backend-p
+dftex.def
+File: l3backend-pdftex.def 2026-02-18 L3 backend support: PDF output (pdfTeX)
+\l__color_backend_stack_int=\count325
+)
+No file pump_map_continuation_methods.aux.
+\openout1 = `pump_map_continuation_methods.aux'.
+
+LaTeX Font Info:    Checking defaults for OML/cmm/m/it on input line 39.
+LaTeX Font Info:    ... okay on input line 39.
+LaTeX Font Info:    Checking defaults for OMS/cmsy/m/n on input line 39.
+LaTeX Font Info:    ... okay on input line 39.
+LaTeX Font Info:    Checking defaults for OT1/cmr/m/n on input line 39.
+LaTeX Font Info:    ... okay on input line 39.
+LaTeX Font Info:    Checking defaults for T1/cmr/m/n on input line 39.
+LaTeX Font Info:    ... okay on input line 39.
+LaTeX Font Info:    Checking defaults for TS1/cmr/m/n on input line 39.
+LaTeX Font Info:    ... okay on input line 39.
+LaTeX Font Info:    Checking defaults for OMX/cmex/m/n on input line 39.
+LaTeX Font Info:    ... okay on input line 39.
+LaTeX Font Info:    Checking defaults for U/cmr/m/n on input line 39.
+LaTeX Font Info:    ... okay on input line 39.
+LaTeX Font Info:    Checking defaults for PD1/pdf/m/n on input line 39.
+LaTeX Font Info:    ... okay on input line 39.
+LaTeX Font Info:    Checking defaults for PU/pdf/m/n on input line 39.
+LaTeX Font Info:    ... okay on input line 39.
+*geometry* driver: auto-detecting
+*geometry* detected driver: pdftex
+*geometry* verbose mode - [ preamble ] result:
+* driver: pdftex
+* paper: a4paper
+* layout: <same size as paper>
+* layoutoffset:(h,v)=(0.0pt,0.0pt)
+* modes: 
+* h-part:(L,W,R)=(72.26999pt, 452.9679pt, 72.26999pt)
+* v-part:(T,H,B)=(72.26999pt, 700.50687pt, 72.26999pt)
+* \paperwidth=597.50787pt
+* \paperheight=845.04684pt
+* \textwidth=452.9679pt
+* \textheight=700.50687pt
+* \oddsidemargin=0.0pt
+* \evensidemargin=0.0pt
+* \topmargin=-37.0pt
+* \headheight=12.0pt
+* \headsep=25.0pt
+* \topskip=11.0pt
+* \footskip=30.0pt
+* \marginparwidth=59.0pt
+* \marginparsep=10.0pt
+* \columnsep=10.0pt
+* \skip\footins=10.0pt plus 4.0pt minus 2.0pt
+* \hoffset=0.0pt
+* \voffset=0.0pt
+* \mag=1000
+* \@twocolumnfalse
+* \@twosidefalse
+* \@mparswitchfalse
+* \@reversemarginfalse
+* (1in=72.27pt=25.4mm, 1cm=28.453pt)
+
+
+(C:\Users\Edoardo\AppData\Local\Programs\MiKTeX\tex/context/base/mkii\supp-pdf.
+mkii
+[Loading MPS to PDF converter (version 2006.09.02).]
+\scratchcounter=\count326
+\scratchdimen=\dimen192
+\scratchbox=\box60
+\nofMPsegments=\count327
+\nofMParguments=\count328
+\everyMPshowfont=\toks27
+\MPscratchCnt=\count329
+\MPscratchDim=\dimen193
+\MPnumerator=\count330
+\makeMPintoPDFobject=\count331
+\everyMPtoPDFconversion=\toks28
+)
+\c@lstlisting=\count332
+Package hyperref Info: Link coloring OFF on input line 39.
+\@outlinefile=\write3
+\openout3 = `pump_map_continuation_methods.out'.
+
+LaTeX Font Info:    Trying to load font information for U+msa on input line 41.
+
+ (C:\Users\Edoardo\AppData\Local\Programs\MiKTeX\tex/latex/amsfonts\umsa.fd
+File: umsa.fd 2013/01/14 v3.01 AMS symbols A
+)
+LaTeX Font Info:    Trying to load font information for U+msb on input line 41.
+
+
+(C:\Users\Edoardo\AppData\Local\Programs\MiKTeX\tex/latex/amsfonts\umsb.fd
+File: umsb.fd 2013/01/14 v3.01 AMS symbols B
+)
+No file pump_map_continuation_methods.toc.
+\tf@toc=\write4
+\openout4 = `pump_map_continuation_methods.toc'.
+
+
+LaTeX Warning: Reference `eq:residual' on page 1 undefined on input line 79.
+
+
+LaTeX Warning: Reference `sec:intracell' on page 1 undefined on input line 88.
+
+
+LaTeX Warning: Reference `sec:intercell' on page 1 undefined on input line 91.
+
+[1
+
+{C:/Users/Edoardo/AppData/Local/MiKTeX/fonts/map/pdftex/pdftex.map}{C:/Users/Ed
+oardo/AppData/Local/Programs/MiKTeX/fonts/enc/dvips/cm-super/cm-super-ts1.enc}]
+
+Overfull \hbox (25.16505pt too wide) in paragraph at lines 114--120
+ []\OT1/cmr/bx/n/10.95 Adaptive-step con-tin-u-a-tion (the ``seed'' path).[] \O
+T1/cmtt/m/n/10 solve[]adaptive[]continuation \OT1/cmr/m/n/10.95 (\OT1/cmtt/m/n/
+10 solver.py:463\OT1/cmr/m/n/10.95 )
+ []
+
+
+Overfull \hbox (28.54567pt too wide) in paragraph at lines 122--129
+\OT1/cmr/m/n/10.95 true Ja-co-bian $\OT1/cmr/bx/n/10.95 J \OT1/cmr/m/n/10.95 = 
+\OML/cmm/m/it/10.95 @\OT1/cmr/bx/n/10.95 R\OML/cmm/m/it/10.95 =@\OT1/cmr/bx/n/1
+0.95 X$\OT1/cmr/m/n/10.95 , pre-con-di-tioned by one of sev-eral fac-tor-iza-ti
+ons (\OT1/cmtt/m/n/10 --inproc-preconditioner\OT1/cmr/m/n/10.95 ).
+ []
+
+
+Overfull \hbox (35.03261pt too wide) in paragraph at lines 122--129
+\OT1/cmtt/m/n/10 solve[]deadline[]s \OT1/cmr/m/n/10.95 abort stiff \OT1/cmr/m/i
+t/10.95 over-fold \OT1/cmr/m/n/10.95 solves, and modified-Newton pre-con-di-tio
+ner reuse (\OT1/cmtt/m/n/10 precond[]reuse\OT1/cmr/m/n/10.95 )
+ []
+
+
+Overfull \hbox (13.86057pt too wide) in paragraph at lines 159--162
+\OT1/cmr/m/n/10.95 col-umn is sorted by as-cend-ing pump power and tra-versed l
+ow$\OMS/cmsy/m/n/10.95 !$\OT1/cmr/m/n/10.95 high (\OT1/cmtt/m/n/10 run[]gain[]m
+ap.py:871--880\OT1/cmr/m/n/10.95 ). 
+ []
+
+
+LaTeX Warning: Reference `eq:secant' on page 2 undefined on input line 173.
+
+
+Overfull \hbox (1.10435pt too wide) in paragraph at lines 169--176
+\OT1/cmr/m/n/10.95 last two con-verged so-lu-tions along the pump-\OT1/cmr/m/it
+/10.95 current \OT1/cmr/m/n/10.95 axis, \OT1/cmtt/m/n/10 secant[]guess \OT1/cmr
+/m/n/10.95 (\OT1/cmtt/m/n/10 run[]gain[]map.py:785\OT1/cmr/m/n/10.95 ,
+ []
+
+[2]
+
+LaTeX Warning: Reference `eq:residual' on page 3 undefined on input line 183.
+
+
+LaTeX Warning: Reference `sec:alternatives' on page 3 undefined on input line 2
+02.
+
+
+LaTeX Warning: Citation `Keller1977' on page 3 undefined on input line 235.
+
+
+LaTeX Warning: Citation `AllgowerGeorg2003' on page 3 undefined on input line 2
+35.
+
+[3]
+
+LaTeX Warning: Citation `Keller1977' on page 4 undefined on input line 249.
+
+
+LaTeX Warning: Citation `ArclengthHB_Rotor' on page 4 undefined on input line 2
+62.
+
+
+LaTeX Warning: Citation `AllgowerGeorg2003' on page 4 undefined on input line 2
+62.
+
+
+LaTeX Warning: Reference `eq:secant' on page 4 undefined on input line 267.
+
+
+LaTeX Warning: Citation `AllgowerGeorg2003' on page 4 undefined on input line 2
+70.
+
+
+LaTeX Warning: Citation `BifurcationKitPred' on page 4 undefined on input line 
+275.
+
+
+LaTeX Warning: Citation `Deuflhard2004' on page 4 undefined on input line 282.
+
+
+Package hyperref Warning: Token not allowed in a PDF string (Unicode):
+(hyperref)                removing `math shift' on input line 285.
+
+
+Package hyperref Warning: Token not allowed in a PDF string (Unicode):
+(hyperref)                removing `\Psi' on input line 285.
+
+
+Package hyperref Warning: Token not allowed in a PDF string (Unicode):
+(hyperref)                removing `math shift' on input line 285.
+
+
+LaTeX Warning: Citation `KelleyKeyes1998' on page 4 undefined on input line 290
+.
+
+
+LaTeX Warning: Citation `Kelley2003' on page 4 undefined on input line 290.
+
+
+LaTeX Warning: Reference `sec:intercell' on page 4 undefined on input line 297.
+
+
+[4]
+
+LaTeX Warning: Citation `DhoogeMatcont2003' on page 5 undefined on input line 3
+18.
+
+
+LaTeX Warning: Citation `AllgowerGeorg2003' on page 5 undefined on input line 3
+18.
+
+
+LaTeX Warning: Reference `sec:intracell' on page 5 undefined on input line 322.
+
+
+
+LaTeX Warning: Citation `FarrellBirkissonFunke2015' on page 5 undefined on inpu
+t line 331.
+
+
+LaTeX Warning: Citation `WalkerNi2011' on page 5 undefined on input line 338.
+
+
+LaTeX Warning: Citation `ArclengthHB_Rotor' on page 5 undefined on input line 3
+45.
+
+
+LaTeX Warning: Citation `JTWPA_CircuitSim2022' on page 5 undefined on input lin
+e 348.
+
+
+LaTeX Warning: Citation `JTWPA_EMcosim2024' on page 5 undefined on input line 3
+48.
+
+
+Underfull \hbox (badness 3884) in paragraph at lines 360--360
+[]|\OT1/cmr/m/n/10 Fixed / adap-tive $\OML/cmm/m/it/10 ^^U$
+ []
+
+
+Underfull \hbox (badness 10000) in paragraph at lines 362--362
+[]|\OT1/cmr/m/n/10 Warm-start sin-gle
+ []
+
+
+Underfull \hbox (badness 1859) in paragraph at lines 363--363
+[]|\OT1/cmr/m/n/10 Tangent (Eu-ler) pre-
+ []
+
+
+LaTeX Warning: Reference `eq:pal' on page 5 undefined on input line 364.
+
+
+Underfull \hbox (badness 10000) in paragraph at lines 364--365
+[]|\OT1/cmr/m/n/10 augments resid-ual with
+ []
+
+
+Underfull \hbox (badness 10000) in paragraph at lines 365--365
+[]|\OT1/cmr/m/n/10 Affine-invariant step
+ []
+
+
+Underfull \hbox (badness 10000) in paragraph at lines 367--367
+[]|\OT1/cmr/m/n/10 Neighbour / tree
+ []
+
+[5] [6] [7] (pump_map_continuation_methods.aux)
+ ***********
+LaTeX2e <2025-11-01>
+L3 programming layer <2026-04-28>
+ ***********
+
+
+LaTeX Warning: There were undefined references.
+
+
+LaTeX Warning: Label(s) may have changed. Rerun to get cross-references right.
+
+
+Package rerunfilecheck Warning: File `pump_map_continuation_methods.out' has ch
+anged.
+(rerunfilecheck)                Rerun to get outlines right
+(rerunfilecheck)                or use package `bookmark'.
+
+Package rerunfilecheck Info: Checksums for `pump_map_continuation_methods.out':
+
+(rerunfilecheck)             Before: <no file>
+(rerunfilecheck)             After:  89944300C58B27E656FFF07B3A1692C8;4316.
+ ) 
+Here is how much of TeX's memory you used:
+ 12199 strings out of 467682
+ 186062 string characters out of 5413732
+ 627695 words of memory out of 5000000
+ 41079 multiletter control sequences out of 15000+600000
+ 642240 words of font info for 96 fonts, out of 8000000 for 9000
+ 1141 hyphenation exceptions out of 8191
+ 75i,10n,79p,260b,631s stack positions out of 10000i,1000n,20000p,200000b,200000s
+<C:/Users/Edoardo/AppData/Local/Programs/MiKTeX/fonts/type1/public/amsfonts/c
+m/cmbx10.pfb><C:/Users/Edoardo/AppData/Local/Programs/MiKTeX/fonts/type1/public
+/amsfonts/cm/cmbx12.pfb><C:/Users/Edoardo/AppData/Local/Programs/MiKTeX/fonts/t
+ype1/public/amsfonts/cm/cmbx8.pfb><C:/Users/Edoardo/AppData/Local/Programs/MiKT
+eX/fonts/type1/public/amsfonts/cm/cmex10.pfb><C:/Users/Edoardo/AppData/Local/Pr
+ograms/MiKTeX/fonts/type1/public/amsfonts/cm/cmmi10.pfb><C:/Users/Edoardo/AppDa
+ta/Local/Programs/MiKTeX/fonts/type1/public/amsfonts/cm/cmmi6.pfb><C:/Users/Edo
+ardo/AppData/Local/Programs/MiKTeX/fonts/type1/public/amsfonts/cm/cmmi7.pfb><C:
+/Users/Edoardo/AppData/Local/Programs/MiKTeX/fonts/type1/public/amsfonts/cm/cmm
+i8.pfb><C:/Users/Edoardo/AppData/Local/Programs/MiKTeX/fonts/type1/public/amsfo
+nts/cm/cmr10.pfb><C:/Users/Edoardo/AppData/Local/Programs/MiKTeX/fonts/type1/pu
+blic/amsfonts/cm/cmr12.pfb><C:/Users/Edoardo/AppData/Local/Programs/MiKTeX/font
+s/type1/public/amsfonts/cm/cmr17.pfb><C:/Users/Edoardo/AppData/Local/Programs/M
+iKTeX/fonts/type1/public/amsfonts/cm/cmr6.pfb><C:/Users/Edoardo/AppData/Local/P
+rograms/MiKTeX/fonts/type1/public/amsfonts/cm/cmr7.pfb><C:/Users/Edoardo/AppDat
+a/Local/Programs/MiKTeX/fonts/type1/public/amsfonts/cm/cmr8.pfb><C:/Users/Edoar
+do/AppData/Local/Programs/MiKTeX/fonts/type1/public/amsfonts/cm/cmr9.pfb><C:/Us
+ers/Edoardo/AppData/Local/Programs/MiKTeX/fonts/type1/public/amsfonts/cm/cmsy10
+.pfb><C:/Users/Edoardo/AppData/Local/Programs/MiKTeX/fonts/type1/public/amsfont
+s/cm/cmsy8.pfb><C:/Users/Edoardo/AppData/Local/Programs/MiKTeX/fonts/type1/publ
+ic/amsfonts/cm/cmti10.pfb><C:/Users/Edoardo/AppData/Local/Programs/MiKTeX/fonts
+/type1/public/amsfonts/cm/cmtt10.pfb><C:/Users/Edoardo/AppData/Local/Programs/M
+iKTeX/fonts/type1/public/cm-super/sfrm1095.pfb>
+Output written on pump_map_continuation_methods.pdf (7 pages, 296503 bytes).
+PDF statistics:
+ 211 PDF objects out of 1000 (max. 8388607)
+ 58 named destinations out of 1000 (max. 500000)
+ 1 words of extra memory for PDF output out of 10000 (max. 10000000)
+

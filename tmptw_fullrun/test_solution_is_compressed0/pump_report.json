@@ -1,0 +1,16 @@
+{
+  "metadata": {
+    "pump_modes": [
+      1,
+      3,
+      5,
+      7,
+      9
+    ],
+    "omega_p": 50265482457.43669,
+    "pump_mode_policy": "positive_odd_jc"
+  },
+  "solution_summary": {},
+  "reports": [],
+  "final_status": "FAIL"
+}

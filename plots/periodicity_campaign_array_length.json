@@ -1,0 +1,56 @@
+{
+  "array_length200": {
+    "value": 200.0,
+    "n_peaks": 3,
+    "spacing_ghz": 0.5,
+    "peak_freqs_ghz": [
+      7.14,
+      7.44,
+      7.72
+    ],
+    "power_dbm": -25.0,
+    "n_finite": 50
+  },
+  "array_length300": {
+    "value": 300.0,
+    "n_peaks": 4,
+    "spacing_ghz": 0.3333333333333333,
+    "peak_freqs_ghz": [
+      7.06,
+      7.3,
+      7.52,
+      7.76
+    ],
+    "power_dbm": -25.0,
+    "n_finite": 51
+  },
+  "array_length418": {
+    "value": 418.0,
+    "n_peaks": 5,
+    "spacing_ghz": 0.25,
+    "peak_freqs_ghz": [
+      7.2,
+      7.38,
+      7.5600000000000005,
+      7.74,
+      7.92
+    ],
+    "power_dbm": -25.0,
+    "n_finite": 51
+  },
+  "array_length550": {
+    "value": 550.0,
+    "n_peaks": 6,
+    "spacing_ghz": 0.2,
+    "peak_freqs_ghz": [
+      7.14,
+      7.3,
+      7.44,
+      7.6,
+      7.74,
+      7.9
+    ],
+    "power_dbm": -25.0,
+    "n_finite": 51
+  }
+}

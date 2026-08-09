@@ -1,0 +1,25 @@
+%% Diagram 8: Fold detection and fold recovery
+%% run_warm_pass_inprocess L1195; run_map_traversal L1717; solver.py
+flowchart TD
+  FAIL["cell solve fails (status != PASS)"] --> RECOV["recovery chain (column L1287-1384 / traversal _recover L1595)"]
+  RECOV --> A["retry plain warm start L1342"]
+  RECOV --> B["reseed: fresh linear_phasor+adaptive L1346"]
+  RECOV --> C["column arclength recovery L1287 -> trace_arclength_from_two_points (solver.py L1022)"]
+  RECOV --> D["power substep L1357 -> solve_power_substep L875"]
+  RECOV --> E["fold-policy arclength L1657 -> solve_arclength L910"]
+  C --> EV{"fold evidence?"}
+  D --> EV
+  E --> EV
+  RECOV --> EV
+  EV --> V1["continuation_failure_is_fold_evidence L1175 (adaptive, reached_target False, >=2 steps)"]
+  EV --> V2["power substep step_floor -> verified_fold=True L1379"]
+  EV --> V3["arclength fold_lambdas (lambda_dot sign change) L1309 / solver L1010"]
+  V1 --> COUNT{"column: patience>0 & verified_fold & consec_fail>=patience? L1410"}
+  V2 --> COUNT
+  V3 --> COUNT
+  COUNT -->|trip| SKIP["past_fold_skip_row L1152: SKIP_PAST_FOLD; gain=NaN;\nskip remaining higher-power cells; break column L1423"]
+  COUNT -->|no trip| KEEP["keep FAILED row (gain NaN), continue"]
+  RECOV --> COUNT2{"traversal: col_fail[j]>=patience? (NO verified_fold gate) L1785"}
+  COUNT2 -->|trip| SKIP2["skip (i+1..n_power, j) L1786"]
+  FF["--fold-follow: run_fold_follow L1680 -> fold_power L1225 (pseudo-arclength lambda=0 until fold) -> fold_curve.csv; no gain map"]
+  RISK["FALSE-FOLD RISK: small --inproc-max-newton / short deadline\nfails stiff cell; traversal patience (no verified_fold) can cull real region"]
