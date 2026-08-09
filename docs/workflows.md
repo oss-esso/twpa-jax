@@ -112,6 +112,13 @@ The passive convention is `S[frequency, output_port, source_port]`. The four dir
 
 `run_gain_map_and_plots.py` forwards unrecognised options to `scripts/run_gain_map.py`, then invokes the standard plotting backend and the two signal-frequency projections.
 
+Port roles are resolved from the circuit when omitted: four-port devices use
+pump=4 and signal 1→2, two-port devices use 1→2, and one-port devices use
+1→1. Use `--pump-port`, `--source-port`, or `--out-port` only when a design
+uses a nonstandard assignment. Likewise, `--mixing-order auto` is the default:
+nonzero external DC current/flux selects 3WM and an unbiased circuit selects
+4WM; explicit `--mixing-order 3` or `4` remains available.
+
 ```powershell
 python workflows/run_gain_map_and_plots.py `
   --design designs/ipm_2c_fixed `
@@ -134,6 +141,15 @@ The workflow forces the in-process executor and writes the usual map artifacts u
 - gain versus pump power/signal frequency.
 
 Plot-specific controls are prefixed with `--plot-`, for example `--plot-top-k`, `--plot-min-gain-db`, `--plot-save-pdf`, and `--plot-save-svg`.
+
+The KIMPA wrapper uses the same role and mixing-order resolution. Its standard
+501-point best-spectrum output is `best_point_spectrum.npz`, containing the
+signal-frequency `Z`, `Y`, and pump-off `S` matrices, the pumped signal matrix,
+the idler conversion matrix, and `quantum_efficiency` / `quantum_efficiency_ideal`.
+The CSV contains the corresponding per-frequency QE values and named `sij`
+fields for every port pair present. A one-port KIMPA fixture therefore emits
+reflection data; a two- or four-port fixture emits the applicable `S21` and
+other matrix entries without changing the workflow.
 
 ## 3. Run a one-shot fixed-pump signal spectrum
 

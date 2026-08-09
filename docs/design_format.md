@@ -122,5 +122,7 @@ python workflows/run_gain_map_and_plots.py --fast `
   --dc-branch-flux-over-phi0 0.33 --attenuation-db 0
 ```
 
-The default remains the legacy 4WM path: `--mixing-order 3` is the explicit
-adapter that selects dense pump harmonics and the one-pump-frequency idler.
+The default is now `--mixing-order auto`: an external DC current/flux selects
+3WM, while an unbiased circuit selects 4WM. Explicit `--mixing-order 3` or
+`4` remains available. Port flags are also optional; the workflow derives the
+standard roles from the ports present in the resolved circuit.
