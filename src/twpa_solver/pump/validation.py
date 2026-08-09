@@ -43,6 +43,7 @@ def validate_production_hb_state(
     nt: int,
     residual_threshold: float = 1e-8,
     metadata: dict[str, Any] | None = None,
+    dc_branch_flux: np.ndarray | None = None,
 ) -> dict[str, Any]:
     """Validate a state using the actual production pump residual.
 
@@ -51,8 +52,8 @@ def validate_production_hb_state(
     """
     modes = np.asarray(modes, dtype=int).reshape(-1)
     state = np.asarray(state, dtype=np.complex128)
-    if modes.size == 0 or np.any(modes <= 0) or np.unique(modes).size != modes.size:
-        raise ValueError("invalid positive harmonic metadata")
+    if modes.size == 0 or np.any(modes < 0) or np.unique(modes).size != modes.size:
+        raise ValueError("invalid non-negative harmonic metadata")
     expected_shape = (modes.size, circuit.node_count)
     shape_ok = state.shape == expected_shape
     finite_ok = bool(np.all(np.isfinite(state)))
@@ -83,6 +84,7 @@ def validate_production_hb_state(
     problem = FullPumpProblem(
         circuit.C, circuit.G, circuit.K, circuit.Bphi, branch, grid,
         circuit.port_to_index[int(pump_port)], float(pump_current_a),
+        dc_branch_flux=dc_branch_flux,
         loss_model=default_loss_model_for(circuit),
     )
     norms = problem.norms(state, 1.0, True)

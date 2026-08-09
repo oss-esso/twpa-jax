@@ -26,6 +26,7 @@ import numpy as np
 import scipy.sparse as sp
 import scipy.sparse.linalg as spla
 from scipy.integrate import solve_ivp
+from scipy.optimize import brentq
 
 ROOT = Path(__file__).resolve().parents[1]
 import sys
@@ -60,6 +61,28 @@ class TransientAudit:
     hb_convention: str
 
 
+@dataclass(frozen=True)
+class ShiftedBranchLaw:
+    """Branch current about a fixed DC flux, matching production HB."""
+
+    base: Any
+    dc_flux: np.ndarray
+
+    def current(self, flux: np.ndarray) -> np.ndarray:
+        dc = self.dc_flux[None, :]
+        return self.base.current(flux + dc) - self.base.current(dc)
+
+    def tangent(self, flux: np.ndarray) -> np.ndarray:
+        return self.base.tangent(flux + self.dc_flux[None, :])
+
+    def gamma(self, flux: np.ndarray) -> np.ndarray:
+        return self.tangent(flux)
+
+    @property
+    def metadata(self) -> dict[str, Any]:
+        return {"type": "dc_shifted", "base": self.base.metadata}
+
+
 @dataclass
 class TransientSystem:
     circuit: Any
@@ -70,6 +93,7 @@ class TransientSystem:
     algebraic: np.ndarray
     c_factor: Any
     g_alg_factor: Any
+    full_state: bool = False
     phi0: float = PHI0_REDUCED
 
     def __post_init__(self) -> None:
@@ -89,9 +113,13 @@ class TransientSystem:
         return self.circuit.node_count
 
     def pack(self, q: np.ndarray, p: np.ndarray) -> np.ndarray:
+        if self.full_state:
+            return np.concatenate((q, p))
         return np.concatenate((q[self.differential], p[self.differential], q[self.algebraic]))
 
     def unpack(self, y: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        if self.full_state:
+            return np.asarray(y[:self.n]), np.asarray(y[self.n:2 * self.n])
         nd = self.differential.size
         q = np.zeros(self.n, dtype=float)
         p = np.zeros(self.n, dtype=float)
@@ -101,6 +129,17 @@ class TransientSystem:
         return q, p
 
     def algebraic_velocity(self, q: np.ndarray, p_d: np.ndarray, source: np.ndarray) -> np.ndarray:
+        if self.g_alg_factor is None:
+            flux = self.phi0 * (self.circuit.Bphi.T @ q)
+            tangent = np.asarray(self.branch.tangent(flux[None, :]))[0]
+            constraint_jac = self.circuit.K[self.algebraic] + (
+                self._b_a @ sp.diags(tangent) @ self.circuit.Bphi.T
+            )
+            aa = constraint_jac[:, self.algebraic].tocsc()
+            ad = constraint_jac[:, self.differential]
+            rhs = self.source_derivative(0.0, source)[self.algebraic] / self.phi0
+            rhs = rhs - ad @ p_d
+            return np.asarray(spla.spsolve(aa, rhs), dtype=float)
         flux = self.phi0 * (self.circuit.Bphi.T @ q)
         currents = np.asarray(self.branch.current(flux[None, :]))[0]
         rhs = source[self.algebraic] - self._g_ad @ (self.omega * self.phi0 * p_d)
@@ -108,6 +147,38 @@ class TransientSystem:
         return np.asarray(self.g_alg_factor.solve(np.asarray(rhs).reshape(-1)), dtype=float) / (
             self.omega * self.phi0
         )
+
+    def source_derivative(self, theta: float, source: np.ndarray) -> np.ndarray:
+        """Derivative of the source with respect to pump phase."""
+        # The source vector already contains the instantaneous amplitude.  The
+        # only nonzero source is the pump entry; use the current ramp policy's
+        # derivative supplied by the caller where needed.  For the lossless
+        # rf-SQUID algebraic rows this is identically zero, so returning zero
+        # is exact for the relevant constraint block.
+        return np.zeros_like(source)
+
+    def project_algebraic_state(self, q: np.ndarray, p: np.ndarray, source: np.ndarray) -> None:
+        """Project q onto static algebraic constraints and recover p_a.
+
+        This is used only when G_aa is singular.  It solves the actual
+        nonlinear constraint Jacobian K_aa + B_a diag(I') B_a^T and does not
+        insert conductance or capacitance.
+        """
+        if not self.algebraic.size:
+            return
+        for _ in range(4):
+            flux = self.phi0 * (self.circuit.Bphi.T @ q)
+            currents = np.asarray(self.branch.current(flux[None, :]))[0]
+            residual = self._k_a @ (self.phi0 * q) + self._b_a @ currents - source[self.algebraic]
+            if float(np.linalg.norm(residual)) < 1e-12:
+                break
+            tangent = np.asarray(self.branch.tangent(flux[None, :]))[0]
+            jac = self.circuit.K[self.algebraic] + (
+                self._b_a @ sp.diags(tangent) @ self.circuit.Bphi.T
+            )
+            delta = spla.spsolve(jac[:, self.algebraic].tocsc(), -residual / self.phi0)
+            q[self.algebraic] += delta
+        p[self.algebraic] = self.algebraic_velocity(q, p[self.differential], source)
 
     def rhs(self, theta: float, y: np.ndarray, start_current: float, target_current: float, ramp_theta: float) -> np.ndarray:
         q, p = self.unpack(y)
@@ -209,24 +280,72 @@ def audit_circuit(circuit_dir: Path) -> TransientAudit:
     )
 
 
-def build_system(circuit_dir: Path, freq_ghz: float, pump_port: int) -> TransientSystem:
+def build_system(
+    circuit_dir: Path, freq_ghz: float, pump_port: int,
+    dc_branch_flux: np.ndarray | None = None,
+) -> TransientSystem:
     circuit = load_circuit(circuit_dir)
     algebraic = np.flatnonzero(np.diff(circuit.C.indptr) == 0)
     differential = np.setdiff1d(np.arange(circuit.node_count), algebraic)
     c_factor = spla.splu(circuit.C[differential][:, differential].tocsc())
+    g_alg_factor = None
+    full_state = False
     if algebraic.size:
-        g_alg_factor = spla.splu(circuit.G[algebraic][:, algebraic].tocsc())
-    else:
-        g_alg_factor = None
+        try:
+            g_alg_factor = spla.splu(circuit.G[algebraic][:, algebraic].tocsc())
+        except RuntimeError:
+            # Use the exact index-one reduction below: p_a is recovered from
+            # the differentiated nonlinear algebraic constraint for explicit
+            # backends.  The validated trapezoid path retains the full
+            # (q,p) Newton system and projects the lossless constraints after
+            # each endpoint; no Gmin or artificial circuit element is used.
+            full_state = True
+    base_branch = make_branch_law(circuit)
+    dc = (np.zeros(circuit.branch_count, dtype=float)
+          if dc_branch_flux is None else np.asarray(dc_branch_flux, dtype=float).reshape(-1))
+    if dc.size != circuit.branch_count:
+        raise ValueError("dc_branch_flux must match the branch count")
+    branch = ShiftedBranchLaw(base_branch, dc) if np.any(dc) else base_branch
     return TransientSystem(
-        circuit=circuit, branch=make_branch_law(circuit),
+        circuit=circuit, branch=branch,
         omega=2.0 * math.pi * freq_ghz * 1e9,
         pump_node=circuit.port_to_index[pump_port], differential=differential,
         algebraic=algebraic, c_factor=c_factor, g_alg_factor=g_alg_factor,
+        full_state=full_state,
     )
 
 
-def load_hb_initial(checkpoint: Path, circuit: Any, omega: float) -> tuple[np.ndarray, np.ndarray, float, dict[str, Any]]:
+def dc_flux_from_external_fraction(circuit_dir: Path, fraction: float, phi0: float) -> np.ndarray:
+    """Convert external flux fraction to the rf-SQUID DC branch flux.
+
+    Compiled design metadata supplies Lm and Ic.  For generic circuits, a
+    direct reduced phase is retained as the backward-compatible fallback.
+    """
+    if fraction == 0.0:
+        circuit = load_circuit(circuit_dir)
+        return np.zeros(circuit.branch_count, dtype=float)
+    params_path = circuit_dir / "design_resolved.json"
+    if params_path.exists():
+        params = json.loads(params_path.read_text(encoding="utf-8")).get("parameters", {})
+        if "Ic" in params and "Lm" in params:
+            beta_l = float(params["Lm"]) * float(params["Ic"]) / phi0
+            external_phase = 2.0 * math.pi * fraction
+            phase = brentq(
+                lambda value: value - external_phase + beta_l * math.sin(value),
+                external_phase - beta_l - 0.5,
+                external_phase + beta_l + 0.5,
+            )
+            circuit = load_circuit(circuit_dir)
+            return np.full(circuit.branch_count, phase * phi0, dtype=float)
+    circuit = load_circuit(circuit_dir)
+    return np.full(circuit.branch_count, fraction * 2.0 * math.pi * phi0, dtype=float)
+
+
+def load_hb_initial(
+    checkpoint: Path,
+    circuit: Any,
+    omega: float,
+) -> tuple[np.ndarray, np.ndarray, float, dict[str, Any]]:
     report = json.loads((checkpoint / "pump_report.json").read_text(encoding="utf-8"))
     if report.get("final_status") != "VALID_CONVERGED":
         raise ValueError(f"checkpoint is not converged: {checkpoint}")
@@ -238,6 +357,40 @@ def load_hb_initial(checkpoint: Path, circuit: Any, omega: float) -> tuple[np.nd
     w = grid.synthesize_derivative(X, 1) / omega
     current = float(report["metadata"]["pump_current_a"])
     return x[0], w[0], current, report
+
+
+def checkpoint_dc_flux(
+    report: dict[str, Any],
+    circuit: Any,
+    fallback: np.ndarray | None = None,
+    checkpoint: Path | None = None,
+) -> np.ndarray:
+    """Return the exact DC branch-flux vector used by the saved HB fixture.
+
+    Production HB checkpoints are authoritative.  Re-solving a nominal external
+    flux fraction here can select a different convention/operating point and
+    invalidate an otherwise correct HB state at the TD handoff.
+    """
+    metadata = report.get("metadata", {})
+    value = metadata.get("dc_branch_flux")
+    if value is None:
+        value = metadata.get("dc_branch_flux_wb")
+    if value is None and checkpoint is not None:
+        sidecar = checkpoint / "hybrid_fixture_config.json"
+        if sidecar.exists():
+            value = json.loads(sidecar.read_text(encoding="utf-8")).get(
+                "dc_branch_flux"
+            )
+    if value is None:
+        if fallback is None:
+            return np.zeros(circuit.branch_count, dtype=float)
+        value = fallback
+    array = np.asarray(value, dtype=float).reshape(-1)
+    if array.size == 1:
+        return np.full(circuit.branch_count, float(array[0]), dtype=float)
+    if array.size != circuit.branch_count:
+        raise ValueError("checkpoint DC flux has incompatible branch count")
+    return array
 
 
 def make_observables(system: TransientSystem, theta: np.ndarray, states: np.ndarray) -> dict[str, np.ndarray]:
@@ -468,9 +621,13 @@ def implicit_trapezoid_ramp(
 ) -> tuple[np.ndarray, np.ndarray, dict[str, Any]]:
     """Integrate the full index-one DAE with sparse implicit trapezoid steps."""
     q, p = system.unpack(y0)
-    if system.algebraic.size:
+    if system.algebraic.size and not system.full_state:
         p[system.algebraic] = system.algebraic_velocity(
             q, p[system.differential], system.source(0.0, start_current, target_current, ramp_theta)
+        )
+    elif system.full_state:
+        system.project_algebraic_state(
+            q, p, system.source(0.0, start_current, target_current, ramp_theta)
         )
     n = system.n
     theta_values = [initial_theta]
@@ -525,6 +682,8 @@ def implicit_trapezoid_ramp(
                 "steps": len(theta_values) - 1, "newton_iterations": newton_total,
             }
         q, p = q_trial, p_trial
+        if system.full_state:
+            system.project_algebraic_state(q, p, system.source(theta + h, start_current, target_current, ramp_theta))
         theta += h
         theta_values.append(theta)
         state_values.append(system.pack(q, p))
@@ -577,19 +736,53 @@ def plot_results(outdir: Path, data: dict[str, np.ndarray], spectrum: dict[str, 
 def run_experiment(args: argparse.Namespace) -> dict[str, Any]:
     outdir = args.outdir; outdir.mkdir(parents=True, exist_ok=True)
     audit = audit_circuit(args.circuit_dir)
-    if not audit.c_factorable or not audit.algebraic_g_factorable:
+    if not audit.c_factorable:
         raise RuntimeError(f"DAE audit failed: {audit}")
-    system = build_system(args.circuit_dir, args.freq_ghz, args.pump_port)
-    X0, w0, start_current, hb_report = load_hb_initial(args.checkpoint, system.circuit, system.omega)
+    # Load the production checkpoint before constructing the TD fixture.  Its
+    # persisted DC branch vector is part of the physical problem definition and
+    # must take precedence over a nominal CLI flux fraction.
+    checkpoint_circuit = load_circuit(args.circuit_dir)
+    checkpoint_report = json.loads(
+        (args.checkpoint / "pump_report.json").read_text(encoding="utf-8")
+    )
+    fixture_config: dict[str, Any] = {}
+    fixture_config_path = args.checkpoint / "hybrid_fixture_config.json"
+    if fixture_config_path.exists():
+        fixture_config = json.loads(fixture_config_path.read_text(encoding="utf-8"))
+    fallback_dc = dc_flux_from_external_fraction(
+        args.circuit_dir, float(getattr(args, "dc_flux_over_phi0", 0.0)), PHI0_REDUCED
+    )
+    dc_flux = checkpoint_dc_flux(
+        checkpoint_report, checkpoint_circuit, fallback_dc, args.checkpoint
+    )
+    checkpoint_pump_port = checkpoint_report.get("metadata", {}).get("pump_port")
+    if checkpoint_pump_port is None:
+        checkpoint_pump_port = fixture_config.get("pump_port")
+    if checkpoint_pump_port is not None and int(checkpoint_pump_port) != int(args.pump_port):
+        raise ValueError(
+            f"checkpoint pump_port={checkpoint_pump_port} differs from TD pump_port={args.pump_port}"
+        )
+    system = build_system(args.circuit_dir, args.freq_ghz, args.pump_port, dc_flux)
+    if system.full_state and args.method != "implicit_trapezoid":
+        raise RuntimeError(
+            "RF-SQUID lossless algebraic constraints require implicit_trapezoid"
+        )
+    X0, w0, start_current, hb_report = load_hb_initial(
+        args.checkpoint, system.circuit, system.omega
+    )
     checkpoint_data = np.load(args.checkpoint / "pump_solution.npz")
     checkpoint_X = np.asarray(checkpoint_data["X_real"], dtype=float) + 1j * np.asarray(checkpoint_data["X_imag"], dtype=float)
-    checkpoint_modes = np.asarray(hb_report["metadata"].get("pump_modes", checkpoint_data["pump_modes"]), dtype=int)
+    checkpoint_modes = np.asarray(
+        hb_report["metadata"].get("pump_modes", checkpoint_data["pump_modes"]), dtype=int
+    )
+    checkpoint_dc = checkpoint_dc_flux(hb_report, system.circuit, dc_flux)
     validation = validate_production_hb_state(
-        system.circuit, system.branch, frequency_hz=args.freq_ghz * 1e9,
+        system.circuit, make_branch_law(system.circuit), frequency_hz=args.freq_ghz * 1e9,
         pump_port=args.pump_port, pump_current_a=start_current,
         modes=checkpoint_modes, state=checkpoint_X,
         nt=max(2 * int(checkpoint_modes.max()) + 1, 40),
         metadata=hb_report.get("metadata", {}),
+        dc_branch_flux=checkpoint_dc,
     )
     if not validation["checkpoint_validated"]:
         result = {
@@ -611,6 +804,10 @@ def run_experiment(args: argparse.Namespace) -> dict[str, Any]:
         start_current = float(restart_data["target_current"])
     else:
         q0 = X0 / system.phi0; p0 = w0 / system.phi0
+        if system.g_alg_factor is None:
+            system.project_algebraic_state(
+                q0, p0, system.source(0.0, start_current, args.target_current_a, 0.0)
+            )
         y0 = system.pack(q0, p0)
     ramp_theta = 2.0 * math.pi * args.ramp_periods
     total_theta = 2.0 * math.pi * (args.ramp_periods + args.hold_periods)
@@ -728,8 +925,8 @@ def run_experiment(args: argparse.Namespace) -> dict[str, Any]:
     )
     checkpoint_problem = FullPumpProblem(
         system.circuit.C, system.circuit.G, system.circuit.K,
-        system.circuit.Bphi, system.branch, checkpoint_grid,
-        system.pump_node, start_current,
+        system.circuit.Bphi, make_branch_law(system.circuit), checkpoint_grid,
+        system.pump_node, start_current, dc_branch_flux=dc_flux,
     )
     result = {
         "audit": audit.__dict__, "checkpoint": str(args.checkpoint),
@@ -757,6 +954,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--outdir", type=Path, default=ROOT / "outputs" / "h1_79")
     parser.add_argument("--freq-ghz", type=float, default=7.9)
     parser.add_argument("--pump-port", type=int, default=4)
+    parser.add_argument("--dc-flux-over-phi0", type=float, default=0.0)
     parser.add_argument("--target-current-a", type=float, default=1.6e-5)
     parser.add_argument("--ramp-periods", type=int, default=40)
     parser.add_argument("--hold-periods", type=int, default=40)

@@ -61,6 +61,7 @@ from typing import Any
 
 import numpy as np
 import scipy.sparse as sp
+from scipy.optimize import brentq
 
 logger = logging.getLogger(__name__)
 
@@ -118,6 +119,41 @@ def dbm_to_peak_current_a(
         source_dbm, power_w, current_a,
     )
     return current_a
+
+
+def rf_squid_dc_branch_flux_from_external_fraction(
+    circuit_dir: Path, circuit: Any, fraction: float,
+) -> np.ndarray:
+    """Return the self-consistent RF-SQUID DC phase offset.
+
+    For a loop with finite ``Lm``, the external reduced flux is not the JJ
+    phase.  The nonlinear branch offset must satisfy
+
+        phi_dc = phi_ext - beta_L sin(phi_dc).
+
+    Circuits without RF-SQUID parameters retain the historical direct-flux
+    behavior.
+    """
+    external_phase = float(fraction) * 2.0 * math.pi
+    resolved = Path(circuit_dir) / "design_resolved.json"
+    if resolved.exists():
+        try:
+            parameters = json.loads(resolved.read_text(encoding="utf-8")).get(
+                "parameters", {}
+            )
+        except (OSError, json.JSONDecodeError):
+            parameters = {}
+        if "Lm" in parameters and "Ic" in parameters:
+            beta_l = float(parameters["Lm"]) * float(parameters["Ic"]) / float(circuit.phi0)
+            phi_dc = brentq(
+                lambda phase: phase - external_phase + beta_l * math.sin(phase),
+                external_phase - beta_l - 0.5,
+                external_phase + beta_l + 0.5,
+            )
+            return np.full(circuit.branch_count, phi_dc * circuit.phi0, dtype=float)
+    return np.full(
+        circuit.branch_count, external_phase * circuit.phi0, dtype=float
+    )
 
 
 def peak_current_to_power_dbm(current_a: float, freq_ghz: float, args: argparse.Namespace) -> float:
@@ -666,6 +702,11 @@ class InProcessEngine:
             self.dc_branch_flux = kinetic_dc_branch_flux(
                 self.ipm08, getattr(args, "dc_current_a", 0.0)
             )
+        flux_fraction = getattr(args, "dc_branch_flux_over_phi0", None)
+        if flux_fraction is not None:
+            self.dc_branch_flux = rf_squid_dc_branch_flux_from_external_fraction(
+                args.circuit_dir, self.ipm08, float(flux_fraction)
+            )
         if self.dc_branch_flux is None:
             self.dc_branch_flux = np.zeros(self.ipm08.branch_count, dtype=float)
         self.pump_idx = self.ipm08.port_to_index[args.pump_port]
@@ -730,7 +771,9 @@ class InProcessEngine:
         )
         omega = 2.0 * math.pi * freq_ghz * 1e9
         basis = pump_basis.resolve_pump_basis(
-            policy=self.args.pump_mode_policy, omega_p=omega,
+            policy=("dense_real" if self.args.mixing_order == 3
+                     and self.args.pump_mode_policy == "positive_odd_jc"
+                     else self.args.pump_mode_policy), omega_p=omega,
             harmonics=self.args.harmonics, mode_count=self.args.pump_mode_count,
             explicit_modes=None, design_meta=self.ipm08.summary,
         )
@@ -1494,7 +1537,8 @@ class InProcessEngine:
         common = dict(
             circuit=self.ipm09, khat=khat, khat_off_0=khat_off_0,
             khat_big_base=khat_big_base, omega_p=omega_p, signal_ghz=signal_ghz,
-            sidebands=a.sidebands, signal_m=0, idler_m=-2,
+            sidebands=a.sidebands, signal_m=0,
+            idler_m=-(a.mixing_order - 1),
             source_index=self.source_idx, out_index=self.out_idx,
             source_current_a=1.0, source_port=a.source_port, out_port=a.out_port,
             z0_ohm=a.z0_ohm, loss_model=a.loss_model,
@@ -3017,6 +3061,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Optional dc_solution.npz (or directory) providing psi_dc/x_dc; overrides --dc-current-a.",
     )
     p.add_argument(
+        "--dc-branch-flux-over-phi0", type=float, default=None,
+        help="Uniform reduced external flux for every nonlinear branch, e.g. 0.33 "
+             "for the RF-SQUID 3WM validation design.",
+    )
+    p.add_argument(
         "--signal-attenuation-db", type=float, default=None,
         help="Flat signal-line attenuation for signal-spectrum referral; defaults to loss_B1.",
     )
@@ -3073,6 +3122,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--out-port", type=int, default=2)
     # JTWPA (unbiased 4WM) pump basis: JC odd modes [1,3,...,2K-1], K=10 -> nt>=40.
     p.add_argument("--pump-mode-policy", default="positive_odd_jc")
+    p.add_argument(
+        "--mixing-order", type=int, choices=(3, 4), default=4,
+        help="Parametric mixing order. 3 selects dense pump harmonics and "
+             "idler_m=-1; 4 preserves the legacy idler_m=-2 path.",
+    )
     p.add_argument("--pump-mode-count", type=int, default=10,
                    help="K for positive_odd_jc -> modes [1,3,...,2K-1]. Set with the basis policy.")
     p.add_argument("--harmonics", type=int, default=3,

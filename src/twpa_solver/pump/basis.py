@@ -1,6 +1,6 @@
 """Pump-mode basis policies shared by pump solving and gain analysis.
 
-A "pump basis" is the explicit list of positive integer pump-harmonic indices
+    A "pump basis" is the explicit list of non-negative integer pump-harmonic indices
 used to represent the physical real pump waveform via the JosephsonCircuits.jl
 (JC) convention:
 
@@ -67,8 +67,8 @@ class PumpBasis:
         self.modes = [int(m) for m in self.modes]
         if len(self.modes) == 0:
             raise ValueError("pump basis needs at least one mode")
-        if any(m < 1 for m in self.modes):
-            raise ValueError(f"all pump modes must be >= 1, got {self.modes}")
+        if any(m < 0 for m in self.modes):
+            raise ValueError(f"all pump modes must be >= 0, got {self.modes}")
         if len(set(self.modes)) != len(self.modes):
             raise ValueError(f"duplicate pump modes: {self.modes}")
         self.modes = sorted(self.modes)
@@ -310,7 +310,7 @@ def load_pump_basis_from_solution(
 
     omega_p = float(metadata.get("omega_p", fallback_omega_p or 0.0))
     policy = str(metadata.get("pump_mode_policy", "dense_real"))
-    source_mode = int(metadata.get("pump_source_mode", min(modes)))
+    source_mode = int(metadata.get("pump_source_mode", 1 if 1 in modes else min(modes)))
 
     basis = PumpBasis(
         modes=modes,

@@ -15,12 +15,13 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class HarmonicGrid:
-    """Time/frequency grid for an arbitrary positive pump-mode list.
+    """Time/frequency grid for an arbitrary non-negative pump-mode list.
 
-    `modes` is the list of positive integer pump-harmonic indices. The legacy
+    `modes` is the list of non-negative integer pump-harmonic indices. A zero
+    mode is a genuine dynamic DC unknown; positive modes use the legacy
     dense behavior corresponds to modes = [1, 2, ..., H]; the JC odd basis is
     modes = [1, 3, 5, ..., 2K-1]. Synthesis uses the positive-phasor real
-    reconstruction x(t) = 2 Re sum_k X_k exp(+i k omega t).
+    reconstruction x(t) = X_0 + 2 Re sum_{k>0} X_k exp(+i k omega t).
     """
 
     modes: np.ndarray
@@ -32,6 +33,8 @@ class HarmonicGrid:
         self.harmonics = int(self.k.size)
         if self.harmonics < 1:
             raise ValueError("pump basis must have >= 1 mode")
+        if np.any(self.k < 0):
+            raise ValueError("pump modes must be non-negative")
         max_mode = int(self.k.max())
         if self.nt < 2 * max_mode + 1:
             raise ValueError("--nt must be >= 2*max(mode)+1")
@@ -42,6 +45,7 @@ class HarmonicGrid:
         self.t = np.arange(self.nt, dtype=float) * self.period / self.nt
 
         self.E = np.exp(1j * self.omega * self.t[:, None] * self.k[None, :])
+        self._synthesis_weights = np.where(self.k == 0.0, 1.0, 2.0)
         self.E_conj_T_over_nt = self.E.conj().T / self.nt
 
         logger.debug(
@@ -51,7 +55,7 @@ class HarmonicGrid:
 
     def synthesize(self, X: np.ndarray) -> np.ndarray:
         logger.debug("grid_synthesize X_shape=%s", X.shape)
-        return 2.0 * np.real(self.E @ X)
+        return np.real(self.E @ (self._synthesis_weights[:, None] * X))
 
     def synthesize_derivative(self, X: np.ndarray, order: int) -> np.ndarray:
         if order == 0:
