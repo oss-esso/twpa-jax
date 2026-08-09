@@ -98,9 +98,22 @@ def _load_pump_and_khat(circuit, pump_dir: Path, fallback_freq_ghz: float, sideb
     pump = exp09.load_pump(pump_dir, fallback_pump_freq_ghz=fallback_freq_ghz)
     ms = exp09.sideband_list(sidebands)
     max_ell = max(abs(m - q) for m in ms for q in ms)
+    dc_value = pump.metadata.get("dc_branch_flux")
+    if dc_value is None:
+        dc_value = pump.metadata.get("dc_branch_flux_wb")
+    if dc_value is None:
+        dc_branch_flux = None
+    else:
+        dc_branch_flux = np.asarray(dc_value, dtype=float).reshape(-1)
+        if dc_branch_flux.size == 1:
+            dc_branch_flux = np.full(circuit.branch_count, float(dc_branch_flux[0]))
+        if dc_branch_flux.size != circuit.branch_count:
+            raise ValueError(
+                "pump report DC flux length does not match the circuit branch count"
+            )
     gamma_hat = exp09.compute_gamma_hat(
         circuit=circuit, pump=pump, max_ell=max_ell, gamma_nt=gamma_nt,
-        dc_branch_flux=None,
+        dc_branch_flux=dc_branch_flux,
     )
     khat = exp09.build_khat(Bphi=circuit.Bphi, gamma_hat=gamma_hat, drop_tol=0.0)
     return pump, ms, khat
