@@ -22,6 +22,7 @@ from twpa_solver.signal.gamma import build_khat, compute_gamma_hat
 from twpa_solver.signal.gain import GainResult
 from twpa_solver.signal.floquet import solve_gain_one
 from twpa_solver.signal.io import PumpSolution
+from twpa_solver.port_roles import resolve_mixing_order, resolve_port_roles
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -45,6 +46,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--environment", choices=("ideal", "paper_standing_wave"), default="ideal",
         help="Use the ideal 50-ohm termination or the quoted paper standing-wave environment.",
     )
+    parser.add_argument("--pump-port", type=int, default=None)
+    parser.add_argument("--source-port", type=int, default=None)
+    parser.add_argument("--out-port", type=int, default=None)
+    parser.add_argument(
+        "--mixing-order", choices=("auto", "3", "4"), default="auto",
+        help="auto selects 3WM when dc-current-a is non-zero; explicit 3/4 override it.",
+    )
     parser.add_argument("--no-waveforms", action="store_true", help="Do not save pump/current waveform arrays.")
     parser.add_argument("--no-solve", action="store_true", help="Only validate CLI/configuration and write metadata.")
     return parser
@@ -61,6 +69,19 @@ def _settings() -> NewtonKrylovSettings:
 
 def run(args: argparse.Namespace) -> dict[str, object]:
     circuit = build_kimpa(args.fixture)
+    roles = resolve_port_roles(
+        circuit,
+        pump_port=getattr(args, "pump_port", None),
+        source_port=getattr(args, "source_port", None),
+        out_port=getattr(args, "out_port", None),
+    )
+    for role, port in roles.items():
+        setattr(args, role, port)
+    mixing_order = resolve_mixing_order(
+        getattr(args, "mixing_order", "auto"),
+        dc_current_a=args.dc_current_a,
+        design_meta=circuit.metadata,
+    )
     if args.dc_current_a != 0.0 and args.pump_mode_policy == "positive_odd_jc":
         raise ValueError("odd-only pump modes are invalid with non-zero KI DC bias; use --pump-mode-policy dense_real")
     omega_p = 2.0 * math.pi * args.pump_ghz * 1e9
@@ -86,7 +107,9 @@ def run(args: argparse.Namespace) -> dict[str, object]:
         "Istar4_a": circuit.metadata.get("Istar4_a"),
         "dc_branch_flux": dc_flux.tolist(), "pump_modes": basis.modes,
         "norton_power_note": "I^2 Z/2 is 6.0206 dB above Norton available power I^2 Z/8.",
-        "environment": args.environment,
+        "environment": args.environment, "mixing_order": mixing_order,
+        "pump_port": args.pump_port, "source_port": args.source_port,
+        "out_port": args.out_port,
     }
     if args.no_solve:
         return output
@@ -96,7 +119,7 @@ def run(args: argparse.Namespace) -> dict[str, object]:
         C=circuit.C, G=circuit.G, K=circuit.K, Bphi=circuit.Bphi,
         branch=make_branch_law(circuit),
         grid=HarmonicGrid(np.asarray(basis.modes), nt=args.pump_nt, omega=omega_p),
-        pump_node_index=circuit.port_to_index[1], pump_current_a=pump_current,
+        pump_node_index=circuit.port_to_index[args.pump_port], pump_current_a=pump_current,
         dc_branch_flux=dc_flux,
     )
     state, reports = HarmonicNewtonKrylovSolver(_settings()).solve_continuation(problem, continuation_steps=4)
@@ -109,6 +132,9 @@ def run(args: argparse.Namespace) -> dict[str, object]:
     psi = problem.branch_flux_time(state)
     total_current = problem.branch.current(psi + dc_flux[None, :])
     ratio = np.max(np.abs(total_current), axis=0) / circuit.Ic
+    signal_s_value = port_s_from_unit_current_response(
+        gain.vout_on, source_port=args.source_port, out_port=args.out_port, z0_ohm=50.0
+    )
     output.update({
         "pump_converged": final.converged, "pump_coeff_rel": final.coeff_rel,
         "max_current_over_ic": float(np.max(ratio)),
@@ -121,17 +147,23 @@ def run(args: argparse.Namespace) -> dict[str, object]:
     khat_off = (circuit.Bphi @ sp.diags(gamma_off) @ circuit.Bphi.T).astype(np.complex128).tocsr()
     gain: GainResult = solve_gain_one(
         circuit, khat, khat_off, omega_p, args.signal_ghz, args.sidebands,
-        signal_m=0, idler_m=-1, source_index=circuit.port_to_index[1],
-        out_index=circuit.port_to_index[1], source_current_a=1.0,
-        source_port=1, out_port=1, z0_ohm=50.0,
+        signal_m=0, idler_m=-(mixing_order - 1),
+        source_index=circuit.port_to_index[args.source_port],
+        out_index=circuit.port_to_index[args.out_port], source_current_a=1.0,
+        source_port=args.source_port, out_port=args.out_port, z0_ohm=50.0,
         environment=environment,
     )
     output.update({
         "gain_status": gain.status, "gain_db": gain.gain_db,
         "gain_vs_off_db": gain.gain_vs_off_db,
-        "s11_real": float(np.real(port_s_from_unit_current_response(gain.vout_on, source_port=1, out_port=1, z0_ohm=50.0))),
-        "s11_imag": float(np.imag(port_s_from_unit_current_response(gain.vout_on, source_port=1, out_port=1, z0_ohm=50.0))),
-        "s11_phase_deg": float(np.angle(port_s_from_unit_current_response(gain.vout_on, source_port=1, out_port=1, z0_ohm=50.0), deg=True)),
+        # Keep the legacy s11 keys for one-port consumers, and expose a
+        # role-neutral value for two- and four-port consumers.
+        "s11_real": float(np.real(signal_s_value)),
+        "s11_imag": float(np.imag(signal_s_value)),
+        "s11_phase_deg": float(np.angle(signal_s_value, deg=True)),
+        "s_primary_real": float(np.real(signal_s_value)),
+        "s_primary_imag": float(np.imag(signal_s_value)),
+        "s_primary_db": float(20.0 * np.log10(max(abs(signal_s_value), 1e-300))),
         "idler_ghz": float(args.pump_ghz - args.signal_ghz),
         "idler_m": gain.idler_m,
         "idler_power_rel_to_signal_off_db": gain.idler_power_rel_to_signal_off_db,
