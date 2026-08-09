@@ -1,0 +1,54 @@
+schema_version: 1
+name: ipm_3c
+ground: 0
+parameters:
+  Lj: 1.239e-10
+  Cj: 1.45e-13
+  Cg: 6.6e-14
+  Ll: 4.24e-12
+  Cl: 1.695e-15
+  array_length: 418
+  num_rows: 6
+  arrays_per_dc: 2
+  short_tl: 90
+  long_tl: 900
+  coupler_section: 800
+  cached_coupler_width_um: 39.897
+  cached_coupler_gap_um: 44.762
+  cached_coupler_gap_to_ground_um: 10.5973385055
+  cached_coupler_length_um: 3787.7
+cursors:
+  signal: 1
+  pump: 10000
+topology:
+  - {type: port, name: in_signal, cursor: signal, port: 1}
+  - {type: resistor, name: r_in, cursor: signal, value: 50.0}
+  - {type: port, name: in_pump, cursor: pump, port: 3}
+  - {type: resistor, name: rm_in, cursor: pump, value: 50.0}
+  - {type: directional_coupler, name: coupler_in, cursors: [signal, pump]}
+  - repeat:
+      count: 2
+      name: period
+      topology:
+        - repeat:
+            count: 1
+            name: row
+            topology:
+              - {type: jj_line, name: array, cursor: signal, cells: ${array_length}, Lj: ${Lj}, Cj: ${Cj}, Cg: ${Cg}}
+              - {type: transmission_line, name: link, cursor: signal, cells: ${short_tl}, L: ${Ll}, C: ${Cl}}
+        - {type: jj_line, name: array, cursor: signal, cells: ${array_length}, Lj: ${Lj}, Cj: ${Cj}, Cg: ${Cg}}
+        - {type: transmission_line, name: long, cursor: signal, cells: ${long_tl}, L: ${Ll}, C: ${Cl}}
+        - {type: transmission_line, name: section, cursor: pump, cells: ${coupler_section}, L: ${Ll}, C: ${Cl}}
+        - {type: directional_coupler, name: coupler, cursors: [signal, pump]}
+  - repeat:
+      count: 1
+      name: tail_row
+      topology:
+        - {type: jj_line, name: array, cursor: signal, cells: ${array_length}, Lj: ${Lj}, Cj: ${Cj}, Cg: ${Cg}}
+        - {type: transmission_line, name: link, cursor: signal, cells: ${short_tl}, L: ${Ll}, C: ${Cl}}
+  - {type: jj_line, name: final_array, cursor: signal, cells: ${array_length}, Lj: ${Lj}, Cj: ${Cj}, Cg: ${Cg}}
+  - {type: transmission_line, name: out_signal_tl, cursor: signal, cells: 50, L: ${Ll}, C: ${Cl}}
+  - {type: resistor, name: r_out, cursor: signal, value: 50.0}
+  - {type: port, name: out_signal, cursor: signal, port: 2}
+  - {type: resistor, name: rm_out, cursor: pump, value: 50.0}
+  - {type: port, name: out_pump, cursor: pump, port: 4}

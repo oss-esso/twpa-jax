@@ -8,6 +8,8 @@ from pathlib import Path
 import numpy as np
 
 from twpa_solver.builders import ipm
+from twpa_solver.core.circuit import load_circuit
+from twpa_solver.design.__main__ import main as compile_design_main
 from twpa_solver.signal.passive import db20, passive_s_matrix
 
 
@@ -16,7 +18,8 @@ def _parser() -> argparse.ArgumentParser:
         description=__doc__,
         epilog="All unrecognised options are forwarded to the IPM builder.",
     )
-    parser.add_argument("--design-dir", type=Path, required=True)
+    parser.add_argument("--design-dir", type=Path)
+    parser.add_argument("--design", type=Path, help="Declarative YAML design input")
     parser.add_argument("--passive-start-ghz", type=float, default=4.0)
     parser.add_argument("--passive-stop-ghz", type=float, default=11.0)
     parser.add_argument("--passive-points", type=int, default=1401)
@@ -30,11 +33,16 @@ def _write_passive(design_dir: Path, args: argparse.Namespace) -> None:
     freq_ghz = np.linspace(
         args.passive_start_ghz, args.passive_stop_ghz, args.passive_points
     )
+    ports = tuple(sorted(load_circuit(design_dir).port_to_index))
     matrix = passive_s_matrix(
-        design_dir, freq_ghz * 1e9, z0_ohm=args.passive_z0_ohm
+        design_dir, freq_ghz * 1e9, ports=ports, z0_ohm=args.passive_z0_ohm
     )
-    names = ("s11", "s21", "s31", "s41", "s14", "s24", "s34")
-    pairs = ((1, 1), (2, 1), (3, 1), (4, 1), (1, 4), (2, 4), (3, 4))
+    if ports == (1, 2, 3, 4):
+        names = ("s11", "s21", "s31", "s41", "s14", "s24", "s34")
+        pairs = ((1, 1), (2, 1), (3, 1), (4, 1), (1, 4), (2, 4), (3, 4))
+    else:
+        pairs = [(out, source) for source in ports for out in ports]
+        names = tuple(f"s{out}{source}" for out, source in pairs)
     traces = {
         name: db20(matrix[:, out - 1, source - 1])
         for name, (out, source) in zip(names, pairs)
@@ -59,16 +67,28 @@ def _write_passive(design_dir: Path, args: argparse.Namespace) -> None:
             fig.savefig(design_dir / f"{stem}.{suffix}", **kwargs)
         plt.close(fig)
 
-    save(("s21", "s24"), "passive_s21_s24", f"Pump-off response: {design_dir.name}")
-    save(("s11", "s21", "s31", "s41"), "passive_s11_s21_s31_s41",
+    preferred = tuple(name for name in ("s21", "s24") if name in traces)
+    all_input = tuple(name for name in ("s11", "s21", "s31", "s41") if name in traces)
+    save(preferred or names[:1], "passive_s21_s24", f"Pump-off response: {design_dir.name}")
+    save(all_input or names[:1], "passive_s11_s21_s31_s41",
          f"Pump-off response from port 1: {design_dir.name}")
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = _parser()
     workflow_args, builder_args = parser.parse_known_args(argv)
-    builder_args.extend(["--outdir", str(workflow_args.design_dir), "--write-matrices"])
-    ipm.main(builder_args)
+    if workflow_args.design is None and workflow_args.design_dir is None:
+        parser.error("one of --design or --design-dir is required")
+    if workflow_args.design is not None:
+        if workflow_args.design_dir is None:
+            parser.error("--design-dir is required with --design")
+        builder_args.extend(["--design", str(workflow_args.design),
+                             "--outdir", str(workflow_args.design_dir),
+                             "--write-matrices"])
+        compile_design_main(builder_args)
+    else:
+        builder_args.extend(["--outdir", str(workflow_args.design_dir), "--write-matrices"])
+        ipm.main(builder_args)
     _write_passive(workflow_args.design_dir, workflow_args)
     print(f"wrote design and passive plots to {workflow_args.design_dir}")
     return 0

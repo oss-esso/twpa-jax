@@ -137,17 +137,22 @@ def load_circuit(circuit_dir: str | Path) -> CircuitMatrices:
     d = Path(circuit_dir)
     logger.debug("circuit_load_start path=%s", d)
 
-    for name in ("C.npz", "G.npz", "K.npz", "Bphi.npz", "ipm_arrays.npz"):
+    for name in ("C.npz", "G.npz", "K.npz", "Bphi.npz"):
         path = d / name
         if not path.exists():
             raise FileNotFoundError(f"missing {path}")
+    arrays_path = d / "ipm_arrays.npz"
+    if not arrays_path.exists():
+        arrays_path = d / "arrays.npz"
+    if not arrays_path.exists():
+        raise FileNotFoundError(f"missing {d / 'arrays.npz'} or {d / 'ipm_arrays.npz'}")
 
     C = sp.load_npz(d / "C.npz").tocsr()
     G = sp.load_npz(d / "G.npz").tocsr()
     K = sp.load_npz(d / "K.npz").tocsr()
     Bphi = sp.load_npz(d / "Bphi.npz").tocsr()
 
-    arrays = np.load(d / "ipm_arrays.npz", allow_pickle=True)
+    arrays = np.load(arrays_path, allow_pickle=True)
 
     Ic = np.asarray(arrays["Ic"], dtype=float)
     Lj = np.asarray(arrays["Lj"], dtype=float) if "Lj" in arrays.files else None

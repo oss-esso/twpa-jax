@@ -1,8 +1,19 @@
 # Declarative design compiler — implementation plan
 
-**Status:** planned, not started.
+**Status:** implemented on `dev` (2026-08-09).
 **Prerequisite:** the convergence/fold work on `dev` is finished and merged to `main`.
 **Written:** 2026-08-07.
+
+Repository layout note: `designs/` is source-only now. The artifact paths and
+golden directories mentioned in the historical implementation notes below
+are validation-era inputs, not checked-in design outputs; new compiler output
+belongs under `outputs/` or another disposable build directory.
+
+Implementation note: the declarative compiler, shared block path, IPM parity
+gate, uniform-JTWPA example, patch/schema/CLI coverage, and stale-design
+cleanup are complete. The repository-wide suite has three unrelated baseline
+failures (one missing historical checkpoint and two loss-model convention
+assertions); the design-specific suite is green.
 
 ## Goal
 

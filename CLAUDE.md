@@ -1,5 +1,14 @@
 # twpa_jax — agent notes
 
+## Declarative circuit designs
+
+See `docs/design_format.md` for the schema and compiler boundary. Nested
+`repeat` is limited to depth two. Compiler cursor collisions are hard errors,
+and files under `designs/*.yaml` describe concrete devices rather than
+parametric templates.
+The checked-in `designs/` tree is source-only; generated matrices, plots, and
+resolved artifacts belong under `outputs/` or another disposable build path.
+
 ## Design-independent saturation validation status (2026-07-29)
 
 Do not use JosephsonCircuits.jl or the Themis measurement cube as physical

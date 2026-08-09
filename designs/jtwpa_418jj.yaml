@@ -1,0 +1,10 @@
+schema_version: 1
+name: jtwpa_418jj
+ground: 0
+parameters: {}
+cursors:
+  signal: 1
+topology:
+  - {type: port, name: input, cursor: signal, port: 1}
+  - {type: jj_line, name: array, cursor: signal, cells: 418, Lj: 1.239e-10, Cj: 1.45e-13, Cg: 6.6e-14}
+  - {type: port, name: output, cursor: signal, port: 2}

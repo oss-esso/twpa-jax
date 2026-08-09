@@ -1,0 +1,16 @@
+schema_version: 1
+extends: ipm_2c.yaml
+name: ipm_2c_linear
+profiles:
+  Lj:
+    target: all
+    type: linear
+    start: 100e-12
+    stop: 150e-12
+    domain: per_row
+  Cg:
+    target: all
+    type: linear
+    start: 53.2688e-15
+    stop: 79.9031e-15
+    domain: per_row
