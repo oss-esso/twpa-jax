@@ -1,5 +1,13 @@
 # Project working notes
 
+## Language standard
+
+Use ATS technical English in all conversations and documentation. Write in
+plain, precise, and unambiguous technical language. Avoid idioms, marketing
+language, unnecessary theory, and unexplained abbreviations. Use terminology
+consistently in user-facing documentation, implementation notes, and status
+updates.
+
 - Dependency freedom: free Python packages may be installed when they materially
   improve the implementation or validation. The preinstalled environment is not
   a hard dependency limit; verify compatibility and record the package used.

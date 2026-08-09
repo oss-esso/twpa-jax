@@ -1,5 +1,13 @@
 # twpa_jax — agent notes
 
+## Language standard
+
+Use ATS technical English in all conversations and documentation. Write in
+plain, precise, and unambiguous technical language. Avoid idioms, marketing
+language, unnecessary theory, and unexplained abbreviations. Use terminology
+consistently in user-facing documentation, implementation notes, and status
+updates.
+
 ## Declarative circuit designs
 
 See `docs/design_format.md` for the schema and compiler boundary. Nested
