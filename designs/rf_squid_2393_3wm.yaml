@@ -1,0 +1,43 @@
+schema_version: 1
+name: rf_squid_2393_3wm
+coupler_mode: cached
+
+parameters:
+  cells: 2393
+  Ic: 0.93e-6
+  Lm: 58.6e-12
+  Lw: 37.0e-12
+  Lpar: 8.9e-12
+  Cj: 20.0e-15
+  C1: 10.5e-15
+  C2: 68.2e-15
+  C3: 50.4e-15
+
+topology:
+  - type: port
+    name: input
+    cursor: signal
+    port: 1
+  - type: resistor
+    name: input_termination
+    cursor: signal
+    value: 50.0
+  - type: rf_squid_line
+    name: rf_squid_line
+    cursor: signal
+    cells: ${cells}
+    Ic: ${Ic}
+    Lm: ${Lm}
+    Lw: ${Lw}
+    Lpar: ${Lpar}
+    Cj: ${Cj}
+    Cg_pattern: [${C1}, ${C2}, ${C1}, ${C3}]
+    Cg_pattern_counts: [6, 6, 6, 6]
+  - type: resistor
+    name: output_termination
+    cursor: signal
+    value: 50.0
+  - type: port
+    name: output
+    cursor: signal
+    port: 2

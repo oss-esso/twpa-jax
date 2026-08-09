@@ -19,6 +19,6 @@ def register_block(name: str) -> Callable[[BlockBuilder], BlockBuilder]:
 
 
 for _name in ("port", "resistor", "transmission_line", "jj_line",
-              "directional_coupler", "raw_element"):
+              "rf_squid_line", "directional_coupler", "raw_element"):
     BLOCK_BUILDERS[_name] = getattr(blocks, f"build_{_name}")
 

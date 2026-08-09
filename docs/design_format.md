@@ -86,3 +86,41 @@ The compiler rejects unknown presets, bad inheritance, invalid profiles,
 missing symbolic targets, cursor collisions, duplicate paths, and duplicate
 element names. It emits the flat solver `Element[]` representation, so the
 existing C/G/K/Bphi assembly is unchanged.
+
+## RF-SQUID 3WM validation design
+
+`designs/rf_squid_2393_3wm.yaml` is the first validation target for biased
+three-wave mixing. Its `rf_squid_line` block expands each cell into series
+`Lw`, a parallel `Lm` / (`Lpar` + Josephson junction) branch, junction `Cj`,
+and split ground capacitance. The 24-cell loading pattern is
+`[C1 x 6, C2 x 6, C1 x 6, C3 x 6]` and is truncated deterministically at
+2,393 cells. Both capacitor halves are stamped, so one complete period sums to
+`12*C1 + 6*C2 + 6*C3 = 837.6 fF`.
+
+The design uses provisional `Cj = 20 fF`, because the experimental paper does
+not provide a numerical junction-capacitance value. Run the staged workflow
+with:
+
+```powershell
+python scripts/run_rf_squid_3wm.py `
+  --design designs/rf_squid_2393_3wm.yaml `
+  --outdir outputs/rf_squid_2393_3wm --no-pump
+```
+
+The workflow applies the `0.33 Phi0` DC branch-flux offset, generates pump-off
+S-parameters, and can then run the dense-real pump basis with Floquet spacing
+of one pump frequency (the 3WM idler is `m=-1`).
+
+For the shared fast gain-map workflow, pass `--mixing-order 3` together with
+the RF-SQUID ports and an ideal on-chip pump calibration, for example:
+
+```powershell
+python workflows/run_gain_map_and_plots.py --fast `
+  --design outputs/rf_squid_2393_3wm `
+  --pump-port 1 --source-port 1 --out-port 2 `
+  --mixing-order 3 --pump-mode-policy dense_real --harmonics 3 `
+  --dc-branch-flux-over-phi0 0.33 --attenuation-db 0
+```
+
+The default remains the legacy 4WM path: `--mixing-order 3` is the explicit
+adapter that selects dense pump harmonics and the one-pump-frequency idler.
