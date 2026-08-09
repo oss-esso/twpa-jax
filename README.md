@@ -300,7 +300,7 @@ att_dB(f) = 27.3882 + 0.4579*sqrt(f) + 0.8354*f     (f in GHz)
 ```
 
 The constant is fixed coupling loss, `sqrt(f)` skin effect, `f` dielectric;
-RMS 0.37 dB against `docs/loss_A10.csv`. The constant is required — the data
+RMS 0.37 dB against `docs/development/loss_A10.csv`. The constant is required — the data
 show ~26 dB at f=0, and a pure `A*sqrt(f)+B*f` fits terribly. At 8 GHz the
 model gives ~35.4 dB, matching the older band-calibrated flat value.
 
@@ -397,5 +397,5 @@ Conclusions from measurement, not style preferences.
 | [`docs/circuit_builders.md`](docs/circuit_builders.md) | all four builders in detail |
 | [`docs/component_profiles_and_scatter.md`](docs/component_profiles_and_scatter.md) | per-cell profiles, shapes, scatter streams |
 | [`docs/workflows.md`](docs/workflows.md) | the end-to-end entry points |
-| [`docs/pump_current_conversions.tex`](docs/pump_current_conversions.tex) | the two pump-current conventions |
+| [`docs/development/pump_current_conversions.tex`](docs/development/pump_current_conversions.tex) | the two pump-current conventions |
 | `CLAUDE.md` | working notes, measured results, and open questions |

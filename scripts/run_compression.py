@@ -195,7 +195,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=1.0,
         help=(
             "Multiplier applied to the pump current (default: 1.0, the "
-            "validated convention in docs/pump_current_conversions.tex)."
+            "validated convention in docs/development/pump_current_conversions.tex)."
         ),
     )
     parser.add_argument("--pump-mode-policy", default="positive_odd_jc")
