@@ -13,6 +13,7 @@ from twpa_solver.builders.ipm import (
     add,
     add_edge_coupled_directional_coupler,
     add_jtl_element,
+    add_jj,
     add_tl,
 )
 
@@ -129,6 +130,88 @@ def build_jj_line(ctx: BuildContext, cfg: Mapping[str, Any], path: str) -> None:
     ctx.node(f"{path}.end", end)
     ctx.blocks.append(BlockRecord(path, "jj_line", [cursor], {cursor: start},
                                   {cursor: end}, count))
+
+
+def build_rf_squid_line(ctx: BuildContext, cfg: Mapping[str, Any], path: str) -> None:
+    """Build a periodic rf-SQUID line with optional capacitance loading.
+
+    Each cell is ``Lw`` in series with a parallel branch consisting of ``Lm``
+    and ``Lpar + JJ(Ic, Cj)``, followed by a split ground capacitor.  The
+    branch is deliberately represented with ordinary solver elements so the
+    existing C/G/K/Bphi assembly and biased Floquet solver remain unchanged.
+    """
+    cursor = _cursor(ctx, cfg)
+    start = ctx.cursors[cursor]
+    count = int(cfg["cells"])
+    if count <= 0:
+        raise ValueError(f"{path}.cells must be positive")
+    ic = float(cfg["Ic"])
+    lj = float(cfg.get("Lj", 2.067833848e-15 / (2.0 * np.pi * ic)))
+    lm = float(cfg["Lm"])
+    lw = float(cfg["Lw"])
+    lpar = float(cfg["Lpar"])
+    cj = float(cfg["Cj"])
+    if min(ic, lj, lm, lw, lpar, cj) <= 0.0:
+        raise ValueError(f"{path}: rf-SQUID values must be positive")
+
+    pattern = cfg.get("Cg_pattern")
+    if pattern is None:
+        if "Cg" not in cfg:
+            raise ValueError(f"{path}: provide Cg or Cg_pattern")
+        pattern = [cfg["Cg"]]
+    counts = cfg.get("Cg_pattern_counts", [1] * len(pattern))
+    if not isinstance(pattern, (list, tuple)) or not pattern:
+        raise ValueError(f"{path}.Cg_pattern must be a non-empty sequence")
+    if not isinstance(counts, (list, tuple)) or len(counts) != len(pattern):
+        raise ValueError(f"{path}.Cg_pattern_counts must match Cg_pattern")
+    values: list[float] = []
+    for value, repetitions in zip(pattern, counts):
+        if int(repetitions) <= 0 or float(value) <= 0.0:
+            raise ValueError(f"{path}: invalid capacitance pattern entry")
+        values.extend([float(value)] * int(repetitions))
+    if not values:
+        raise ValueError(f"{path}: empty capacitance pattern")
+
+    current = start
+    for index in range(count):
+        # Three fresh node slots per cell: the next cell starts at the
+        # previous cell's right node, while the series-branch junction stays
+        # private to this cell.
+        left = start + 3 * index
+        wire = left + 1
+        branch = left + 2
+        right = left + 3
+        cg = values[index % len(values)]
+        prefix = f"{path}.cell[{index}]"
+        add(ctx.circuit, f"{prefix}.Lw", left, wire, lw, "linear_inductor",
+            role="rf_squid_lw", cell_index=ctx.cell_index)
+        add(ctx.circuit, f"{prefix}.Lm", wire, right, lm, "linear_inductor",
+            role="rf_squid_lm", cell_index=ctx.cell_index)
+        add(ctx.circuit, f"{prefix}.Lpar", wire, branch, lpar,
+            "linear_inductor", role="rf_squid_lpar", cell_index=ctx.cell_index)
+        add_jj(ctx.circuit, branch, right, lj, cj,
+               cell_index=ctx.cell_index)
+        add(ctx.circuit, f"{prefix}.Cg_left", left, ctx.ground, cg / 2.0,
+            "capacitor", role="rf_squid_cg", cell_index=ctx.cell_index)
+        add(ctx.circuit, f"{prefix}.Cg_right", right, ctx.ground, cg / 2.0,
+            "capacitor", role="rf_squid_cg", cell_index=ctx.cell_index)
+        ctx.node(f"{prefix}.left", left)
+        ctx.node(f"{prefix}.wire", wire)
+        ctx.node(f"{prefix}.branch", branch)
+        ctx.node(f"{prefix}.right", right)
+        ctx.named_elements[f"{prefix}.Lw"] = f"{prefix}.Lw"
+        ctx.named_elements[f"{prefix}.Lm"] = f"{prefix}.Lm"
+        ctx.named_elements[f"{prefix}.Lpar"] = f"{prefix}.Lpar"
+        ctx.named_elements[f"{prefix}.Lj"] = f"Lj{wire + 1}_{right}"
+        ctx.named_elements[f"{prefix}.Cj"] = f"C{wire + 1}_{right}"
+        ctx.named_elements[f"{prefix}.Cg"] = f"{prefix}.Cg_right"
+        ctx.cell_index += 1
+        current = right
+    ctx.cursors[cursor] = current
+    ctx.node(path, start)
+    ctx.node(f"{path}.end", current)
+    ctx.blocks.append(BlockRecord(path, "rf_squid_line", [cursor], {cursor: start},
+                                  {cursor: current}, count))
 
 
 def build_ipm_topology(params: Any, coupler: CouplerDiscrete,
