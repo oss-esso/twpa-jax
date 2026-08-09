@@ -29,6 +29,18 @@ def test_solution_stored_float32(tmp_path: Path) -> None:
         assert z["X_imag"].dtype == np.float32
 
 
+def test_solution_can_preserve_float64_for_restart(tmp_path: Path) -> None:
+    modes = np.array([1, 3], dtype=np.int64)
+    X = np.full((2, 4), 1e-13, dtype=np.complex128)
+    write_results(
+        tmp_path, X, reports=[], solution_summary={},
+        metadata={"pump_modes": modes.tolist(), "pump_solution_dtype": "float64"},
+    )
+    with np.load(tmp_path / "pump_solution.npz") as z:
+        assert z["X_real"].dtype == np.float64
+        assert z["X_imag"].dtype == np.float64
+
+
 def test_solution_is_compressed(tmp_path: Path) -> None:
     sol_path, _, _ = _write(tmp_path)
     with zipfile.ZipFile(sol_path) as zf:

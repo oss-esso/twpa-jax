@@ -1,8 +1,0 @@
-Track 4 regression result after the fix
-
-Command:
-python -m pytest -q -p no:cacheprovider tests/test_compression.py -k 'interior or curve_reports_nonmonotonic' --basetemp D:/tmp/twpa_exp26_track4_after
-
-Result:
-..                                                                       [100%]
-2 passed, 7 deselected in 0.56s

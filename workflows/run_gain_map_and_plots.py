@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from scripts import plot_gain_map, run_gain_map
+from scripts import plot_gain_map, run_gain_map, run_hybrid_gain_map
 from scripts.plot_gain_vs_pumpfreq_signalfreq import plot_one as plot_pump_frequency
 from scripts.plot_gain_vs_pumppower_signalfreq import plot_one as plot_pump_power
 
@@ -28,6 +28,7 @@ DEFAULT_ENGINE_FLAGS: list[tuple[str, str | None]] = [
     ("--frequency-chunk-size", "10"),
     ("--signal-detuning-mhz", "150"),
     ("--no-signal-spectrum", None),
+    ("--compact-output", None),
     ("--log-level", "INFO"),
 ]
 
@@ -45,25 +46,51 @@ def _apply_default_engine_flags(run_args: list[str]) -> list[str]:
     return defaults + run_args
 
 
+def _translate_slow_flags(run_args: list[str]) -> list[str]:
+    """Translate shared public map flags to the slow runner's names."""
+    aliases = {
+        "--pump-power-min-dbm": "--power-min-dbm",
+        "--pump-power-max-dbm": "--power-max-dbm",
+        "--pump-freq-min-ghz": "--freq-min-ghz",
+        "--pump-freq-max-ghz": "--freq-max-ghz",
+    }
+    return [aliases.get(token, token) for token in run_args]
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description=__doc__,
         epilog="Unrecognised options are forwarded to run_gain_map.py.",
     )
-    parser.add_argument("--design", "--ipm-dir", type=Path, required=True)
-    parser.add_argument("--run-dir", type=Path, default=Path("outputs/gain_map_workflow"))
+    parser.add_argument(
+        "--design", "--ipm-dir", "--circuit-dir", type=Path, required=True
+    )
+    parser.add_argument(
+        "--run-dir", "--outdir", dest="run_dir",
+        type=Path, default=Path("outputs/gain_map_workflow"),
+    )
+    modes = parser.add_mutually_exclusive_group()
+    modes.add_argument("--fast", action="store_true", help="baseline HB map")
+    modes.add_argument("--slow", action="store_true", help="HB + TD physical-boundary map")
     parser.add_argument("--plot-top-k", type=int, default=5)
     parser.add_argument("--plot-min-gain-db", type=float, default=10.0)
     parser.add_argument("--plot-save-pdf", action="store_true")
     parser.add_argument("--plot-save-svg", action="store_true")
     args, run_args = parser.parse_known_args(argv)
 
-    run_args = _apply_default_engine_flags(run_args)
+    slow = bool(args.slow)
+    if not slow:
+        run_args = _apply_default_engine_flags(run_args)
+    elif "--log-level" not in run_args:
+        run_args.extend(["--log-level", "WARNING"])
+    run_args = _translate_slow_flags(run_args) if slow else run_args
     run_args.extend([
         "--circuit-dir", str(args.design), "--outdir", str(args.run_dir),
-        "--executor", "inprocess",
     ])
-    result = run_gain_map.main(run_args)
+    if not slow:
+        run_args.extend(["--executor", "inprocess"])
+    result = (run_hybrid_gain_map.main(run_args) if slow
+              else run_gain_map.main(run_args))
     if result != 0:
         return result
 

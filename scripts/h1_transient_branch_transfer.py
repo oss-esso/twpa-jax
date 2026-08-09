@@ -40,6 +40,7 @@ from twpa_solver.pump import basis as pump_basis  # noqa: E402
 from twpa_solver.pump.hb import FullPumpProblem, HarmonicGrid  # noqa: E402
 from twpa_solver.pump.io import summarize_solution  # noqa: E402
 from twpa_solver.pump.solver import HarmonicNewtonKrylovSolver, NewtonKrylovSettings  # noqa: E402
+from twpa_solver.pump.validation import validate_production_hb_state  # noqa: E402
 
 
 @dataclass(frozen=True)
@@ -110,8 +111,9 @@ class TransientSystem:
 
     def rhs(self, theta: float, y: np.ndarray, start_current: float, target_current: float, ramp_theta: float) -> np.ndarray:
         q, p = self.unpack(y)
-        p_a = self.algebraic_velocity(q, p[self.differential], self.source(theta, start_current, target_current, ramp_theta))
-        p[self.algebraic] = p_a
+        if self.algebraic.size:
+            p_a = self.algebraic_velocity(q, p[self.differential], self.source(theta, start_current, target_current, ramp_theta))
+            p[self.algebraic] = p_a
         flux = self.phi0 * (self.circuit.Bphi.T @ q)
         currents = np.asarray(self.branch.current(flux[None, :]))[0]
         source = self.source(theta, start_current, target_current, ramp_theta)
@@ -119,7 +121,7 @@ class TransientSystem:
         force = force - self._g_d @ (self.omega * self.phi0 * p)
         force = force - self._k_d @ (self.phi0 * q) - self._b_d @ currents
         p_dot_d = self.c_factor.solve(np.asarray(force).reshape(-1)) / (self.omega**2 * self.phi0)
-        return np.concatenate((p[self.differential], p_dot_d, p_a))
+        return np.concatenate((p[self.differential], p_dot_d, p[self.algebraic]))
 
     def source(self, theta: float, start_current: float, target_current: float, ramp_theta: float) -> np.ndarray:
         if ramp_theta <= 0.0:
@@ -305,6 +307,30 @@ def classify_state(
     return "BROADBAND_OR_CHAOTIC"
 
 
+def decay_aware_stroboscopic_classification(strobe: dict[str, Any]) -> dict[str, Any]:
+    """Estimate whether a non-periodic-looking hold is still relaxing."""
+    d1 = np.asarray(strobe.get("d1", []), dtype=float)
+    d1 = d1[np.isfinite(d1) & (d1 > 0.0)]
+    if d1.size < 6:
+        return {"class": "UNRESOLVED_SLOW_RELAXATION", "trend_b": None, "tau_periods": None}
+    n = np.arange(d1.size, dtype=float)
+    window = max(6, d1.size // 3)
+    slopes = [float(np.polyfit(n[i:i + window], np.log(d1[i:i + window]), 1)[0])
+              for i in range(0, d1.size - window + 1, max(1, window // 2))]
+    b = slopes[-1]
+    tau = float(-1.0 / b) if b < 0.0 else None
+    tail = float(np.median(d1[-min(3, d1.size):]))
+    if tail < 1e-3:
+        cls = "PERIOD_1"
+    elif b < -1e-3 and all(s < 0.0 for s in slopes[-2:]):
+        cls = "RELAXING_TO_PERIOD1"
+    elif abs(b) < 2e-4:
+        cls = "PERSISTENT_NONPERIODIC"
+    else:
+        cls = "UNRESOLVED_SLOW_RELAXATION"
+    return {"class": cls, "trend_b": b, "tau_periods": tau, "window_slopes": slopes}
+
+
 def project_periodic_state(
     system: TransientSystem, dense_state: Any, final_theta: float,
     modes: np.ndarray, current: float,
@@ -340,10 +366,13 @@ def project_periodic_state(
         stall_ratio=0.8, stall_patience=4, solve_deadline_s=180.0,
     ))
     X_hb, report = solver.solve_one(problem, X_seed, 1.0)
+    projected_norms = problem.norms(X_seed, 1.0, True)
     transient_phi = system.circuit.Bphi.T @ x_t.T
     hb_phi = problem.branch_flux_time(X_hb).T
     return {
         "projection_error_rms": projection_error,
+        "projected_hb_coeff_rel": float(projected_norms["coeff_rel"]),
+        "projected_hb_time_rel": float(projected_norms["time_rel"]),
         "hb_converged": bool(report.converged),
         "hb_coeff_rel": float(report.coeff_rel),
         "hb_time_rel": report.time_rel,
@@ -352,6 +381,7 @@ def project_periodic_state(
         "transient_rj": float(np.max(np.abs(np.sin(transient_phi / system.phi0)))),
         "hb_rj": float(np.max(np.abs(np.sin(hb_phi / system.phi0)))),
         "hb_solution_summary": summarize_solution(problem, X_hb),
+        "hb_state": X_hb,
     }
 
 
@@ -433,17 +463,22 @@ def implicit_trapezoid_ramp(
     system: TransientSystem, y0: np.ndarray, start_current: float,
     target_current: float, total_theta: float, ramp_theta: float,
     step_theta: float, newton_tol: float = 1e-6, max_newton: int = 10,
+    checkpoint_dir: Path | None = None, checkpoint_periods: int = 10,
+    initial_theta: float = 0.0,
 ) -> tuple[np.ndarray, np.ndarray, dict[str, Any]]:
     """Integrate the full index-one DAE with sparse implicit trapezoid steps."""
     q, p = system.unpack(y0)
-    p[system.algebraic] = system.algebraic_velocity(
-        q, p[system.differential], system.source(0.0, start_current, target_current, ramp_theta)
-    )
+    if system.algebraic.size:
+        p[system.algebraic] = system.algebraic_velocity(
+            q, p[system.differential], system.source(0.0, start_current, target_current, ramp_theta)
+        )
     n = system.n
-    theta_values = [0.0]
+    theta_values = [initial_theta]
     state_values = [system.pack(q, p)]
-    theta = 0.0
+    theta = initial_theta
     newton_total = 0
+    next_checkpoint = (initial_theta + float(checkpoint_periods) * 2.0 * math.pi
+                       if checkpoint_dir else math.inf)
     while theta < total_theta - 1e-12:
         h = min(step_theta, total_theta - theta)
         q_old, p_old = q.copy(), p.copy()
@@ -493,6 +528,19 @@ def implicit_trapezoid_ramp(
         theta += h
         theta_values.append(theta)
         state_values.append(system.pack(q, p))
+        if checkpoint_dir is not None and theta + 1e-10 >= next_checkpoint:
+            checkpoint_dir.mkdir(parents=True, exist_ok=True)
+            np.savez_compressed(
+                checkpoint_dir / "transient_restart.npz",
+                theta=np.asarray(theta), y=state_values[-1],
+                start_current=np.asarray(start_current), target_current=np.asarray(target_current),
+                ramp_theta=np.asarray(ramp_theta), step_theta=np.asarray(step_theta),
+            )
+            (checkpoint_dir / "transient_restart.json").write_text(json.dumps({
+                "theta": theta, "period": theta / (2.0 * math.pi),
+                "steps": len(theta_values) - 1, "checkpoint_periods": checkpoint_periods,
+            }, indent=2), encoding="utf-8")
+            next_checkpoint += float(checkpoint_periods) * 2.0 * math.pi
     return np.asarray(theta_values), np.asarray(state_values).T, {
         "success": True, "message": "success", "steps": len(theta_values) - 1,
         "newton_iterations": newton_total,
@@ -533,8 +581,37 @@ def run_experiment(args: argparse.Namespace) -> dict[str, Any]:
         raise RuntimeError(f"DAE audit failed: {audit}")
     system = build_system(args.circuit_dir, args.freq_ghz, args.pump_port)
     X0, w0, start_current, hb_report = load_hb_initial(args.checkpoint, system.circuit, system.omega)
-    q0 = X0 / system.phi0; p0 = w0 / system.phi0
-    y0 = system.pack(q0, p0)
+    checkpoint_data = np.load(args.checkpoint / "pump_solution.npz")
+    checkpoint_X = np.asarray(checkpoint_data["X_real"], dtype=float) + 1j * np.asarray(checkpoint_data["X_imag"], dtype=float)
+    checkpoint_modes = np.asarray(hb_report["metadata"].get("pump_modes", checkpoint_data["pump_modes"]), dtype=int)
+    validation = validate_production_hb_state(
+        system.circuit, system.branch, frequency_hz=args.freq_ghz * 1e9,
+        pump_port=args.pump_port, pump_current_a=start_current,
+        modes=checkpoint_modes, state=checkpoint_X,
+        nt=max(2 * int(checkpoint_modes.max()) + 1, 40),
+        metadata=hb_report.get("metadata", {}),
+    )
+    if not validation["checkpoint_validated"]:
+        result = {
+            "checkpoint": str(args.checkpoint),
+            "classification": "INVALID_HB_FIXTURE",
+            "final_status": "INVALID_HB_FIXTURE",
+            "hb_validation": validation,
+            "integrator": None,
+        }
+        (outdir / "summary.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
+        return result
+    restart_path = getattr(args, "transient_restart", None)
+    if restart_path is not None:
+        restart_data = np.load(restart_path)
+        y0 = np.asarray(restart_data["y"], dtype=float)
+        # A resumed bridge starts at the already reached physical drive.  The
+        # continuation ramp is local to this call, so its phase coordinate is
+        # intentionally reset to zero.
+        start_current = float(restart_data["target_current"])
+    else:
+        q0 = X0 / system.phi0; p0 = w0 / system.phi0
+        y0 = system.pack(q0, p0)
     ramp_theta = 2.0 * math.pi * args.ramp_periods
     total_theta = 2.0 * math.pi * (args.ramp_periods + args.hold_periods)
     if args.method == "implicit_euler":
@@ -547,6 +624,8 @@ def run_experiment(args: argparse.Namespace) -> dict[str, Any]:
         sample_theta, states, integrator = implicit_trapezoid_ramp(
             system, y0, start_current, args.target_current_a, total_theta,
             ramp_theta, args.max_step, args.atol, args.max_newton,
+            checkpoint_dir=outdir / "restart_checkpoints",
+            checkpoint_periods=args.checkpoint_periods,
         )
         dense_state = lambda query: np.vstack([np.interp(query, sample_theta, row) for row in states])
     else:
@@ -569,10 +648,22 @@ def run_experiment(args: argparse.Namespace) -> dict[str, Any]:
     data["mu"] = np.asarray([system.source(x, start_current, args.target_current_a, ramp_theta)[system.pump_node] for x in sample_theta])
     data["source_current_a"] = np.array(data["mu"], copy=True)
     data["time_s"] = sample_theta / system.omega
-    np.savez_compressed(outdir / "transient_observables.npz", **data)
-    with (outdir / "transient_observables.csv").open("w", newline="", encoding="utf-8") as handle:
-        writer = csv.writer(handle); writer.writerow(data.keys())
-        writer.writerows(zip(*data.values()))
+    compact_output = bool(getattr(args, "compact_output", False))
+    if compact_output:
+        stride = max(1, sample_theta.size // 256)
+        np.savez_compressed(
+            outdir / "td_compact.npz",
+            theta=sample_theta[::stride],
+            max_abs_sin_phi=data["max_abs_sin_phi"][::stride],
+            max_abs_phi=data["max_abs_phi"][::stride],
+            min_cos_phi=data["min_cos_phi"][::stride],
+            state_norm=data["state_norm"][::stride],
+        )
+    else:
+        np.savez_compressed(outdir / "transient_observables.npz", **data)
+        with (outdir / "transient_observables.csv").open("w", newline="", encoding="utf-8") as handle:
+            writer = csv.writer(handle); writer.writerow(data.keys())
+            writer.writerows(zip(*data.values()))
     hold_start = 2.0 * math.pi * args.ramp_periods
     strobe_theta = np.arange(hold_start, total_theta + 0.1, 2.0 * math.pi)
     strobe_states = dense_state(strobe_theta)
@@ -593,10 +684,12 @@ def run_experiment(args: argparse.Namespace) -> dict[str, Any]:
     phase_velocity = np.diff(unwrapped_phase, axis=0) / np.diff(last_theta)[:, None] * system.omega
     mean_phase_velocity = float(np.mean(phase_velocity))
     phase_winding = float(np.mean(unwrapped_phase[-1] - unwrapped_phase[0]) / (2.0 * math.pi))
-    np.savez_compressed(outdir / "late_time_phase.npz", theta=last_theta, phase=phase_series, unwrapped_phase=unwrapped_phase)
+    if not compact_output:
+        np.savez_compressed(outdir / "late_time_phase.npz", theta=last_theta, phase=phase_series, unwrapped_phase=unwrapped_phase)
     classification = classify_state(
         strobe, mean_phase_velocity, bool(integrator["success"]), phase_winding
     )
+    decay = decay_aware_stroboscopic_classification(strobe)
     branch_transfer = None
     if classification == "PERIOD_1":
         branch_transfer = project_periodic_state(
@@ -604,6 +697,18 @@ def run_experiment(args: argparse.Namespace) -> dict[str, Any]:
             np.asarray(hb_report["metadata"]["pump_modes"], dtype=int),
             args.target_current_a,
         )
+        if branch_transfer is not None and "hb_state" in branch_transfer:
+            projected_state = np.asarray(branch_transfer.pop("hb_state"))
+            np.savez_compressed(
+                outdir / "td_projected_state.npz",
+                X_real=projected_state.real,
+                X_imag=projected_state.imag,
+                modes=checkpoint_modes,
+                pump_current_a=args.target_current_a,
+            )
+            branch_transfer["projected_state_path"] = str(
+                outdir / "td_projected_state.npz"
+            )
     if not integrator["success"]:
         final_status = "TRANSIENT_NUMERICAL_BLOCKER"
         blocker_reason = integrator["message"]
@@ -616,9 +721,8 @@ def run_experiment(args: argparse.Namespace) -> dict[str, Any]:
     else:
         final_status = "TRANSIENT_NUMERICAL_BLOCKER"
         blocker_reason = "period-1 transient did not seed a converged fixed-drive HB root"
-    plot_results(outdir, data, spectrum)
-    checkpoint_data = np.load(args.checkpoint / "pump_solution.npz")
-    checkpoint_X = np.asarray(checkpoint_data["X_real"], dtype=float) + 1j * np.asarray(checkpoint_data["X_imag"], dtype=float)
+    if not compact_output:
+        plot_results(outdir, data, spectrum)
     checkpoint_grid = HarmonicGrid(
         np.asarray(hb_report["metadata"]["pump_modes"]), 40, system.omega
     )
@@ -629,15 +733,18 @@ def run_experiment(args: argparse.Namespace) -> dict[str, Any]:
     )
     result = {
         "audit": audit.__dict__, "checkpoint": str(args.checkpoint),
+        "hb_validation": validation,
         "start_current_a": start_current, "target_current_a": args.target_current_a,
         "ramp_periods": args.ramp_periods, "hold_periods": args.hold_periods,
         "integrator": integrator,
         "classification": classification, "stroboscopic": strobe,
+        "decay_aware": decay,
         "mean_phase_velocity_rad_s": mean_phase_velocity,
         "mean_phase_winding_cycles": phase_winding,
         "branch_transfer": branch_transfer,
         "final_status": final_status, "blocker_reason": blocker_reason,
         "hb_checkpoint_summary": summarize_solution(checkpoint_problem, checkpoint_X),
+        "transient_restart": str(restart_path) if restart_path is not None else None,
     }
     (outdir / "summary.json").write_text(json.dumps(result, indent=2, default=str), encoding="utf-8")
     return result
@@ -647,7 +754,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--circuit-dir", type=Path, default=ROOT / "designs" / "ipm_2c_fixed")
     parser.add_argument("--checkpoint", type=Path, default=ROOT / "g1_current_79" / "pass" / "points" / "point_0012_p_m19p6842dbm_fp_7p9ghz" / "pump")
-    parser.add_argument("--outdir", type=Path, default=ROOT / "h1_79")
+    parser.add_argument("--outdir", type=Path, default=ROOT / "outputs" / "h1_79")
     parser.add_argument("--freq-ghz", type=float, default=7.9)
     parser.add_argument("--pump-port", type=int, default=4)
     parser.add_argument("--target-current-a", type=float, default=1.6e-5)
@@ -659,6 +766,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--max-step", type=float, default=0.5)
     parser.add_argument("--method", choices=("RK45", "RK23", "BDF", "Radau", "implicit_euler", "implicit_trapezoid"), default="implicit_trapezoid")
     parser.add_argument("--max-newton", type=int, default=12)
+    parser.add_argument("--checkpoint-periods", type=int, default=10)
+    parser.add_argument(
+        "--transient-restart", type=Path, default=None,
+        help="resume a local TD bridge from a transient_restart.npz checkpoint",
+    )
     parser.add_argument("--audit-only", action="store_true")
     return parser.parse_args(argv)
 
@@ -669,7 +781,7 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(audit_circuit(args.circuit_dir).__dict__, indent=2))
         return 0
     result = run_experiment(args)
-    print(json.dumps({"classification": result["classification"], "integrator": result["integrator"], "stroboscopic": result["stroboscopic"]}, indent=2))
+    print(json.dumps({"classification": result["classification"], "integrator": result["integrator"], "stroboscopic": result.get("stroboscopic"), "decay_aware": result.get("decay_aware")}, indent=2))
     return 0
 
 

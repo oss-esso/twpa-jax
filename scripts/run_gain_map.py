@@ -75,6 +75,7 @@ EXP09 = "experiments/exp09_full_ipm_gain_from_pump.py"
 
 from twpa_solver import default_loss_model  # noqa: E402
 from twpa_solver.loss import signal_loss_model  # noqa: E402
+from twpa_solver.map import peak_rss_bytes, run_isolated_jobs  # noqa: E402
 from twpa_solver.core import (  # noqa: E402
     default_loss_model_for,
     kinetic_dc_branch_flux,
@@ -975,6 +976,7 @@ class InProcessEngine:
             "pump_current_a": injected,
             "pump_current_ratio_ic_median": injected / self.ic_median,
             "pump_backend": a.inproc_pump_backend,
+            "pump_solution_dtype": getattr(a, "pump_solution_dtype", "float32"),
         }
         t_write = time.perf_counter()
         summary = exp08.summarize_solution(full_problem, X_full)
@@ -1067,6 +1069,13 @@ class InProcessEngine:
                                    and row["gain_status"] == "VALID_SOLVED") else "ERROR"
         row["elapsed_s"] = time.perf_counter() - t0
         row["pump_dir"] = str(pump_dir)
+        if getattr(a, "compact_output", False):
+            # The continuation state is retained in memory by the column
+            # runner.  Once gain has been evaluated, ordinary map points only
+            # need scalar telemetry; retaining every full X dominates disk
+            # usage and is not required for a fresh restart.
+            (pump_dir / "pump_solution.npz").unlink(missing_ok=True)
+            row["compact_state_discarded"] = True
         logger.debug(
             "engine_solve_point_end point=%s status=%s pump_status=%s gain_status=%s elapsed_s=%.6f",
             point.index, row["status"], row["pump_status"], row["gain_status"], row["elapsed_s"],
@@ -2482,6 +2491,12 @@ def write_points_csv(path: Path, rows: list[dict[str, Any]]) -> None:
         "gain_baseline_off_runtime_s", "gain_baseline_pumpdiag_runtime_s",
         "spectrum_peak_gain_db", "spectrum_peak_signal_ghz",
         "elapsed_s", "pump_dir",
+        # Optional hybrid HB/TD telemetry.  Legacy maps leave these blank;
+        # retaining them makes TD-assisted coverage auditable without storing
+        # large transient states in the CSV.
+        "hybrid_route", "hybrid_state", "hybrid_classification",
+        "td_periods", "td_d1", "td_best_low_order_dn", "td_r_j",
+        "td_phase_winding", "td_period1_projection", "td_projected_state_path",
     ]
     with path.open("w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=keys, extrasaction="ignore")
@@ -2579,8 +2594,13 @@ def write_summary(
             out[r["status"]] = out.get(r["status"], 0) + 1
         return out
 
+    from twpa_solver.map import coverage_summary
+
+    coverage_rows = warm_rows if warm_rows else cold_rows
     summary: dict[str, Any] = {
         "mode": args.mode,
+        "workflow_mode": getattr(args, "workflow_mode", None),
+        "compact_output": bool(getattr(args, "compact_output", False)),
         "output_dir": str(outdir),
         "grid": {"n_power": args.n_power, "n_frequency": args.n_frequency},
         "grid_from_measurement_dir": (
@@ -2611,6 +2631,7 @@ def write_summary(
         ),
         "cold_status_counts": counts(cold_rows),
         "warm_status_counts": counts(warm_rows),
+        "coverage": coverage_summary(coverage_rows),
         "cold_pump_runtime_s": total_pump_runtime(cold_rows) if cold_rows else None,
         "warm_pump_runtime_s": total_pump_runtime(warm_rows) if warm_rows else None,
         "cold_gain_runtime_s": total_metric(cold_rows, "gain_total_runtime_s") if cold_rows else None,
@@ -2618,6 +2639,7 @@ def write_summary(
         "cold_timing_totals": timing_totals(cold_rows) if cold_rows else {},
         "warm_timing_totals": timing_totals(warm_rows) if warm_rows else {},
         "elapsed_s": elapsed_s,
+        "peak_rss_bytes": getattr(args, "peak_rss_bytes", None) or peak_rss_bytes(),
         "gate": {
             "evaluated": gate.evaluated,
             "passed": gate.passed,
@@ -2960,6 +2982,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                    "many columns each, then merge. 10 is the standard memory-safe "
                    "map behavior; 0 disables chunking.")
     p.add_argument(
+        "--frequency-workers", type=int, default=1,
+        help="Parallel frequency-chunk worker processes; 1 preserves serial behavior.",
+    )
+    p.add_argument(
         "--local-traversal-chunks",
         action="store_true",
         help="Allow non-column traversals to run as independent frequency-local "
@@ -3088,6 +3114,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--gain-timeout-s", type=float, default=300.0)
     p.add_argument("--python-executable", default=sys.executable)
     p.add_argument("--overwrite", action="store_true")
+    p.add_argument(
+        "--compact-output", action=argparse.BooleanOptionalAction, default=False,
+        help="Discard ordinary per-point pump_solution.npz after gain evaluation; "
+        "continuation keeps its state in memory.",
+    )
     p.add_argument(
         "--allow-superlu-fallback",
         action="store_true",
@@ -3367,6 +3398,7 @@ def run_frequency_chunks(
     chunk_root = outdir / "chunks"
     chunk_root.mkdir(parents=True, exist_ok=True)
     chunk_specs: list[tuple[Path, int, int]] = []
+    pending: list[tuple[int, Path, int, int, list[str], Path]] = []
     for chunk_index, (start_col, stop_col) in enumerate(ranges):
         chunk_dir = chunk_root / f"chunk_{chunk_index:03d}_cols_{start_col:03d}_{stop_col - 1:03d}"
         chunk_specs.append((chunk_dir, start_col, stop_col))
@@ -3375,12 +3407,6 @@ def run_frequency_chunks(
         if args.resume_chunks and chunk_is_complete(chunk_dir, args, start_col, stop_col):
             print(f"\n=== chunk {chunk_index} : already complete, skipping ===", flush=True)
             continue
-        print(
-            f"\n=== chunk {chunk_index} : cols [{start_col}..{stop_col - 1}] "
-            f"fp {fp0:.4f}..{fp1:.4f} GHz ({stop_col - start_col} cols) ===",
-            flush=True,
-        )
-        t0 = time.perf_counter()
         cmd = chunk_worker_command(
             raw_argv,
             outdir=chunk_dir,
@@ -3390,23 +3416,17 @@ def run_frequency_chunks(
             overwrite="--overwrite" in raw_argv,
         )
         log_path = outdir / f"chunk_{chunk_index:03d}.log"
+        pending.append((chunk_index, chunk_dir, start_col, stop_col, cmd, log_path))
+
+    def run_chunk(item: tuple[int, Path, int, int, list[str], Path]) -> tuple[int, int, float, Path]:
+        chunk_index, _chunk_dir, _start, _stop, cmd, log_path = item
+        t0 = time.perf_counter()
         with log_path.open("w", encoding="utf-8") as log:
-            proc = subprocess.Popen(
-                cmd,
-                cwd=str(ROOT),
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                bufsize=1,
-            )
-            assert proc.stdout is not None
-            for line in proc.stdout:
-                log.write(line)
-                log.flush()
-                sys.stdout.write(line)
-                sys.stdout.flush()
-            rc = proc.wait()
-        elapsed = time.perf_counter() - t0
+            proc = subprocess.run(cmd, cwd=str(ROOT), stdout=log, stderr=subprocess.STDOUT)
+        return chunk_index, int(proc.returncode), time.perf_counter() - t0, log_path
+
+    results = run_isolated_jobs(pending, run_chunk, args.frequency_workers)
+    for chunk_index, rc, elapsed, log_path in sorted(results):
         print(f"chunk {chunk_index} rc={rc} elapsed={elapsed:.1f}s log={log_path}", flush=True)
         if rc != 0:
             raise RuntimeError(f"frequency chunk {chunk_index} failed with return code {rc}")
@@ -3417,6 +3437,12 @@ def run_frequency_chunks(
 def main(argv: list[str] | None = None) -> int:
     raw_argv = sys.argv[1:] if argv is None else list(argv)
     args = parse_args(raw_argv)
+    if args.frequency_workers < 1:
+        raise ValueError("--frequency-workers must be >= 1")
+    if args.frequency_workers > 1 and args.frequency_chunk_size > 0:
+        args.frequency_chunk_size = max(
+            1, int(np.ceil(args.n_frequency / args.frequency_workers))
+        )
     logging.basicConfig(
         level=getattr(logging, str(args.log_level).upper()),
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
