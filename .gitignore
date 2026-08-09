@@ -41,6 +41,12 @@ references/**/__pycache__/
 # Solver output. Never commit these: an old output directory is not a design,
 # and treating one as such is how several campaigns ended up on a stale circuit.
 outputs/
+# Keep generated map/transient outputs ignored even if broader rules change.
+/outputs/
+/outputs/**
+.hybrid_outputs/
+/.pytest*/
+/pytest-of-*/
 diagnostics/
 plots/
 logs/
