@@ -91,6 +91,7 @@ from twpa_solver.pump.backends.schur_operators import (  # noqa: E402
     SchurReducedProblem,
     build_schur_problem,
 )
+from twpa_solver.pump.backends.schur_partition import restrict  # noqa: E402
 from twpa_solver.ports import (  # noqa: E402
     port_available_power_w,
     port_current_from_power_a,
@@ -183,11 +184,12 @@ def attenuation_db_for(freq_ghz: float, args: argparse.Namespace) -> float:
     dependent, f in GHz). A numeric ``--attenuation-db`` overrides it with a flat
     value.
     """
-    if args.attenuation_db is not None:
+    attenuation_override = getattr(args, "attenuation_db", None)
+    if attenuation_override is not None:
         logger.debug(
-            "attenuation_db_for freq_ghz=%s -> flat_db=%s", freq_ghz, args.attenuation_db,
+            "attenuation_db_for freq_ghz=%s -> flat_db=%s", freq_ghz, attenuation_override,
         )
-        return float(args.attenuation_db)
+        return float(attenuation_override)
     att = float(default_loss_model().attenuation_db(float(freq_ghz)))
     logger.debug(
         "attenuation_db_for freq_ghz=%s -> model_db=%s", freq_ghz, att,
@@ -720,7 +722,7 @@ class InProcessEngine:
         # on, so only the current column's partition is live. Caching every
         # frequency unbounded is what OOMs large maps (50 partitions ~ 16 GB).
         # Keep the last few (insertion-ordered dict acts as the LRU).
-        self._schur_part_cache: dict[float, Any] = {}
+        self._schur_part_cache: dict[tuple[float, tuple[int, ...]], Any] = {}
         self._schur_cache_max = max(1, int(getattr(args, "inproc_schur_cache_size", 2)))
         self._signal_schur_part_cache: dict[tuple[Any, ...], Any] = {}
         self._signal_schur_cache_max = max(1, int(getattr(args, "inproc_schur_cache_size", 2)))
@@ -762,22 +764,36 @@ class InProcessEngine:
             precond_reuse_refresh_gmres=self.args.inproc_precond_refresh_gmres,
         )
 
-    def _build_problem(self, freq_ghz: float, current_a: float):
+    def _build_problem(
+        self,
+        freq_ghz: float,
+        current_a: float,
+        *,
+        harmonics: int | None = None,
+        nt: int | None = None,
+    ):
+        requested_harmonics = self.args.harmonics if harmonics is None else int(harmonics)
+        requested_nt = self.args.nt if nt is None else int(nt)
         logger.debug(
             "engine_build_problem_start freq_ghz=%s current_a=%s policy=%s "
             "mode_count=%s harmonics=%s nt=%s",
             freq_ghz, current_a, self.args.pump_mode_policy,
-            self.args.pump_mode_count, self.args.harmonics, self.args.nt,
+            self.args.pump_mode_count, requested_harmonics, requested_nt,
         )
         omega = 2.0 * math.pi * freq_ghz * 1e9
         basis = pump_basis.resolve_pump_basis(
             policy=("dense_real" if self.args.mixing_order == 3
                      and self.args.pump_mode_policy == "positive_odd_jc"
                      else self.args.pump_mode_policy), omega_p=omega,
-            harmonics=self.args.harmonics, mode_count=self.args.pump_mode_count,
+            harmonics=requested_harmonics, mode_count=self.args.pump_mode_count,
             explicit_modes=None, design_meta=self.ipm08.summary,
         )
-        grid = exp08.HarmonicGrid(modes=basis.k, nt=self.args.nt, omega=omega)
+        if self.args.mixing_order == 3 and 0 not in basis.modes:
+            # A flux-biased Josephson law generates a pump-induced DC component.
+            # Keep it in the production HB unknown set; omitting it can make the
+            # retained-mode residual appear converged while the full DAE is not.
+            basis = pump_basis.with_dynamic_dc(basis)
+        grid = exp08.HarmonicGrid(modes=basis.k, nt=requested_nt, omega=omega)
         problem = exp08.FullIPMPumpProblem(
             C=self.ipm08.C, G=self.ipm08.G, K=self.ipm08.K, Bphi=self.ipm08.Bphi,
             branch=self.branch, grid=grid, pump_node_index=self.pump_idx,
@@ -804,20 +820,21 @@ class InProcessEngine:
             logger.debug("engine_make_solve_problem backend=full freq_ghz=%s", freq_ghz)
             return full_problem
         cache = self._schur_part_cache
-        part = cache.pop(freq_ghz, None)  # pop-then-reinsert -> most-recent (LRU)
+        cache_key = (float(freq_ghz), tuple(int(round(k)) for k in full_problem.grid.k))
+        part = cache.pop(cache_key, None)  # pop-then-reinsert -> most-recent (LRU)
         logger.debug(
-            "engine_make_solve_problem backend=schur freq_ghz=%s cache_hit=%s "
-            "cache_size_before=%d",
-            freq_ghz, part is not None, len(cache),
+            "engine_make_solve_problem backend=schur freq_ghz=%s modes=%s "
+            "cache_hit=%s cache_size_before=%d",
+            freq_ghz, cache_key[1], part is not None, len(cache),
         )
         sprob = (SchurReducedProblem(full=full_problem, partition=part)
                  if part is not None
                  else build_schur_problem(full_problem, self.ports))
-        cache[freq_ghz] = sprob.part
+        cache[cache_key] = sprob.part
         while len(cache) > self._schur_cache_max:
             evicted = next(iter(cache))
             del cache[evicted]  # evict oldest -> frees its splu
-            logger.debug("engine_schur_cache_evict freq_ghz=%s", evicted)
+            logger.debug("engine_schur_cache_evict key=%s", evicted)
             gc.collect()
         logger.debug(
             "engine_make_solve_problem_complete freq_ghz=%s retained=%d eliminated=%d "
@@ -825,6 +842,95 @@ class InProcessEngine:
             freq_ghz, sprob.n, sprob.part.p, len(cache),
         )
         return sprob
+
+    def _adaptive_harmonic_enrichment(
+        self,
+        point: GridPoint,
+        injected: float,
+        full_problem: Any,
+        basis: pump_basis.PumpBasis,
+        solve_problem: Any,
+        X: np.ndarray,
+        reports: list[Any],
+    ) -> tuple[Any, pump_basis.PumpBasis, Any, np.ndarray, list[Any], dict[str, Any]]:
+        """Warm-promote a DC-inclusive 3WM pump when omitted harmonics dominate."""
+        info: dict[str, Any] = {
+            "enabled": bool(getattr(self.args, "adaptive_harmonics", False)),
+            "initial_modes": list(basis.modes),
+            "final_modes": list(basis.modes),
+            "promotions": [],
+            "stop_reason": "disabled",
+        }
+        if not info["enabled"] or self.args.mixing_order != 3:
+            return full_problem, basis, solve_problem, X, reports, info
+
+        target_time_rel = float(
+            getattr(self.args, "harmonic_enrichment_time_rel", 1e-4)
+        )
+        max_harmonic = int(getattr(self.args, "harmonic_enrichment_max", 9))
+        current_full = (
+            solve_problem.reconstruct_full(X)
+            if solve_problem is not full_problem and hasattr(solve_problem, "reconstruct_full")
+            else X
+        )
+        norms = full_problem.norms(current_full, 1.0, True)
+        info["initial_time_rel"] = norms["time_rel"]
+        info["stop_reason"] = "full_residual_gate"
+        solver = exp08.HarmonicNewtonKrylovSolver(self._settings())
+
+        while float(norms["time_rel"] or 0.0) > target_time_rel:
+            next_max = max(int(max(basis.modes)), 1) + 2
+            if next_max > max_harmonic:
+                info["stop_reason"] = "harmonic_limit"
+                break
+            previous_time_rel = float(norms["time_rel"] or 0.0)
+            next_full, next_basis, _next_omega = self._build_problem(
+                point.pump_freq_ghz,
+                injected,
+                harmonics=next_max,
+                nt=max(int(self.args.nt), 2 * next_max + 4),
+            )
+            promoted = pump_basis.promote_solution_to_basis(
+                current_full, basis, next_basis
+            )
+            next_solve = self._make_solve_problem(
+                next_full, point.pump_freq_ghz
+            )
+            next_seed = (
+                restrict(promoted, next_solve.part)
+                if next_solve is not next_full
+                else promoted
+            )
+            next_X, next_report = solver.solve_one(next_solve, next_seed, 1.0)
+            if not next_report.converged:
+                info["stop_reason"] = "enrichment_newton_failed"
+                break
+            next_full_X = (
+                next_solve.reconstruct_full(next_X)
+                if next_solve is not next_full
+                else next_X
+            )
+            next_norms = next_full.norms(next_full_X, 1.0, True)
+            info["promotions"].append({
+                "from_modes": list(basis.modes),
+                "to_modes": list(next_basis.modes),
+                "time_rel": next_norms["time_rel"],
+                "coeff_rel": next_norms["coeff_rel"],
+            })
+            if float(next_norms["time_rel"] or 0.0) >= previous_time_rel:
+                info["stop_reason"] = "no_residual_improvement"
+                break
+            full_problem, basis, solve_problem, X = (
+                next_full, next_basis, next_solve, next_X
+            )
+            reports = [*reports, next_report]
+            current_full = next_full_X
+            norms = next_norms
+            info["final_modes"] = list(basis.modes)
+
+        info["final_time_rel"] = norms["time_rel"]
+        info["final_coeff_rel"] = norms["coeff_rel"]
+        return full_problem, basis, solve_problem, X, reports, info
 
     def build_problem_for(self, point: GridPoint):
         """Full pump problem bundle for a grid cell (no Schur reduction).
@@ -899,6 +1005,52 @@ class InProcessEngine:
             point.index, use_schur, pump_schur_setup_runtime_s,
         )
         solver = exp08.HarmonicNewtonKrylovSolver(self._settings())
+
+        # Harmonic enrichment changes the number of rows in the chained pump
+        # state.  The next map point is intentionally rebuilt at the cheap base
+        # basis before it is enriched again, so project the previous state onto
+        # that basis explicitly.  Passing an enriched state directly to the
+        # base Schur problem is a shape error, not a physical branch failure.
+        if (
+            mode == "warm"
+            and warm_X is not None
+            and hasattr(solve_problem, "zeros")
+        ):
+            expected_shape = solve_problem.zeros().shape
+            if warm_X.shape != expected_shape:
+                source_basis = getattr(self, "_last_pump_basis", None)
+                if (
+                    source_basis is None
+                    and int(getattr(a, "mixing_order", 0)) == 3
+                    and warm_X.ndim == 2
+                    and warm_X.shape[0] >= 2
+                ):
+                    source_basis = pump_basis.PumpBasis(
+                        modes=list(range(warm_X.shape[0])),
+                        policy="dense_real", omega_p=omega,
+                        source_mode=1,
+                    )
+                if (
+                    source_basis is not None
+                    and warm_X.ndim == 2
+                    and warm_X.shape[1] == expected_shape[1]
+                    and len(source_basis.modes) == warm_X.shape[0]
+                ):
+                    warm_X = pump_basis.promote_solution_to_basis(
+                        warm_X, source_basis, basis
+                    )
+                    logger.debug(
+                        "engine_warm_state_projected point=%s src_modes=%s "
+                        "dst_modes=%s shape=%s",
+                        point.index, source_basis.modes, basis.modes, warm_X.shape,
+                    )
+                else:
+                    logger.warning(
+                        "engine_warm_state_dropped point=%s warm_shape=%s "
+                        "expected_shape=%s",
+                        point.index, warm_X.shape, expected_shape,
+                    )
+                    warm_X = None
 
         t_solve = time.perf_counter()
         continuation_info: dict[str, Any] = {
@@ -1002,6 +1154,28 @@ class InProcessEngine:
 
         converged = bool(reports and reports[-1].converged
                          and abs(reports[-1].source_scale - 1.0) < 1e-12)
+        harmonic_info: dict[str, Any] = {
+            "enabled": False,
+            "initial_modes": list(getattr(basis, "modes", [])),
+            "final_modes": list(getattr(basis, "modes", [])),
+            "promotions": [],
+            "stop_reason": "not_requested",
+        }
+        if converged and self.args.mixing_order == 3:
+            (
+                full_problem,
+                basis,
+                solve_problem,
+                X,
+                reports,
+                harmonic_info,
+            ) = self._adaptive_harmonic_enrichment(
+                point, injected, full_problem, basis, solve_problem, X, reports
+            )
+            converged = bool(
+                reports and reports[-1].converged
+                and abs(reports[-1].source_scale - 1.0) < 1e-12
+            )
         logger.debug(
             "engine_solve_point_pump_complete point=%s converged=%s reports=%d "
             "last_coeff_rel=%s solve_wall_s=%.6f",
@@ -1012,15 +1186,73 @@ class InProcessEngine:
         # X is retained-sized for the Schur backend; reconstruct full nodes.
         chain_X = X
         X_full = solve_problem.reconstruct_full(X) if use_schur else X
+        full_time_rel = None
+        full_gate = None
+        full_gate_passed = True
+        three_wm = int(getattr(a, "mixing_order", 0)) == 3
+        if hasattr(full_problem, "norms"):
+            full_time_rel = full_problem.norms(X_full, 1.0, True)["time_rel"]
+            if three_wm:
+                full_gate = float(
+                    getattr(a, "harmonic_enrichment_time_rel", 1e-4)
+                )
+                full_gate_passed = bool(
+                    full_time_rel is not None
+                    and np.isfinite(float(full_time_rel))
+                    and float(full_time_rel) <= full_gate
+                )
+        pump_valid = bool(converged and (not three_wm or full_gate_passed))
+        validation_failure = None
+        if converged and three_wm and not full_gate_passed:
+            validation_failure = "full harmonic residual gate failed"
+        elif not converged:
+            validation_failure = reports[-1].failure_reason if reports else "no Newton report"
+        dc_flux = np.asarray(
+            getattr(self, "dc_branch_flux", np.zeros(0, dtype=np.float64)),
+            dtype=np.float64,
+        ).reshape(-1)
+        circuit_loss_model = (
+            default_loss_model_for(self.ipm08)
+            if hasattr(self, "ipm08") else None
+        )
+        actual_grid = getattr(full_problem, "grid", None)
+        actual_nt = int(getattr(actual_grid, "nt", getattr(a, "nt", 0)))
 
         metadata = {
             **basis.to_metadata(),
-            "pump_freq_ghz": point.pump_freq_ghz, "nt": a.nt, "omega_p": omega,
+            "pump_freq_ghz": point.pump_freq_ghz,
+            "nt": actual_nt, "omega_p": omega,
             "pump_current_a": injected,
+            "pump_power_dbm_requested": point.power_dbm,
+            "pump_power_convention": getattr(a, "power_convention", None),
+            "attenuation_db": attenuation_db_for(point.pump_freq_ghz, a),
+            "dc_branch_flux": dc_flux.tolist(),
+            "dc_branch_flux_wb": float(dc_flux[0]) if dc_flux.size else 0.0,
+            "pump_port": int(getattr(a, "pump_port", 0)),
+            "source_port": int(getattr(a, "source_port", 0)),
+            "out_port": int(getattr(a, "out_port", 0)),
+            "circuit_dir": str(getattr(a, "circuit_dir", "")),
+            "loss_model": circuit_loss_model,
+            "harmonic_enrichment": harmonic_info,
+            "production_hb_full_residual_rel": (
+                None if full_time_rel is None else float(full_time_rel)
+            ),
+            "production_hb_full_residual_gate": full_gate,
+            "production_hb_full_residual_passed": bool(full_gate_passed),
+            "pump_validation_status": (
+                "VALID_CONVERGED" if pump_valid
+                else "FAIL_FULL_HARMONIC_RESIDUAL"
+                if validation_failure == "full harmonic residual gate failed"
+                else "FAIL"
+            ),
             "pump_current_ratio_ic_median": injected / self.ic_median,
             "pump_backend": a.inproc_pump_backend,
-            "pump_solution_dtype": getattr(a, "pump_solution_dtype", "float32"),
+            # Production checkpoints are validation inputs.  Preserve enough
+            # precision for the HB/TD handoff and independent residual checks.
+            "pump_solution_dtype": getattr(a, "pump_solution_dtype", "float64")
+            or "float64",
         }
+        self._last_pump_basis = basis
         t_write = time.perf_counter()
         summary = exp08.summarize_solution(full_problem, X_full)
         exp08.write_results(pump_dir, X_full, reports, summary, metadata)
@@ -1035,7 +1267,7 @@ class InProcessEngine:
             "point_index": point.index, "i_power": point.i_power, "j_freq": point.j_freq,
             "pump_power_dbm": point.power_dbm, "pump_freq_ghz": point.pump_freq_ghz,
             "pump_current_peak_a": point.current_a, "warm_started": mode == "warm",
-            "pump_status": "VALID_CONVERGED" if converged else "FAIL",
+            "pump_status": "VALID_CONVERGED" if pump_valid else "FAIL",
             "pump_runtime_s": float(sum(r.runtime_s for r in reports)),
             "pump_wall_runtime_s": pump_wall_runtime_s,
             "pump_setup_runtime_s": pump_setup_runtime_s,
@@ -1046,14 +1278,13 @@ class InProcessEngine:
             "pump_preconditioner_assembly_runtime_s": float(sum(getattr(r, "preconditioner_assembly_runtime_s", 0.0) for r in reports)),
             "pump_preconditioner_numeric_factor_runtime_s": float(sum(getattr(r, "preconditioner_numeric_factor_runtime_s", 0.0) for r in reports)),
             "pump_coeff_rel": float(reports[-1].coeff_rel) if reports else None,
-            "pump_time_rel": (float(solve_problem.full_time_residual_rel(X, 1.0))
-                              if use_schur and converged
-                              else float(reports[-1].time_rel)
-                              if reports and reports[-1].time_rel is not None else None),
+            "pump_time_rel": (
+                None if full_time_rel is None else float(full_time_rel)
+            ),
             "pump_newton_total": int(sum(r.newton_iterations for r in reports)),
             "pump_gmres_total": int(sum(r.gmres_iterations_total for r in reports)),
             "pump_branch_current_max": finite_or_none(summary.get("branch_i_max_abs")),
-            "pump_failure_reason": (reports[-1].failure_reason if reports else None),
+            "pump_failure_reason": validation_failure,
             "pump_continuation_method": continuation_info["method"],
             "pump_continuation_steps": continuation_info["steps"],
             "pump_continuation_reached_target": continuation_info["reached_target"],
@@ -1073,10 +1304,10 @@ class InProcessEngine:
         # ``force_gain`` runs the gain solve on the last-iterate pump waveform
         # even when Newton did not converge (above-threshold / fold region), so
         # the diagnostic column resume can see what the gain does past the wall.
-        if converged or force_gain:
+        if pump_valid or force_gain:
             logger.debug(
                 "engine_solve_point_gain_dispatch point=%s reason=%s",
-                point.index, "converged" if converged else "force_gain",
+                point.index, "converged" if pump_valid else "force_gain",
             )
             g, gain_timing, spectrum = self._gain(pump_dir, gain_dir, point.pump_freq_ghz)
             row.update(gain_timing)
@@ -1125,7 +1356,7 @@ class InProcessEngine:
         )
         # In force_gain mode return the last-iterate X regardless of convergence
         # so the caller can keep warm-starting up the column past the wall.
-        return row, (X if (converged or force_gain) else None)
+        return row, (X if (pump_valid or force_gain) else None)
 
     def solve_bridge(
         self, parent_X: np.ndarray, parent_current: float, parent_freq: float,
@@ -3132,6 +3363,23 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--harmonics", type=int, default=3,
                    help="Dense [1..H] harmonics; only used when --pump-mode-count is unset.")
     p.add_argument("--nt", type=int, default=40)
+    p.add_argument(
+        "--adaptive-harmonics", action=argparse.BooleanOptionalAction, default=True,
+        help=(
+            "For biased 3WM (enabled by default), promote a converged DC-inclusive pump basis when "
+            "the reconstructed residual remains above the harmonic gate. "
+            "Each promotion is warm-started and rebuilds the Schur partition. "
+            "Use --no-adaptive-harmonics only for diagnostic incomplete-basis runs."
+        ),
+    )
+    p.add_argument(
+        "--harmonic-enrichment-max", type=int, default=9,
+        help="Maximum positive harmonic used by --adaptive-harmonics.",
+    )
+    p.add_argument(
+        "--harmonic-enrichment-time-rel", type=float, default=1e-4,
+        help="Full reconstructed residual target for harmonic enrichment.",
+    )
     p.add_argument("--sidebands", type=int, default=6)
     p.add_argument("--gamma-nt", type=int, default=96)
     p.add_argument(
