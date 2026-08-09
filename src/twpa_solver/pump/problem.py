@@ -319,11 +319,19 @@ class FullPumpProblem:
             for q_idx, q in enumerate(modes_int):
                 K_k_minus_q = spectral.khat.get(k - q)
                 if K_k_minus_q is not None:
-                    acc = acc + K_k_minus_q @ V[q_idx]
+                    if q == 0:
+                        # Dynamic DC is a real-only waveform coefficient.  Its
+                        # perturbation is Re(V_0), so it contributes the
+                        # difference convolution once, not the positive-mode
+                        # conjugate pair used for q > 0.
+                        acc = acc + K_k_minus_q @ np.real(V[q_idx])
+                    else:
+                        acc = acc + K_k_minus_q @ V[q_idx]
 
-                K_k_plus_q = spectral.khat.get(k + q)
-                if K_k_plus_q is not None:
-                    acc = acc + K_k_plus_q @ np.conj(V[q_idx])
+                if q != 0:
+                    K_k_plus_q = spectral.khat.get(k + q)
+                    if K_k_plus_q is not None:
+                        acc = acc + K_k_plus_q @ np.conj(V[q_idx])
 
             JV[k_idx] = acc
 
@@ -335,13 +343,80 @@ class FullPumpProblem:
 
     def time_residual(self, X: np.ndarray, source_scale: float) -> np.ndarray:
         """Return the real residual synthesized from the harmonic blocks."""
+        return self._time_residual_on_grid(X, source_scale, self.grid)
+
+    def _time_residual_on_grid(
+        self, X: np.ndarray, source_scale: float, grid: HarmonicGrid
+    ) -> np.ndarray:
+        """Evaluate the reconstructed residual on a possibly denser grid."""
         lin = np.empty_like(X)
         for h in range(self.H):
             lin[h] = self._linear_blocks[h] @ X[h]
-        r = self.grid.synthesize(lin)
-        r = r + self.nonlinear_current_time(X)
-        r = r - self.source_time(source_scale)
+        r = grid.synthesize(lin)
+        psi_t = (self.BphiT @ grid.synthesize(X).T).T
+        psi_total_t = psi_t + self.dc_branch_flux[None, :]
+        i_t = self.branch.current(psi_total_t) - self.branch.current(
+            self.dc_branch_flux[None, :]
+        )
+        r = r + (self.Bphi @ i_t.T).T
+        source = np.zeros((grid.nt, self.n), dtype=float)
+        source[:, self.pump_node_index] = (
+            source_scale * self.pump_current_a * np.cos(grid.omega * grid.t)
+        )
+        r = r - source
         return np.asarray(r, dtype=float)
+
+    def residual_spectrum(
+        self,
+        X: np.ndarray,
+        source_scale: float,
+        *,
+        nt: int | None = None,
+        max_mode: int | None = None,
+    ) -> dict[str, np.ndarray | float]:
+        """Return the reconstructed residual spectrum, including omitted modes.
+
+        ``norms(..., compute_time_residual=True)`` is an RMS acceptance
+        diagnostic.  This method identifies where that residual lives so an
+        adaptive harmonic controller can promote the basis instead of treating
+        a high omitted harmonic as a physical branch failure.
+        """
+        current_max = int(np.max(self.grid.k))
+        sample_nt = int(nt) if nt is not None else max(self.grid.nt, 8 * (current_max + 1))
+        if sample_nt % 2:
+            sample_nt += 1
+        if sample_nt < 2 * current_max + 2:
+            sample_nt = 2 * current_max + 2
+        sample_grid = HarmonicGrid(
+            modes=np.asarray(self.grid.modes, dtype=int),
+            nt=sample_nt,
+            omega=self.grid.omega,
+        )
+        residual = self._time_residual_on_grid(X, source_scale, sample_grid)
+        limit = sample_nt // 2 - 1 if max_mode is None else int(max_mode)
+        if limit < 0:
+            raise ValueError("max_mode must be non-negative")
+        theta = sample_grid.omega * sample_grid.t
+        coefficients = np.empty((limit + 1, self.n), dtype=np.complex128)
+        for mode in range(limit + 1):
+            coefficients[mode] = np.mean(
+                residual * np.exp(-1j * mode * theta)[:, None], axis=0
+            )
+        weights = np.where(np.arange(limit + 1) == 0, 1.0, 2.0)
+        mode_abs = np.linalg.norm(coefficients, axis=1) * weights
+        source = np.zeros_like(residual)
+        source[:, self.pump_node_index] = (
+            source_scale * self.pump_current_a * np.cos(theta)
+        )
+        source_rms = float(np.linalg.norm(source.ravel()) / math.sqrt(source.size))
+        return {
+            "modes": np.arange(limit + 1, dtype=int),
+            "coefficients": coefficients,
+            "mode_abs": mode_abs,
+            "mode_rel": mode_abs / max(source_rms, 1e-30),
+            "source_rms": source_rms,
+            "nt": float(sample_nt),
+        }
 
     def norms(
         self,
@@ -471,6 +546,17 @@ class FullPumpProblem:
                 L = spectral.khat.get(k - q, zero)
                 if ki == qi:
                     L = L + self._linear_blocks[ki]
+                if q == 0:
+                    # V_0 is constrained to the real DC waveform.  Keep the
+                    # linear complex packing valid for diagnostics, but do not
+                    # add a second nonlinear contribution from conj(V_0).
+                    A = L
+                    B = (1j * self._linear_blocks[ki]) if ki == qi else zero
+                    rrr.append(A.real.tocsr())
+                    rri.append(B.real.tocsr())
+                    rir.append(A.imag.tocsr())
+                    rii.append(B.imag.tocsr())
+                    continue
                 P = spectral.khat.get(k + q, zero)
                 Lr, Li = L.real, L.imag
                 Pr, Pi = P.real, P.imag

@@ -276,7 +276,17 @@ class SchurReducedProblem:
         while producing the identical exact preconditioner (GMRES converges in
         one iteration). Requires pypardiso for the full speedup; falls back to
         SuperLU otherwise (still benefits from assembly reuse).
+
+        The cached scatter implementation historically assumed every mode was a
+        positive phasor.  Use the explicit assembly path when dynamic DC is
+        present until the cached pattern has a dedicated real-only DC block.
+        This preserves the exact operator and avoids silently preconditioning
+        the wrong Newton system.
         """
+        if 0 in self.mode_keys:
+            return self.assemble_real_coupled_preconditioner(
+                self.spectral_tangent_state(tangent)
+            )
         from .fast_coupled import FastCoupledPreconditioner
 
         fc = getattr(self.part, "_fast_coupled", None)
@@ -320,6 +330,18 @@ class SchurReducedProblem:
                     L = spectral.khat.get(k - q, zero)
                 if ki == qi:
                     L = L + self.part.schur[ki]
+                if q == 0:
+                    # Mode 0 is a real DC waveform coefficient, not an
+                    # independent positive-frequency phasor.  Its nonlinear
+                    # Jacobian contribution is Khat[k] once for Re(V_0);
+                    # only the diagonal linear block acts on Im(V_0).
+                    A = L
+                    B = (1j * self.part.schur[ki]) if ki == qi else zero
+                    rrr.append(A.real.tocsr())
+                    rri.append(B.real.tocsr())
+                    rir.append(A.imag.tocsr())
+                    rii.append(B.imag.tocsr())
+                    continue
                 P = zero
                 if lsum is None or (k + q) <= lsum:
                     P = spectral.khat.get(k + q, zero)
