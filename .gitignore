@@ -47,6 +47,11 @@ outputs/
 .hybrid_outputs/
 /.pytest*/
 /pytest-of-*/
+/g1_current_*/
+/h1_*/
+/h2_*/
+/h3_*/
+/tmptw*/
 diagnostics/
 plots/
 logs/
