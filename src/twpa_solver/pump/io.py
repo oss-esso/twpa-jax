@@ -13,13 +13,14 @@ from twpa_solver.pump.solver import StepReport
 def summarize_solution(problem: FullPumpProblem, X: np.ndarray) -> dict[str, float]:
     x_t = problem.grid.synthesize(X)
     psi_t = problem.branch_flux_time(X)
-    i_t = problem.branch.current(psi_t)
+    psi_total_t = psi_t + problem.dc_branch_flux[None, :]
+    i_t = problem.branch.current(psi_total_t)
 
     out = {
         "x_rms": float(np.sqrt(np.mean(x_t * x_t))),
         "x_max_abs": float(np.max(np.abs(x_t))),
-        "branch_psi_rms": float(np.sqrt(np.mean(psi_t * psi_t))),
-        "branch_psi_max_abs": float(np.max(np.abs(psi_t))),
+        "branch_psi_rms": float(np.sqrt(np.mean(psi_total_t * psi_total_t))),
+        "branch_psi_max_abs": float(np.max(np.abs(psi_total_t))),
         "branch_i_rms": float(np.sqrt(np.mean(i_t * i_t))),
         "branch_i_max_abs": float(np.max(np.abs(i_t))),
     }

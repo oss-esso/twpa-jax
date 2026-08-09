@@ -265,6 +265,26 @@ def resolve_pump_basis(
     return basis
 
 
+def with_dynamic_dc(basis: PumpBasis) -> PumpBasis:
+    """Return ``basis`` with an explicit dynamic mode-0 coefficient.
+
+    The positive-phasor policies intentionally retain their historical mode
+    lists.  Flux-biased production workflows can opt into this transformation
+    without changing the policy semantics or the source mode.
+    """
+    if 0 in basis.modes:
+        return basis
+    return PumpBasis(
+        modes=[0, *basis.modes],
+        policy=basis.policy,
+        omega_p=basis.omega_p,
+        basis=basis.basis,
+        real_reconstruction_factor=basis.real_reconstruction_factor,
+        phase_convention=basis.phase_convention,
+        source_mode=basis.source_mode,
+    )
+
+
 def load_pump_basis_from_solution(
     pump_dir: str | Path,
     fallback_omega_p: float | None = None,

@@ -161,8 +161,8 @@ def test_auto_jc_rejects_multi_pump_after_saved_summary_nesting() -> None:
 def test_pump_basis_validation() -> None:
     with pytest.raises(ValueError):
         pb.PumpBasis(modes=[1, 1, 3], policy="x", omega_p=1.0)
-    with pytest.raises(ValueError):
-        pb.PumpBasis(modes=[0, 1], policy="x", omega_p=1.0)
+    dc_basis = pb.PumpBasis(modes=[0, 1], policy="x", omega_p=1.0)
+    assert dc_basis.modes == [0, 1]
     with pytest.raises(ValueError):
         pb.PumpBasis(modes=[3, 5], policy="x", omega_p=1.0, source_mode=1)
 

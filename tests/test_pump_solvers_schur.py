@@ -20,6 +20,14 @@ import pytest
 import scipy.sparse as sp
 import scipy.sparse.linalg as spla
 
+from twpa_solver.pump.basis import PumpBasis, with_dynamic_dc
+from twpa_solver.pump.problem import (
+    FullPumpProblem as ProductionPumpProblem,
+    HarmonicGrid as ProductionHarmonicGrid,
+    JosephsonBranchArray as ProductionJosephsonBranchArray,
+    pack_complex as production_pack_complex,
+)
+
 EXP = Path(__file__).resolve().parents[1] / "experiments"
 if str(EXP) not in sys.path:
     sys.path.insert(0, str(EXP))
@@ -69,6 +77,69 @@ def _settings(precond: str) -> exp08.NewtonKrylovSettings:
         preconditioner=precond, compute_time_residual=False, verbose=False,
         continuation_predictor="none", jvp_mode="aft",
     )
+
+
+def _production_zero_mode_problem(modes: list[int]) -> ProductionPumpProblem:
+    C = sp.eye(2, format="csr", dtype=np.float64) * 0.7
+    G = sp.eye(2, format="csr", dtype=np.float64) * 0.03
+    K = sp.csr_matrix(np.array([[2.0, -0.4], [-0.4, 1.5]], dtype=np.float64))
+    Bphi = sp.csr_matrix(np.array([[1.0], [-1.0]], dtype=np.float64))
+    branch = ProductionJosephsonBranchArray(Ic=np.array([0.8]), phi0=1.0)
+    grid = ProductionHarmonicGrid(np.asarray(modes, dtype=int), nt=16, omega=0.7)
+    return ProductionPumpProblem(
+        C=C, G=G, K=K, Bphi=Bphi, branch=branch, grid=grid,
+        pump_node_index=0, pump_current_a=0.2,
+        dc_branch_flux=np.array([0.31]),
+    )
+
+
+def test_production_dynamic_dc_basis_preserves_source_mode() -> None:
+    basis = PumpBasis(modes=[1, 2, 3], policy="dense_real", omega_p=2.0)
+
+    promoted = with_dynamic_dc(basis)
+
+    assert promoted.modes == [0, 1, 2, 3]
+    assert promoted.source_mode == 1
+    assert with_dynamic_dc(promoted) is promoted
+
+
+def test_production_spectral_jvp_matches_aft_with_dynamic_dc() -> None:
+    problem = _production_zero_mode_problem([0, 1, 2])
+    rng = np.random.default_rng(4)
+    X = rng.standard_normal((3, 2)) + 1j * rng.standard_normal((3, 2))
+    V = rng.standard_normal((3, 2)) + 1j * rng.standard_normal((3, 2))
+    tangent = problem.tangent_state(X)
+    spectral = problem.spectral_tangent_state(tangent)
+
+    np.testing.assert_allclose(
+        problem.jvp_coeffs_with_spectral_tangent(V, spectral),
+        problem.jvp_coeffs_with_tangent(V, tangent),
+        rtol=1e-12, atol=1e-12,
+    )
+
+
+def test_production_real_coupled_jacobian_matches_aft_with_dynamic_dc() -> None:
+    problem = _production_zero_mode_problem([0, 1, 2])
+    rng = np.random.default_rng(7)
+    X = rng.standard_normal((3, 2)) + 1j * rng.standard_normal((3, 2))
+    V = rng.standard_normal((3, 2)) + 1j * rng.standard_normal((3, 2))
+    tangent = problem.tangent_state(X)
+    spectral = problem.spectral_tangent_state(tangent)
+
+    expected = production_pack_complex(problem.jvp_coeffs_with_tangent(V, tangent))
+    actual = problem.real_coupled_jacobian(spectral) @ production_pack_complex(V)
+
+    np.testing.assert_allclose(actual, expected, rtol=1e-12, atol=1e-12)
+
+
+def test_production_residual_spectrum_includes_omitted_modes() -> None:
+    problem = _production_zero_mode_problem([0, 1])
+    spectrum = problem.residual_spectrum(
+        np.zeros((2, 2), dtype=np.complex128), 1.0, nt=16, max_mode=4
+    )
+
+    np.testing.assert_array_equal(spectrum["modes"], np.arange(5))
+    assert spectrum["mode_rel"].shape == (5,)
 
 
 # --------------------------------------------------------------------------- #
