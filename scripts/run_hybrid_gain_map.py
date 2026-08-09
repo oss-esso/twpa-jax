@@ -45,8 +45,6 @@ def build_args(ns: argparse.Namespace) -> argparse.Namespace:
         "--pump-mode-count", str(ns.pump_mode_count), "--nt", str(ns.nt),
         "--pump-mode-policy", ns.pump_mode_policy,
         "--mixing-order", str(ns.mixing_order), "--harmonics", str(ns.harmonics),
-        "--pump-port", str(ns.pump_port), "--source-port", str(ns.source_port),
-        "--out-port", str(ns.out_port),
         "--signal-detuning-mhz", str(ns.signal_detuning_mhz),
         "--no-signal-spectrum",
         "--signal-offset-count-per-side", str(ns.signal_offset_count_per_side),
@@ -58,9 +56,30 @@ def build_args(ns: argparse.Namespace) -> argparse.Namespace:
         "--inproc-max-newton", str(ns.inproc_max_newton),
         "--inproc-fail-fast", "--overwrite", "--log-level", "WARNING",
     ]
+    for flag, value in (("--pump-port", ns.pump_port),
+                        ("--source-port", ns.source_port),
+                        ("--out-port", ns.out_port)):
+        if value is not None:
+            argv.extend([flag, str(value)])
     if ns.dc_branch_flux_over_phi0 is not None:
         argv.extend(["--dc-branch-flux-over-phi0", str(ns.dc_branch_flux_over_phi0)])
     parsed = run_gain_map.parse_args(argv)
+    runtime_circuit = run_gain_map.load_circuit(parsed.circuit_dir)
+    roles = run_gain_map.resolve_port_roles(
+        runtime_circuit,
+        pump_port=parsed.pump_port,
+        source_port=parsed.source_port,
+        out_port=parsed.out_port,
+    )
+    for role, port in roles.items():
+        setattr(parsed, role, port)
+    parsed.mixing_order = run_gain_map.resolve_mixing_order(
+        parsed.mixing_order,
+        dc_current_a=parsed.dc_current_a,
+        dc_branch_flux_over_phi0=parsed.dc_branch_flux_over_phi0,
+        dc_solution=parsed.dc_solution,
+        design_meta=runtime_circuit.summary,
+    )
     if ns.signal_ghz is not None:
         parsed.signal_ghz = float(ns.signal_ghz)
     parsed.workflow_mode = "slow"
@@ -341,11 +360,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--attenuation-db", type=float, default=0.0)
     parser.add_argument("--pump-mode-count", type=int, default=10)
     parser.add_argument("--pump-mode-policy", default="positive_odd_jc")
-    parser.add_argument("--mixing-order", type=int, choices=(3, 4), default=4)
+    parser.add_argument("--mixing-order", choices=("auto", "3", "4"), default="auto")
     parser.add_argument("--harmonics", type=int, default=3)
-    parser.add_argument("--pump-port", type=int, default=4)
-    parser.add_argument("--source-port", type=int, default=1)
-    parser.add_argument("--out-port", type=int, default=2)
+    parser.add_argument("--pump-port", type=int, default=None)
+    parser.add_argument("--source-port", type=int, default=None)
+    parser.add_argument("--out-port", type=int, default=None)
     parser.add_argument("--dc-branch-flux-over-phi0", type=float, default=None)
     parser.add_argument("--signal-ghz", type=float, default=None)
     parser.add_argument("--nt", type=int, default=40)

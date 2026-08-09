@@ -95,6 +95,7 @@ from twpa_solver.ports import (  # noqa: E402
     port_available_power_w,
     port_current_from_power_a,
 )
+from twpa_solver.port_roles import resolve_mixing_order, resolve_port_roles  # noqa: E402
 
 
 # =============================================================================
@@ -693,6 +694,21 @@ class InProcessEngine:
         self.args = args
         self.ipm08 = load_circuit(args.circuit_dir)
         self.ipm09 = load_circuit(args.circuit_dir)
+        roles = resolve_port_roles(
+            self.ipm08,
+            pump_port=getattr(args, "pump_port", None),
+            source_port=getattr(args, "source_port", None),
+            out_port=getattr(args, "out_port", None),
+        )
+        for role, port in roles.items():
+            setattr(args, role, port)
+        args.mixing_order = resolve_mixing_order(
+            getattr(args, "mixing_order", "auto"),
+            dc_current_a=getattr(args, "dc_current_a", 0.0),
+            dc_branch_flux_over_phi0=getattr(args, "dc_branch_flux_over_phi0", None),
+            dc_solution=getattr(args, "dc_solution", None),
+            design_meta=self.ipm08.summary,
+        )
         if args.loss_model == "auto":
             args.loss_model = default_loss_model_for(self.ipm09)
         self.branch = make_branch_law(self.ipm08)
@@ -3117,15 +3133,18 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--skip-baselines", action="store_true",
                    help="Skip off/pumpdiag baseline solves (schur backend); gain_db stays valid.")
 
-    p.add_argument("--pump-port", type=int, default=4)
-    p.add_argument("--source-port", type=int, default=1)
-    p.add_argument("--out-port", type=int, default=2)
+    p.add_argument("--pump-port", type=int, default=None,
+                   help="Pump port; defaults to port 4 when present, otherwise the first available port.")
+    p.add_argument("--source-port", type=int, default=None,
+                   help="Signal input port; defaults to port 1 when present, otherwise the first available port.")
+    p.add_argument("--out-port", type=int, default=None,
+                   help="Signal output port; defaults to port 2 when present, otherwise the source port.")
     # JTWPA (unbiased 4WM) pump basis: JC odd modes [1,3,...,2K-1], K=10 -> nt>=40.
     p.add_argument("--pump-mode-policy", default="positive_odd_jc")
     p.add_argument(
-        "--mixing-order", type=int, choices=(3, 4), default=4,
-        help="Parametric mixing order. 3 selects dense pump harmonics and "
-             "idler_m=-1; 4 preserves the legacy idler_m=-2 path.",
+        "--mixing-order", choices=("auto", "3", "4"), default="auto",
+        help="Parametric mixing order. auto selects 3WM when external DC bias "
+             "is present and 4WM otherwise; explicit 3/4 override it.",
     )
     p.add_argument("--pump-mode-count", type=int, default=10,
                    help="K for positive_odd_jc -> modes [1,3,...,2K-1]. Set with the basis policy.")
@@ -3491,6 +3510,24 @@ def run_frequency_chunks(
 def main(argv: list[str] | None = None) -> int:
     raw_argv = sys.argv[1:] if argv is None else list(argv)
     args = parse_args(raw_argv)
+    # Resolve roles and mixing order before building points or spawning chunk
+    # workers.  InProcessEngine repeats this defensively for direct callers.
+    runtime_circuit = load_circuit(args.circuit_dir)
+    roles = resolve_port_roles(
+        runtime_circuit,
+        pump_port=args.pump_port,
+        source_port=args.source_port,
+        out_port=args.out_port,
+    )
+    for role, port in roles.items():
+        setattr(args, role, port)
+    args.mixing_order = resolve_mixing_order(
+        args.mixing_order,
+        dc_current_a=args.dc_current_a,
+        dc_branch_flux_over_phi0=args.dc_branch_flux_over_phi0,
+        dc_solution=args.dc_solution,
+        design_meta=runtime_circuit.summary,
+    )
     if args.frequency_workers < 1:
         raise ValueError("--frequency-workers must be >= 1")
     if args.frequency_workers > 1 and args.frequency_chunk_size > 0:
