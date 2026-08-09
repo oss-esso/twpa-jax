@@ -1,0 +1,11 @@
+{
+  "nodes": 2,
+  "jj_branches": 1,
+  "C_nnz": 2,
+  "G_nnz": 2,
+  "K_nnz": 2,
+  "Bphi_nnz": 0,
+  "ports": {},
+  "metadata": {},
+  "branch_law": {}
+}

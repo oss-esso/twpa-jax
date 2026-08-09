@@ -9,6 +9,8 @@ import numpy as np
 import scipy.sparse as sp
 import scipy.sparse.linalg as spla
 
+from twpa_solver.core.linear import dynamic_block_from_parts
+
 logger = logging.getLogger(__name__)
 
 @dataclass
@@ -70,6 +72,7 @@ class HarmonicGrid:
 
 @dataclass
 class JosephsonBranchArray:
+    """Legacy provenance wrapper; production drivers must use ``make_branch_law``."""
     Ic: np.ndarray
     phi0: float
 
@@ -113,11 +116,15 @@ class FullPumpProblem:
     pump_node_index: int
     pump_current_a: float
     dc_branch_flux: np.ndarray | None = None
+    environment: Any | None = None
     source_mode: int = 1
     use_real_capacitance: bool = False
+    loss_model: str = "current_complex_c"
     def __post_init__(self) -> None:
         self.C = self.C.tocsr()
         if self.use_real_capacitance:
+            if np.iscomplexobj(self.C.data) and np.any(self.C.data.imag != 0.0):
+                logger.warning("use_real_capacitance discards non-zero capacitance loss")
             self.C = self.C.real.astype(np.complex128).tocsr()
         self.G = self.G.tocsr()
         self.K = self.K.tocsr()
@@ -127,6 +134,11 @@ class FullPumpProblem:
         self.n = self.C.shape[0]
         self.H = self.grid.harmonics
         self.nb = self.Bphi.shape[1]
+        self.metadata = {
+            "loss_discarded_by_use_real_capacitance": bool(
+                self.use_real_capacitance
+            ),
+        }
 
         # Pump current source drives the fundamental pump mode (k == source_mode).
         modes_int = [int(round(k)) for k in self.grid.k]
@@ -158,14 +170,18 @@ class FullPumpProblem:
 
     def _build_linear_blocks(self) -> list[sp.csc_matrix]:
         blocks: list[sp.csc_matrix] = []
-        Cc = self.C.astype(np.complex128)
-        Gc = self.G.astype(np.complex128)
-        Kc = self.K.astype(np.complex128)
-
         for k in self.grid.k:
             wk = float(k) * self.grid.omega
-            Dk = Kc + (-wk * wk) * Cc + (1j * wk) * Gc
-            blocks.append(Dk.tocsc())
+            block = dynamic_block_from_parts(
+                self.C, self.G, self.K, wk, loss_model=self.loss_model,
+            )
+            if self.environment is not None:
+                correction = self.environment.admittance(wk)
+                block = block + sp.csr_matrix(
+                    (np.asarray([correction]), ([self.pump_node_index], [self.pump_node_index])),
+                    shape=block.shape,
+                )
+            blocks.append(block.tocsc())
 
         logger.debug("linear_block_built count=%s omega=%s", len(blocks), self.grid.omega)
         return blocks
@@ -314,13 +330,11 @@ class FullPumpProblem:
         return self.jvp_coeffs_with_tangent(V, tangent)
 
     def time_residual(self, X: np.ndarray, source_scale: float) -> np.ndarray:
-        x_t = self.grid.synthesize(X)
-        dx_t = self.grid.synthesize_derivative(X, order=1)
-        ddx_t = self.grid.synthesize_derivative(X, order=2)
-
-        r = (self.C @ ddx_t.T).T
-        r = r + (self.G @ dx_t.T).T
-        r = r + (self.K @ x_t.T).T
+        """Return the real residual synthesized from the harmonic blocks."""
+        lin = np.empty_like(X)
+        for h in range(self.H):
+            lin[h] = self._linear_blocks[h] @ X[h]
+        r = self.grid.synthesize(lin)
         r = r + self.nonlinear_current_time(X)
         r = r - self.source_time(source_scale)
         return np.asarray(r, dtype=float)

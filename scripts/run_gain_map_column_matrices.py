@@ -217,7 +217,7 @@ class MatrixTracer:
                 it_s = f"{int(it):02d}" if isinstance(it, int) else "pre"
                 lam_s = f"{float(lam):.6f}" if isinstance(lam, (int, float)) else "na"
                 return f"newton{it_s}_lambda{lam_s}"
-            f = f.f_back
+            f = getattr(f, "f_back", None)
         return "newton_unscoped"
 
     def _save(self, value: Any, frame, line: int, name: str) -> None:

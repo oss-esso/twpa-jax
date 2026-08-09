@@ -25,10 +25,18 @@ For a large warm-only map, ``--gate-spotcheck N`` recomputes ``N`` points cold
 after the warm pass and folds their gain drift into the gate, so the big run is
 still guarded without paying for a full cold map.
 
-Pump current is derived from delivered power with the JC-style convention
-``I_peak = sqrt(2 * P_W / Z0)``, after subtracting the line loss. The loss
-defaults to the measured ``loss_A10`` model ``c + a*sqrt(f) + b*f`` (dB, f in
-GHz); pass a flat ``--attenuation-db`` to override it.
+Pump current is derived from delivered power after subtracting the line
+loss. Every drive port is an ideal current source in parallel with Z0, a
+matched wave port (``I`` is the incident wave's own current amplitude), so
+the default ``--power-convention legacy_traveling_wave`` inverts
+``P_avail = I_peak^2 * Z0 / 2``, i.e. ``I_peak = sqrt(2 * P_W / Z0)`` (see
+``twpa_solver.ports``). ``--power-convention norton`` selects the alternate
+Norton-generator reading (``I_peak = sqrt(8 * P_W / Z0)``) for comparison --
+for a fixed dBm the Norton current is half the legacy one, so a map
+regenerated with the same dBm bounds under a different convention is a
+different physical sweep. The loss defaults to the measured ``loss_A10``
+model ``c + a*sqrt(f) + b*f`` (dB, f in GHz); pass a flat ``--attenuation-db``
+to override it.
 """
 
 from __future__ import annotations
@@ -36,10 +44,12 @@ from __future__ import annotations
 import argparse
 import os
 import csv
+import dataclasses
 import gc
 import json
 import logging
 import math
+import re
 import shutil
 import subprocess
 import sys
@@ -56,13 +66,23 @@ logger = logging.getLogger(__name__)
 
 ROOT = Path(__file__).resolve().parents[1]
 
+_THEMIS_FREQ_RE = re.compile(r"105C5_([0-9.]+)GHz\.npy$")
+
 # Legacy subprocess paths are kept only for compatibility. The production
 # default is the in-process package path below.
 EXP08 = "experiments/exp08_full_ipm_pump_solve.py"
 EXP09 = "experiments/exp09_full_ipm_gain_from_pump.py"
 
 from twpa_solver import default_loss_model  # noqa: E402
-from twpa_solver.core import load_circuit  # noqa: E402
+from twpa_solver.loss import signal_loss_model  # noqa: E402
+from twpa_solver.map import peak_rss_bytes, run_isolated_jobs  # noqa: E402
+from twpa_solver.core import (  # noqa: E402
+    default_loss_model_for,
+    kinetic_dc_branch_flux,
+    load_circuit,
+)
+from twpa_solver.core.nonlinear import make_branch_law  # noqa: E402
+from twpa_solver.signal.gamma import load_dc_branch_flux  # noqa: E402
 import twpa_solver.pump.hb as exp08  # noqa: E402
 import twpa_solver.signal as exp09  # noqa: E402
 import twpa_solver.pump.basis as pump_basis  # noqa: E402
@@ -70,22 +90,29 @@ from twpa_solver.pump.backends.schur_operators import (  # noqa: E402
     SchurReducedProblem,
     build_schur_problem,
 )
+from twpa_solver.ports import (  # noqa: E402
+    port_available_power_w,
+    port_current_from_power_a,
+)
 
 
 # =============================================================================
 # Units / helpers
 # =============================================================================
 
-def dbm_to_peak_current_a(power_dbm: float, *, attenuation_db: float, z0_ohm: float) -> float:
+def dbm_to_peak_current_a(
+    power_dbm: float, *, attenuation_db: float, z0_ohm: float,
+    convention: str = "legacy_traveling_wave",
+) -> float:
     logger.debug(
-        "dbm_to_peak_current_a_start power_dbm=%s attenuation_db=%s z0_ohm=%s",
-        power_dbm, attenuation_db, z0_ohm,
+        "dbm_to_peak_current_a_start power_dbm=%s attenuation_db=%s z0_ohm=%s convention=%s",
+        power_dbm, attenuation_db, z0_ohm, convention,
     )
     if z0_ohm <= 0.0:
         raise ValueError("z0_ohm must be positive")
     source_dbm = float(power_dbm) - float(attenuation_db)
     power_w = 1.0e-3 * 10.0 ** (source_dbm / 10.0)
-    current_a = math.sqrt(2.0 * power_w / float(z0_ohm))
+    current_a = port_current_from_power_a(power_w, z0_ohm, convention=convention)
     logger.debug(
         "dbm_to_peak_current_a_result source_dbm=%s power_w=%s current_a=%s",
         source_dbm, power_w, current_a,
@@ -96,12 +123,14 @@ def dbm_to_peak_current_a(power_dbm: float, *, attenuation_db: float, z0_ohm: fl
 def peak_current_to_power_dbm(current_a: float, freq_ghz: float, args: argparse.Namespace) -> float:
     """Inverse of ``dbm_to_peak_current_a``: on-chip peak current -> pump dBm.
 
-    ``I = sqrt(2 P_W / Z0)`` with ``P_W = 1e-3 * 10^((dBm - att)/10)``, so
-    ``dBm = 10*log10((I^2 Z0 / 2) / 1e-3) + att(freq)``.
+    Available power follows ``args.power_convention`` (legacy_traveling_wave
+    default: ``P_avail = I^2 Z0 / 2``); see ``twpa_solver.ports``.
     """
     if current_a <= 0.0:
         return float("-inf")
-    power_w = current_a * current_a * float(args.z0_ohm) / 2.0
+    power_w = port_available_power_w(
+        current_a, float(args.z0_ohm), convention=args.power_convention
+    )
     source_dbm = 10.0 * math.log10(power_w / 1.0e-3)
     result = source_dbm + attenuation_db_for(freq_ghz, args)
     logger.debug(
@@ -130,6 +159,14 @@ def attenuation_db_for(freq_ghz: float, args: argparse.Namespace) -> float:
     return att
 
 
+def signal_attenuation_db_for(freq_ghz: float, args: argparse.Namespace) -> float:
+    """Signal-line attenuation used when referring measured signal powers."""
+    override = getattr(args, "signal_attenuation_db", None)
+    if override is not None:
+        return float(override)
+    return float(signal_loss_model().attenuation_db(float(freq_ghz)))
+
+
 def signal_ghz_for(pump_freq_ghz: float, args: argparse.Namespace) -> float:
     """Readout signal frequency for a map cell.
 
@@ -143,10 +180,10 @@ def signal_ghz_for(pump_freq_ghz: float, args: argparse.Namespace) -> float:
             pump_freq_ghz, args.signal_ghz,
         )
         return float(args.signal_ghz)
-    result = float(pump_freq_ghz) - float(args.signal_detuning_mhz) / 1000.0
+    result = float(pump_freq_ghz) - float(getattr(args, "signal_detuning_mhz", 100.0)) / 1000.0
     logger.debug(
         "signal_ghz_for pump_freq_ghz=%s detuning_mhz=%s -> signal_ghz=%s",
-        pump_freq_ghz, args.signal_detuning_mhz, result,
+        pump_freq_ghz, getattr(args, "signal_detuning_mhz", 100.0), result,
     )
     return result
 
@@ -471,6 +508,12 @@ def run_point(
     }
     row.update(pump_metrics(pump_report))
     row.update(gain_metrics(gain_report))
+    signal_frequency = row.get("signal_ghz")
+    row["signal_attenuation_db"] = signal_attenuation_db_for(
+        float(signal_frequency) if signal_frequency is not None
+        else signal_ghz_for(point.pump_freq_ghz, args),
+        args,
+    )
     return row
 
 
@@ -614,7 +657,17 @@ class InProcessEngine:
         self.args = args
         self.ipm08 = load_circuit(args.circuit_dir)
         self.ipm09 = load_circuit(args.circuit_dir)
-        self.branch = exp08.JosephsonBranchArray(Ic=self.ipm08.Ic, phi0=self.ipm08.phi0)
+        if args.loss_model == "auto":
+            args.loss_model = default_loss_model_for(self.ipm09)
+        self.branch = make_branch_law(self.ipm08)
+        if getattr(args, "dc_solution", None):
+            self.dc_branch_flux = load_dc_branch_flux(args.dc_solution, self.ipm08)
+        else:
+            self.dc_branch_flux = kinetic_dc_branch_flux(
+                self.ipm08, getattr(args, "dc_current_a", 0.0)
+            )
+        if self.dc_branch_flux is None:
+            self.dc_branch_flux = np.zeros(self.ipm08.branch_count, dtype=float)
         self.pump_idx = self.ipm08.port_to_index[args.pump_port]
         self.source_idx = self.ipm09.port_to_index[args.source_port]
         self.out_idx = self.ipm09.port_to_index[args.out_port]
@@ -686,6 +739,8 @@ class InProcessEngine:
             C=self.ipm08.C, G=self.ipm08.G, K=self.ipm08.K, Bphi=self.ipm08.Bphi,
             branch=self.branch, grid=grid, pump_node_index=self.pump_idx,
             pump_current_a=current_a, source_mode=basis.source_mode,
+            loss_model=default_loss_model_for(self.ipm08),
+            dc_branch_flux=self.dc_branch_flux,
         )
         logger.debug(
             "engine_build_problem_complete freq_ghz=%s omega=%s modes=%r "
@@ -921,6 +976,7 @@ class InProcessEngine:
             "pump_current_a": injected,
             "pump_current_ratio_ic_median": injected / self.ic_median,
             "pump_backend": a.inproc_pump_backend,
+            "pump_solution_dtype": getattr(a, "pump_solution_dtype", "float32"),
         }
         t_write = time.perf_counter()
         summary = exp08.summarize_solution(full_problem, X_full)
@@ -1003,10 +1059,23 @@ class InProcessEngine:
         else:
             logger.debug("engine_solve_point_gain_skipped point=%s pump_not_converged", point.index)
 
+        row["signal_attenuation_db"] = signal_attenuation_db_for(
+            float(row["signal_ghz"])
+            if row.get("signal_ghz") is not None
+            else signal_ghz_for(point.pump_freq_ghz, a),
+            a,
+        )
         row["status"] = "PASS" if (row["pump_status"] == "VALID_CONVERGED"
                                    and row["gain_status"] == "VALID_SOLVED") else "ERROR"
         row["elapsed_s"] = time.perf_counter() - t0
         row["pump_dir"] = str(pump_dir)
+        if getattr(a, "compact_output", False):
+            # The continuation state is retained in memory by the column
+            # runner.  Once gain has been evaluated, ordinary map points only
+            # need scalar telemetry; retaining every full X dominates disk
+            # usage and is not required for a fresh restart.
+            (pump_dir / "pump_solution.npz").unlink(missing_ok=True)
+            row["compact_state_discarded"] = True
         logger.debug(
             "engine_solve_point_end point=%s status=%s pump_status=%s gain_status=%s elapsed_s=%.6f",
             point.index, row["status"], row["pump_status"], row["gain_status"], row["elapsed_s"],
@@ -1145,6 +1214,111 @@ class InProcessEngine:
             return guess, info
         return None, info
 
+    def solve_arclength_forward(
+        self,
+        freq_ghz: float,
+        from_X: np.ndarray,
+        from_current: float,
+        to_current: float,
+        *,
+        ds: float = 0.01,
+        max_steps: int = 150,
+        max_steps_after_fold: int | None = 30,
+        deadline_s: float = 60.0,
+    ) -> tuple[np.ndarray | None, dict[str, Any]]:
+        """Local pseudo-arclength continuation from one converged state.
+
+        Milestone G0 (fold_plan.md) recovery tier 3: unlike ``solve_bridge``
+        (physical-parameter Newton march, no fold awareness) and unlike the
+        cold ``solve_arclength`` continuation option in ``solve_point``
+        (starts from ``X=0``, ``mu=0`` every time), this starts the bordered
+        corrector directly at the last converged point (``from_X``,
+        ``mu0=from_current/to_current``) and marches to ``target_mu=1.0``
+        (``i_ref=to_current``, so ``k=1`` -- ``solve_arclength_mu`` reduces
+        to ``solve_arclength`` exactly). ``solve_arclength_mu`` already stops
+        as soon as ``target_mu`` is reached, so this needs no separate
+        bracket+Newton step -- "terminate immediately once the target is
+        reached" is the underlying corrector's own behavior. Bounded
+        ``max_steps``/``max_steps_after_fold``/``deadline_s`` keep this a
+        LOCAL recovery attempt, not a full branch trace.
+        """
+        full_problem, _basis, _omega = self._build_problem(freq_ghz, to_current)
+        solve_problem = self._make_solve_problem(full_problem, freq_ghz)
+        solver = exp08.HarmonicNewtonKrylovSolver(self._settings())
+        mu0 = from_current / to_current
+        X_final, mu_final, info = solver.solve_arclength_mu(
+            solve_problem, from_X, mu0, i_ref=to_current, target_mu=1.0,
+            ds=ds, max_steps=max_steps, max_wall_s=deadline_s,
+            rescale_every=5, max_steps_after_fold=max_steps_after_fold,
+            step_control="adaptive", refine_fold=True,
+        )
+        info["mu_final"] = mu_final
+        if info.get("reached_target"):
+            return X_final, info
+        return None, info
+
+    def solve_frequency_substep(
+        self,
+        from_freq_ghz: float,
+        to_freq_ghz: float,
+        current_a: float,
+        from_X: np.ndarray,
+        *,
+        init_step_ghz: float = 0.01,
+        min_step_ghz: float = 0.0005,
+        deadline_s: float = 60.0,
+    ) -> tuple[np.ndarray | None, dict[str, Any]]:
+        """Adaptive natural-parameter continuation along frequency, fixed power.
+
+        Milestone G0 recovery tier 4: mirrors ``solve_power_substep`` exactly
+        (warm-started full-scale Newton per micro-step, grows x1.5 on
+        success, halves on failure, ``step_floor`` when it must shrink below
+        ``min_step_ghz``) but steps ``freq_ghz`` linearly at fixed
+        ``current_a`` instead of stepping current geometrically at fixed
+        frequency -- the two axes of the map are physically different
+        (dispersion vs. drive amplitude), so frequency steps additively
+        rather than in dB.
+        """
+        info: dict[str, Any] = {
+            "reached_target": False, "substeps": 0, "min_step_ghz": init_step_ghz,
+            "terminal_reason": "", "last_freq_ghz": from_freq_ghz,
+        }
+        if from_X is None or from_freq_ghz == to_freq_ghz:
+            info["terminal_reason"] = "noop"
+            return None, info
+        solver = exp08.HarmonicNewtonKrylovSolver(self._settings())
+        direction = 1.0 if to_freq_ghz > from_freq_ghz else -1.0
+        total = abs(to_freq_ghz - from_freq_ghz)
+        t0 = time.perf_counter()
+        guess = from_X
+        done = 0.0
+        step = min(init_step_ghz, total)
+        while done < total - 1e-12:
+            if time.perf_counter() - t0 > deadline_s:
+                info["terminal_reason"] = "deadline"
+                break
+            trial_done = min(done + step, total)
+            trial_freq = from_freq_ghz + direction * trial_done
+            prob, _basis, _omega = self._build_problem(trial_freq, current_a)
+            solve_prob = self._make_solve_problem(prob, trial_freq)
+            X, report = solver.solve_one(solve_prob, guess, 1.0)
+            info["substeps"] += 1
+            if report.converged:
+                guess, done = X, trial_done
+                info["last_freq_ghz"] = from_freq_ghz + direction * done
+                step = min(init_step_ghz, step * 1.5)
+            else:
+                step *= 0.5
+                info["min_step_ghz"] = min(info["min_step_ghz"], step)
+                if step < min_step_ghz:
+                    info["terminal_reason"] = "step_floor"
+                    break
+        if done >= total - 1e-12:
+            info["reached_target"] = True
+            info["terminal_reason"] = "reached"
+            return guess, info
+        return None, info
+
     def trace_column_arclength(
         self,
         freq_ghz: float,
@@ -1199,7 +1373,7 @@ class InProcessEngine:
         t0 = time.perf_counter()
         gamma_hat = exp09.compute_gamma_hat(
             circuit=self.ipm09, pump=pump, max_ell=max_ell, gamma_nt=a.gamma_nt,
-            dc_branch_flux=None,
+            dc_branch_flux=self.dc_branch_flux,
         )
         gamma_runtime_s = time.perf_counter() - t0
         logger.debug("gain_gamma_hat_complete n_coeffs=%d runtime_s=%.6f", len(gamma_hat), gamma_runtime_s)
@@ -1208,7 +1382,7 @@ class InProcessEngine:
         khat_runtime_s = time.perf_counter() - t0
         logger.debug("gain_khat_complete n_blocks=%d runtime_s=%.6f", len(khat), khat_runtime_s)
         t0 = time.perf_counter()
-        gamma_off = self.ipm09.Ic / self.ipm09.phi0
+        gamma_off = self.branch.tangent(self.dc_branch_flux[None, :])[0]
         khat_off_0 = (
             self.ipm09.Bphi @ sp.diags(gamma_off, offsets=0, format="csr") @ self.ipm09.Bphi.T
         ).astype(np.complex128).tocsr()
@@ -1302,7 +1476,7 @@ class InProcessEngine:
                 int(a.sidebands),
                 int(self.source_idx),
                 int(self.out_idx),
-                "current_complex_c",
+                a.loss_model,
             )
             schur_part = self._signal_schur_part_cache.get(key)
             logger.debug("signal_schur_cache_lookup hit=%s key=%r", schur_part is not None, key)
@@ -1310,7 +1484,7 @@ class InProcessEngine:
                 schur_part = exp09.build_signal_schur_partition(
                     self.ipm09, omega_p, signal_ghz, a.sidebands,
                     self.source_idx, self.out_idx,
-                    loss_model="current_complex_c",
+                    loss_model=a.loss_model,
                 )
                 self._signal_schur_part_cache[key] = schur_part
                 if len(self._signal_schur_part_cache) > self._signal_schur_cache_max:
@@ -1323,7 +1497,7 @@ class InProcessEngine:
             sidebands=a.sidebands, signal_m=0, idler_m=-2,
             source_index=self.source_idx, out_index=self.out_idx,
             source_current_a=1.0, source_port=a.source_port, out_port=a.out_port,
-            z0_ohm=a.z0_ohm, loss_model="current_complex_c",
+            z0_ohm=a.z0_ohm, loss_model=a.loss_model,
             linear_solver=a.signal_solver,
         )
         if a.signal_backend == "schur":
@@ -1513,6 +1687,7 @@ def run_warm_pass_inprocess(
                         column[0].pump_freq_ghz, engine.args
                     ),
                     z0_ohm=engine.args.z0_ohm,
+                    convention=engine.args.power_convention,
                 ) * scale
                 print(
                     f"[warm] fp={column[0].pump_freq_ghz:.6g} GHz "
@@ -1621,6 +1796,14 @@ def run_warm_pass_inprocess(
                 logger.debug("warm_point_reseed_retry index=%d", point.index)
                 row, X = engine.solve_point(point, pass_dir, mode="seed", warm_X=None)
                 retried = row["status"] == "PASS"
+                # A failing reseed can pay for 60-120+ Newton/PARDISO refactors
+                # (full adaptive-then-fixed continuation ladder from scratch).
+                # Collecting promptly here keeps that churn from fragmenting
+                # the process heap and slowing down every later point in this
+                # long-lived worker -- measured 4.00x slower PARDISO factor
+                # time on later, otherwise-identical converged points without
+                # this (same mechanism as the arclength recovery leak).
+                gc.collect()
 
             # Adaptive power-substep recovery: the coarse power step can miss a
             # gain-lobe crest that a finer natural continuation crosses (see
@@ -1902,6 +2085,7 @@ def _recover(
     i, j = point.i_power, point.j_freq
     parent_i = solved.get((i - 1, j)) or solved.get((i, j - 1)) or solved.get((i - 1, j - 1))
     last_row, last_X = failed_row, failed_X
+    arclength_fold_current: float | None = None
 
     def bridge_from(cell) -> tuple[dict, np.ndarray | None, bool] | None:
         if cell is None:
@@ -1953,26 +2137,101 @@ def _recover(
         if res:
             return res[0], res[1], True, "fold_bridge"
     if fp == "arclength":
-        # Round the fold: pseudo-arclength from lambda=0 to full drive, then a
-        # warm target solve from the arclength state.
-        solver = exp08.HarmonicNewtonKrylovSolver(engine._settings())
-        X_arc, _lam, info = solver.solve_arclength(
-            solve_problem, solve_problem.zeros(), 0.0, ds=0.1, target_lam=1.0,
-            max_wall_s=engine.args.inproc_solve_deadline_s)
+        # Round the fold: pseudo-arclength continuation to full drive, then a
+        # warm target solve from the arclength state. Warm-started from the
+        # best available converged neighbour (same lookup as the other
+        # recovery ladders) instead of a cold (X=0, lambda=0) start -- the
+        # trace then only has to cover the remaining distance to lambda=1,
+        # not the whole 0->1 range. This matters beyond speed: each arclength
+        # step can pay for several PARDISO refactors and many GMRES
+        # iterations, each temporarily allocating a ~10-25 MB array (the
+        # coupled Jacobian's packed index/Krylov buffers); a cold trace on a
+        # stiff cell can rack up thousands of these within one recovery
+        # attempt, which fragments the process heap over a long chunk run --
+        # measured crashing with ArrayMemoryError ~170-470 points into a
+        # chunk, at a different array size each time (not a fixed-size bug).
+        # Warm-starting cuts the per-cell call volume by roughly the same
+        # factor as the step-count reduction.
+        if parent_i is not None and parent_i.get("current", 0.0) > 0.0:
+            X0 = parent_i["X"]
+            lam0 = min(parent_i["current"] / cur_t, 0.98)
+        else:
+            X0 = solve_problem.zeros()
+            lam0 = 0.0
+        # Cap GMRES iterations tighter than the main solve: the exact
+        # preconditioner converges in ~1 iteration on a healthy point, and a
+        # corrector call that needs far more than that deep in a stiff
+        # region is already grinding, not converging -- let it fail fast
+        # (halves ds and retries) rather than burn hundreds of PARDISO/GMRES
+        # calls per corrector attempt.
+        recovery_settings = dataclasses.replace(engine._settings(), gmres_maxiter=20)
+        solver = exp08.HarmonicNewtonKrylovSolver(recovery_settings)
+        # ds=0.1 measured too coarse near the map's high-power fold band: a
+        # verified-converged seed (coeff_rel 1.4e-13) at fp=7.0 GHz, lambda
+        # 0.551 had a plain-Newton convergence radius of only ~0.01-0.05 in
+        # lambda (step +0.009 converged, +0.049 did not) -- both this
+        # corrector and the unmodified library solve_arclength() failed to
+        # accept even one ds=0.1 step from that exact point, confirmed by
+        # calling solve_arclength directly. 0.02 sits inside the measured
+        # radius with margin; the corrector still halves further on failure,
+        # so this only removes wasted oversized first attempts, it does not
+        # change behavior where ds=0.1 already worked fine.
+        try:
+            X_arc, _lam, info = solver.solve_arclength(
+                solve_problem, X0, lam0, ds=0.02, max_steps=60, target_lam=1.0,
+                max_wall_s=engine.args.inproc_solve_deadline_s,
+                rescale_every=args.recovery_arclength_rescale_every,
+                max_steps_after_fold=args.recovery_arclength_max_steps_after_fold,
+            )
+        except (RuntimeError, FloatingPointError, ValueError, OverflowError) as exc:
+            # solve_arclength itself now catches a singular-factor RuntimeError
+            # internally and returns a terminal_reason instead of raising; this
+            # is a second line of defense so an unanticipated failure here
+            # downgrades this one cell instead of escaping into the map loop.
+            logger.debug(
+                "recovery_arclength_exception point=%d error=%r", point.index, exc,
+            )
+            info = {
+                "reached_target": False,
+                "terminal_reason": "exception",
+                "error": repr(exc),
+            }
+        finally:
+            # Collect promptly so one cell's allocation churn doesn't carry
+            # fragmentation pressure into the next cell's solve.
+            gc.collect()
         if info.get("reached_target"):
             row, X, ok = _attempt(engine, point, pass_dir, prebuilt, mode="warm", warm_X=X_arc)
             if ok:
                 return row, X, True, "arclength"
             last_row, last_X = row, X
+        elif info.get("fold_lambda") is not None:
+            # A real fold was found (see docs/development/
+            # arclength_fold_resolution_plan.md Phase 2) but even the
+            # extended budget could not round it back to target_lam=1 --
+            # record the fold's physical boundary current so whichever row
+            # this function ultimately returns reports it instead of a bare
+            # failure (injected just before each return below, since neither
+            # fail_fast's last_row nor the final reseed attempt's fresh row
+            # exists yet at this point).
+            arclength_fold_current = float(info["fold_lambda"]) * cur_t
 
     # Fail-fast still permits the explicitly selected cheap recovery policy,
     # but does not pay for a fresh continuation after those attempts fail.
     if args.inproc_fail_fast:
+        if arclength_fold_current is not None and last_row is not None:
+            last_row["pump_arclength_fold_current_a"] = arclength_fold_current
         logger.debug("recovery_end point=%d tag=fail_fast", point.index)
         return last_row, last_X, False, "fail_fast"
 
-    # Final fallback: fresh linear_phasor + adaptive reseed.
+    # Final fallback: fresh linear_phasor + adaptive reseed. Same PARDISO/GMRES
+    # churn risk as run_warm_pass_inprocess's reseed retry -- collect promptly
+    # so a failing point here doesn't degrade every later point in this
+    # long-lived worker (see the reseed-retry fix in run_warm_pass_inprocess).
     row, X, ok = _attempt(engine, point, pass_dir, prebuilt, mode="seed", warm_X=None)
+    if not ok and arclength_fold_current is not None:
+        row["pump_arclength_fold_current_a"] = arclength_fold_current
+    gc.collect()
     logger.debug("recovery_end point=%d tag=reseed ok=%s", point.index, ok)
     return row, X, ok, "reseed"
 
@@ -1993,12 +2252,15 @@ def run_fold_follow(engine: InProcessEngine, freqs: np.ndarray, outdir: Path,
         f = float(f)
         ref_phys = dbm_to_peak_current_a(
             args.pump_power_max_dbm, attenuation_db=attenuation_db_for(f, args),
-            z0_ohm=args.z0_ohm)
+            z0_ohm=args.z0_ohm, convention=args.power_convention)
         ref_injected = ref_phys * scale
         full_problem, _basis, _omega = engine._build_problem(f, ref_injected)
         # Solve on the Schur-reduced problem for speed (constant retained shape).
         problem = engine._make_solve_problem(full_problem, f)
-        lam_fold = fold_power(solver, problem, max_steps=120)
+        lam_fold = fold_power(
+            solver, problem, max_steps=120,
+            rescale_every=args.recovery_arclength_rescale_every,
+        )
         fold_dbm = (peak_current_to_power_dbm(lam_fold * ref_injected / scale, f, args)
                     if lam_fold is not None else None)
         rows.append({"pump_freq_ghz": f, "fold_lambda": lam_fold,
@@ -2210,7 +2472,7 @@ def write_points_csv(path: Path, rows: list[dict[str, Any]]) -> None:
         "gain_status", "warm_started", "warm_retry_reseed", "pump_predictor",
         "pump_failure_reason", "gain_failure_reason",
         "gain_db", "gain_vs_off_db",
-        "gain_vs_pumpdiag_db", "signal_ghz", "linear_rel_residual",
+        "gain_vs_pumpdiag_db", "signal_ghz", "signal_attenuation_db", "linear_rel_residual",
         "pump_runtime_s", "pump_wall_runtime_s", "pump_setup_runtime_s",
         "pump_schur_setup_runtime_s", "pump_solve_wall_runtime_s",
         "pump_write_runtime_s", "pump_factor_runtime_s",
@@ -2222,12 +2484,19 @@ def write_points_csv(path: Path, rows: list[dict[str, Any]]) -> None:
         "pump_continuation_runtime_s",
         "pump_column_arclength_fold_lambda",
         "pump_column_arclength_terminal_reason",
+        "pump_arclength_fold_current_a",
         "gain_total_runtime_s", "gain_wall_runtime_s", "gain_gamma_hat_runtime_s",
         "gain_khat_build_runtime_s", "gain_khat_off_runtime_s",
         "gain_matrix_assemble_runtime_s", "gain_factor_solve_runtime_s",
         "gain_baseline_off_runtime_s", "gain_baseline_pumpdiag_runtime_s",
         "spectrum_peak_gain_db", "spectrum_peak_signal_ghz",
         "elapsed_s", "pump_dir",
+        # Optional hybrid HB/TD telemetry.  Legacy maps leave these blank;
+        # retaining them makes TD-assisted coverage auditable without storing
+        # large transient states in the CSV.
+        "hybrid_route", "hybrid_state", "hybrid_classification",
+        "td_periods", "td_d1", "td_best_low_order_dn", "td_r_j",
+        "td_phase_winding", "td_period1_projection", "td_projected_state_path",
     ]
     with path.open("w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=keys, extrasaction="ignore")
@@ -2325,10 +2594,19 @@ def write_summary(
             out[r["status"]] = out.get(r["status"], 0) + 1
         return out
 
+    from twpa_solver.map import coverage_summary
+
+    coverage_rows = warm_rows if warm_rows else cold_rows
     summary: dict[str, Any] = {
         "mode": args.mode,
+        "workflow_mode": getattr(args, "workflow_mode", None),
+        "compact_output": bool(getattr(args, "compact_output", False)),
         "output_dir": str(outdir),
         "grid": {"n_power": args.n_power, "n_frequency": args.n_frequency},
+        "grid_from_measurement_dir": (
+            str(args.grid_from_measurement_dir)
+            if args.grid_from_measurement_dir is not None else None
+        ),
         "pump_power_dbm": [args.pump_power_min_dbm, args.pump_power_max_dbm],
         "pump_freq_ghz": [args.pump_freq_min_ghz, args.pump_freq_max_ghz],
         "attenuation_db": args.attenuation_db,
@@ -2337,11 +2615,23 @@ def write_summary(
         "z0_ohm": args.z0_ohm,
         "signal_ghz": args.signal_ghz,
         "signal_detuning_mhz": args.signal_detuning_mhz,
+        "signal_attenuation_db": args.signal_attenuation_db,
+        "signal_attenuation_model": (
+            "flat" if args.signal_attenuation_db is not None else "loss_B1 c + a*sqrt(f) + b*f"
+        ),
+        "dc_current_a": args.dc_current_a,
+        "dc_solution": str(args.dc_solution) if args.dc_solution is not None else None,
         "signal_convention": ("fixed" if args.signal_ghz is not None
                               else f"ws = wp - {args.signal_detuning_mhz} MHz"),
-        "current_convention": "I_peak = sqrt(2 * P_W / Z0), P = P_dbm - attenuation_db",
+        "power_convention": args.power_convention,
+        "current_convention": (
+            "I_peak = sqrt(8 * P_W / Z0), P = P_dbm - attenuation_db"
+            if args.power_convention == "norton"
+            else "I_peak = sqrt(2 * P_W / Z0), P = P_dbm - attenuation_db"
+        ),
         "cold_status_counts": counts(cold_rows),
         "warm_status_counts": counts(warm_rows),
+        "coverage": coverage_summary(coverage_rows),
         "cold_pump_runtime_s": total_pump_runtime(cold_rows) if cold_rows else None,
         "warm_pump_runtime_s": total_pump_runtime(warm_rows) if warm_rows else None,
         "cold_gain_runtime_s": total_metric(cold_rows, "gain_total_runtime_s") if cold_rows else None,
@@ -2349,6 +2639,7 @@ def write_summary(
         "cold_timing_totals": timing_totals(cold_rows) if cold_rows else {},
         "warm_timing_totals": timing_totals(warm_rows) if warm_rows else {},
         "elapsed_s": elapsed_s,
+        "peak_rss_bytes": getattr(args, "peak_rss_bytes", None) or peak_rss_bytes(),
         "gate": {
             "evaluated": gate.evaluated,
             "passed": gate.passed,
@@ -2404,6 +2695,44 @@ def write_summary(
     (outdir / "map_summary.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
+def load_measurement_grid(measurement_dir: Path) -> tuple[np.ndarray, np.ndarray]:
+    """Load exact pump axes from a Themis ``105C5_*GHz.npy`` directory.
+
+    The Themis frequency filenames are rounded to MHz and are not necessarily
+    an exact ``linspace``.  Loading the axes from the files prevents a map
+    requested with the same endpoints and point count from drifting by a few
+    hundred kHz or more.  The power axis is taken from the first file and is
+    required to agree across all files.
+    """
+    files = []
+    for path in measurement_dir.glob("105C5_*GHz.npy"):
+        match = _THEMIS_FREQ_RE.search(path.name)
+        if match is not None:
+            files.append((float(match.group(1)), path))
+    files.sort(key=lambda item: item[0])
+    if not files:
+        raise FileNotFoundError(
+            f"no Themis 105C5_*GHz.npy files found in {measurement_dir}"
+        )
+
+    frequencies = np.asarray([item[0] for item in files], dtype=float)
+    if np.any(np.diff(frequencies) <= 0.0):
+        raise ValueError(f"measurement frequency grid is not strictly increasing: {measurement_dir}")
+
+    first = np.load(files[0][1], allow_pickle=True).item()
+    powers = np.asarray(first["PumpPower"], dtype=float).reshape(-1)
+    if powers.size == 0 or np.any(~np.isfinite(powers)) or np.any(np.diff(powers) <= 0.0):
+        raise ValueError(f"invalid PumpPower axis in {files[0][1]}")
+
+    for _, path in files[1:]:
+        data = np.load(path, allow_pickle=True).item()
+        other = np.asarray(data["PumpPower"], dtype=float).reshape(-1)
+        if other.shape != powers.shape or not np.allclose(other, powers, rtol=0.0, atol=1e-9):
+            raise ValueError(f"PumpPower axis differs between {files[0][1]} and {path}")
+
+    return powers, frequencies
+
+
 # =============================================================================
 # CLI
 # =============================================================================
@@ -2411,6 +2740,10 @@ def write_summary(
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--mode", choices=["cold", "warmstart", "both"], default="warmstart")
+    p.add_argument("--loss-model", choices=["auto", "current_complex_c", "real_capacitance",
+                                              "conjugate_complex_c", "complex_c_sign_omega",
+                                              "conductance_signed_omega", "conductance_abs_omega",
+                                              "conductance_abs_omega_opposite"], default="auto")
     p.add_argument("--executor", choices=["subprocess", "inprocess"], default="inprocess",
                    help="inprocess runs pump+gain in this process (no per-point import "
                    "tax); numerics are identical to the subprocess path.")
@@ -2605,6 +2938,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                    "short-circuit. 'patience' (legacy) counts every fail; the "
                    "others require cross-axis / bridge / full recovery to also fail "
                    "first; 'arclength' rounds the fold with pseudo-arclength.")
+    p.add_argument("--recovery-arclength-rescale-every", type=int, default=0,
+                   help="With --fold-policy arclength: recompute the arclength "
+                   "state_scale every N accepted steps (0 = disabled, matches "
+                   "solve_arclength's own default -- no behavior change).")
+    p.add_argument("--recovery-arclength-max-steps-after-fold", type=int, default=0,
+                   help="With --fold-policy arclength: once a fold is detected, "
+                   "extend the step budget to at least fold_step + this many more "
+                   "steps (0 = disabled -- no behavior change; see "
+                   "docs/development/arclength_fold_resolution_plan.md Phase 2/4).")
     p.add_argument("--inproc-continuation",
                    choices=["fixed", "adaptive_copy", "adaptive_secant",
                             "adaptive_tangent", "affine", "ptc", "arclength"],
@@ -2625,10 +2967,24 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
     p.add_argument("--n-power", type=int, default=50)
     p.add_argument("--n-frequency", type=int, default=50)
+    p.add_argument(
+        "--grid-from-measurement-dir",
+        type=Path,
+        default=None,
+        help=(
+            "Use the exact PumpPower axis and numeric 105C5_*GHz filename "
+            "frequency axis from a Themis measurement directory. Overrides "
+            "--n-power/--n-frequency and the pump min/max values."
+        ),
+    )
     p.add_argument("--frequency-chunk-size", type=int, default=10,
                    help="Run frequency columns in separate worker processes of this "
                    "many columns each, then merge. 10 is the standard memory-safe "
                    "map behavior; 0 disables chunking.")
+    p.add_argument(
+        "--frequency-workers", type=int, default=1,
+        help="Parallel frequency-chunk worker processes; 1 preserves serial behavior.",
+    )
     p.add_argument(
         "--local-traversal-chunks",
         action="store_true",
@@ -2652,7 +3008,32 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--attenuation-db", type=float, default=None,
                    help="Flat line attenuation (dB). If omitted, use the measured "
                    "loss_A10 frequency-dependent model c + a*sqrt(f) + b*f.")
+    p.add_argument(
+        "--dc-current-a", type=float, default=0.0,
+        help="Uniform DC current through kinetic branches; zero preserves the legacy path.",
+    )
+    p.add_argument(
+        "--dc-solution", type=Path, default=None,
+        help="Optional dc_solution.npz (or directory) providing psi_dc/x_dc; overrides --dc-current-a.",
+    )
+    p.add_argument(
+        "--signal-attenuation-db", type=float, default=None,
+        help="Flat signal-line attenuation for signal-spectrum referral; defaults to loss_B1.",
+    )
     p.add_argument("--z0-ohm", type=float, default=50.0)
+    p.add_argument(
+        "--power-convention",
+        choices=("norton", "legacy_traveling_wave"),
+        default="legacy_traveling_wave",
+        help=(
+            "Port drive current -> available power relation. Every drive "
+            "port in the production netlists is an ideal current source in "
+            "parallel with Z0, a matched wave port (I is the incident "
+            "wave's own current amplitude), so available power is the "
+            "traveling-wave I^2*Z0/2, not the Norton-generator I^2*Z0/8. "
+            "'norton' is kept as a selectable alternate convention."
+        ),
+    )
     # Signal readout frequency. Default: track the pump at a fixed detuning
     # ws = wp - 100 MHz per cell (the physically correct choice for a map that
     # sweeps pump frequency). Pass --signal-ghz to force a fixed absolute signal.
@@ -2734,6 +3115,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--python-executable", default=sys.executable)
     p.add_argument("--overwrite", action="store_true")
     p.add_argument(
+        "--compact-output", action=argparse.BooleanOptionalAction, default=False,
+        help="Discard ordinary per-point pump_solution.npz after gain evaluation; "
+        "continuation keeps its state in memory.",
+    )
+    p.add_argument(
         "--allow-superlu-fallback",
         action="store_true",
         help="Debug only: allow real_coupled_fast to fall back to SuperLU if PARDISO fails.",
@@ -2764,8 +3150,11 @@ def build_points(args: argparse.Namespace) -> tuple[list[GridPoint], np.ndarray,
         args.pump_power_min_dbm, args.pump_power_max_dbm,
         args.pump_freq_min_ghz, args.pump_freq_max_ghz,
     )
-    powers = np.linspace(args.pump_power_min_dbm, args.pump_power_max_dbm, args.n_power)
-    freqs = np.linspace(args.pump_freq_min_ghz, args.pump_freq_max_ghz, args.n_frequency)
+    if args.grid_from_measurement_dir is not None:
+        powers, freqs = load_measurement_grid(args.grid_from_measurement_dir)
+    else:
+        powers = np.linspace(args.pump_power_min_dbm, args.pump_power_max_dbm, args.n_power)
+        freqs = np.linspace(args.pump_freq_min_ghz, args.pump_freq_max_ghz, args.n_frequency)
     points: list[GridPoint] = []
     index = 0
     for i, power_dbm in enumerate(powers):
@@ -2774,6 +3163,7 @@ def build_points(args: argparse.Namespace) -> tuple[list[GridPoint], np.ndarray,
                 float(power_dbm),
                 attenuation_db=attenuation_db_for(float(freq), args),
                 z0_ohm=args.z0_ohm,
+                convention=args.power_convention,
             )
             points.append(GridPoint(index, i, j, float(power_dbm), float(freq), current))
             index += 1
@@ -3008,6 +3398,7 @@ def run_frequency_chunks(
     chunk_root = outdir / "chunks"
     chunk_root.mkdir(parents=True, exist_ok=True)
     chunk_specs: list[tuple[Path, int, int]] = []
+    pending: list[tuple[int, Path, int, int, list[str], Path]] = []
     for chunk_index, (start_col, stop_col) in enumerate(ranges):
         chunk_dir = chunk_root / f"chunk_{chunk_index:03d}_cols_{start_col:03d}_{stop_col - 1:03d}"
         chunk_specs.append((chunk_dir, start_col, stop_col))
@@ -3016,12 +3407,6 @@ def run_frequency_chunks(
         if args.resume_chunks and chunk_is_complete(chunk_dir, args, start_col, stop_col):
             print(f"\n=== chunk {chunk_index} : already complete, skipping ===", flush=True)
             continue
-        print(
-            f"\n=== chunk {chunk_index} : cols [{start_col}..{stop_col - 1}] "
-            f"fp {fp0:.4f}..{fp1:.4f} GHz ({stop_col - start_col} cols) ===",
-            flush=True,
-        )
-        t0 = time.perf_counter()
         cmd = chunk_worker_command(
             raw_argv,
             outdir=chunk_dir,
@@ -3031,23 +3416,17 @@ def run_frequency_chunks(
             overwrite="--overwrite" in raw_argv,
         )
         log_path = outdir / f"chunk_{chunk_index:03d}.log"
+        pending.append((chunk_index, chunk_dir, start_col, stop_col, cmd, log_path))
+
+    def run_chunk(item: tuple[int, Path, int, int, list[str], Path]) -> tuple[int, int, float, Path]:
+        chunk_index, _chunk_dir, _start, _stop, cmd, log_path = item
+        t0 = time.perf_counter()
         with log_path.open("w", encoding="utf-8") as log:
-            proc = subprocess.Popen(
-                cmd,
-                cwd=str(ROOT),
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                bufsize=1,
-            )
-            assert proc.stdout is not None
-            for line in proc.stdout:
-                log.write(line)
-                log.flush()
-                sys.stdout.write(line)
-                sys.stdout.flush()
-            rc = proc.wait()
-        elapsed = time.perf_counter() - t0
+            proc = subprocess.run(cmd, cwd=str(ROOT), stdout=log, stderr=subprocess.STDOUT)
+        return chunk_index, int(proc.returncode), time.perf_counter() - t0, log_path
+
+    results = run_isolated_jobs(pending, run_chunk, args.frequency_workers)
+    for chunk_index, rc, elapsed, log_path in sorted(results):
         print(f"chunk {chunk_index} rc={rc} elapsed={elapsed:.1f}s log={log_path}", flush=True)
         if rc != 0:
             raise RuntimeError(f"frequency chunk {chunk_index} failed with return code {rc}")
@@ -3058,6 +3437,12 @@ def run_frequency_chunks(
 def main(argv: list[str] | None = None) -> int:
     raw_argv = sys.argv[1:] if argv is None else list(argv)
     args = parse_args(raw_argv)
+    if args.frequency_workers < 1:
+        raise ValueError("--frequency-workers must be >= 1")
+    if args.frequency_workers > 1 and args.frequency_chunk_size > 0:
+        args.frequency_chunk_size = max(
+            1, int(np.ceil(args.n_frequency / args.frequency_workers))
+        )
     logging.basicConfig(
         level=getattr(logging, str(args.log_level).upper()),
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
@@ -3090,6 +3475,23 @@ def main(argv: list[str] | None = None) -> int:
         # row rebuilds the per-frequency partition as it sweeps, but caching all
         # n_frequency partitions would OOM (~16 GB at 50 columns).
 
+    points, powers, freqs = build_points(args)
+    if args.grid_from_measurement_dir is not None:
+        # Explicit grids are kept in one process.  The chunk subprocess CLI
+        # represents frequency columns by a local linspace, which would lose
+        # the nonuniform measurement axis we just loaded.
+        args.n_power = int(powers.size)
+        args.n_frequency = int(freqs.size)
+        args.pump_power_min_dbm = float(powers[0])
+        args.pump_power_max_dbm = float(powers[-1])
+        args.pump_freq_min_ghz = float(freqs[0])
+        args.pump_freq_max_ghz = float(freqs[-1])
+        if args.frequency_chunk_size > 0:
+            logger.info(
+                "explicit measurement grid: disabling frequency chunk subprocesses"
+            )
+            args.frequency_chunk_size = 0
+
     use_chunk_driver = (
         not args.chunk_worker
         and args.executor == "inprocess"
@@ -3106,7 +3508,6 @@ def main(argv: list[str] | None = None) -> int:
         shutil.rmtree(outdir)
     outdir.mkdir(parents=True, exist_ok=True)
 
-    points, powers, freqs = build_points(args)
     logger.debug(
         "main_grid_built n_points=%d power_range=(%s,%s) frequency_range=(%s,%s)",
         len(points), powers[0] if powers.size else None,

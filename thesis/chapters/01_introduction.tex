@@ -1,0 +1,142 @@
+\chapter{Introduction}
+\label{chap:introduction}
+
+\section{The measurement problem}
+
+Reading out a superconducting qubit means detecting a microwave signal of a few
+photons against the thermal and amplifier noise of the receiving chain. The
+first amplifier in that chain sets the noise floor for everything downstream:
+if it adds noise, no later stage can remove it. A high-electron-mobility
+transistor amplifier, the conventional first stage, adds of order ten quanta of
+noise. That is enough to force long integration times and, for multiplexed
+readout of many qubits, to make single-shot fidelity unreachable.
+
+A parametric amplifier built from Josephson junctions can in principle reach the
+quantum limit: half a photon of added noise for a phase-insensitive amplifier,
+and formally zero for a phase-sensitive one. The mechanism is not transistor
+transconductance but \emph{parametric conversion}: a strong pump modulates a
+reactance, and the modulated reactance transfers energy from the pump into a
+weak signal.
+
+The difficulty is bandwidth. A resonant Josephson parametric amplifier (JPA)
+concentrates the pump in a cavity and buys large gain over a bandwidth of a few
+tens of megahertz --- enough for one qubit, not for twenty. The
+\emph{travelling-wave} parametric amplifier (TWPA) removes the cavity: the
+signal propagates down a long nonlinear transmission line, accumulating gain
+continuously. Bandwidths of several gigahertz become possible. The price is that
+the device is now a distributed system with thousands of degrees of freedom, and
+its behaviour is governed by phase matching along the line rather than by a
+single resonance condition.
+
+\section{Why this is a hard simulation problem}
+
+A TWPA is a chain of $10^{3}$--$10^{4}$ unit cells, each containing at least one
+Josephson junction. Three properties conspire to make it awkward:
+
+\begin{enumerate}
+\item \textbf{It is strongly driven.} The pump is not a perturbation. At the
+      operating point the junction phase excursion is a substantial fraction of
+      a radian, so the pump waveform contains significant harmonic content and
+      the small-signal expansion of the junction nonlinearity is not adequate.
+      The pump must be found as a genuine \emph{periodic steady state} of a
+      nonlinear system, not as a linear response.
+
+\item \textbf{It is stiff and distributed.} The chain couples nearest
+      neighbours only, which is good --- the matrices are banded --- but the
+      condition number grows with length, and the physically interesting
+      operating points sit close to the boundary where the periodic solution
+      ceases to exist. Naive Newton iteration from a cold start diverges.
+
+\item \textbf{The interesting observables live at different orders.} Gain is a
+      \emph{linear} response about the pumped state. Compression is not: at
+      large signal power the generated sidebands react back on the pump, and
+      pump and signal must be solved simultaneously. The two calculations have
+      radically different cost, and conflating them is the single most common
+      way to produce a saturation number that is really a small-signal number
+      in disguise.
+\end{enumerate}
+
+Time-domain integration is possible but poorly suited: one must integrate for
+many pump periods to reach steady state, then again for every signal frequency,
+and the transient decay time of a low-loss superconducting line is long. The
+natural method is \emph{harmonic balance}: assume periodicity, expand in a
+finite Fourier basis, and solve the resulting nonlinear algebraic system
+directly. This thesis is about doing that correctly, and about what the result
+does and does not establish.
+
+\section{Scope and contributions}
+
+The work described here is the design, implementation and validation of
+\code{twpa\_solver}, a harmonic-balance solver for Josephson circuits, together
+with the physical study it enables. The specific contributions are:
+
+\begin{enumerate}
+\item \textbf{A three-stage solver architecture} (\cref{chap:pumphb},
+      \cref{chap:floquet}, \cref{chap:saturation}) that separates the nonlinear
+      pump solve, the linear small-signal Floquet solve, and the fully coupled
+      multitone solve. The separation is what makes a $50\times50$ gain map
+      affordable while keeping a route to saturation that does not assume the
+      signal is small.
+
+\item \textbf{An exact real-packed preconditioner} for the harmonic-balance
+      Jacobian (\cref{sec:real-coupled}) that retains the conjugate coupling
+      term dropped by the conventional complex mode-coupled construction.
+      Because the residual is not complex-analytic in the phasor variables,
+      dropping that term costs accuracy exactly where the device is stiffest;
+      retaining it makes GMRES converge in about one iteration.
+
+\item \textbf{A continuation and recovery layer} (\cref{sec:continuation})
+      built around natural-parameter continuation in the source amplitude, with
+      secant and tangent predictors, adaptive step control, and a resume-rather-
+      than-restart fallback.
+
+\item \textbf{A two-dimensional tone-lattice formulation of saturation}
+      (\cref{chap:saturation}) in which pump harmonics and signal sidebands are
+      indexed by a single integer pair $(h,q)$ on a torus, with exact FFT-based
+      transforms and a basis constructor that provably covers a requested
+      Floquet sideband range.
+
+\item \textbf{A careful account of what is and is not validated}
+      (\cref{chap:validation}). Several results in this field are validated
+      against another simulator; this thesis argues that such agreement is a
+      regression check and not physical evidence, and states plainly which
+      quantities currently rest on no external reference.
+\end{enumerate}
+
+\section{Structure of this thesis}
+
+\Cref{chap:theory} develops the physics: the Josephson element, the
+travelling-wave geometry, three- and four-wave mixing, phase matching, and the
+coupled-mode picture that gives the standard analytic gain expression. It ends
+by identifying precisely where that picture breaks down and why a numerical
+method is required.
+
+\Cref{chap:circuit} sets up the circuit model: the node-flux formulation, the
+matrix stamps, the treatment of the nonlinear branches, and the design families
+the solver handles.
+
+\Cref{chap:pumphb} is the core algorithmic chapter. It develops the harmonic-
+balance residual from first principles and specifies every nested loop of the
+solve --- frequency, power, continuation, Newton, residual evaluation,
+preconditioner assembly, factorisation, Krylov solve, Jacobian-vector product,
+and line search --- at the level of detail required to reimplement it. Where
+the implementation departs from the idealised statement, the departure is
+recorded explicitly in an \emph{Implementation} box giving the actual coded
+form.
+
+\Cref{chap:numerics} treats the numerical linear algebra separately: Schur
+reduction, the preconditioner hierarchy, factorisation backends, ordering, and
+the measured performance consequences of each.
+
+\Cref{chap:floquet} develops the small-signal regime: the Floquet picture, the
+sideband conversion matrix, gain definitions, and quantum efficiency.
+
+\Cref{chap:saturation} develops the saturation regime: the tone lattice, the
+multitone residual, compression curves, $P_{1\mathrm{dB}}$, power balance,
+Manley--Rowe invariants, and the stability of the large-signal state.
+
+\Cref{chap:validation} states the validation position honestly, including the
+retraction of a previously used reference.
+
+\Cref{chap:conventions} is a reference appendix of conventions and the specific
+errors each one guards against.

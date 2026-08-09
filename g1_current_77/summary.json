@@ -1,0 +1,15 @@
+{
+  "freq_ghz": 7.7,
+  "n": 20,
+  "n_pass": 15,
+  "by_route": {
+    "DIRECT": 10,
+    "ARCLENGTH_RECOVERY": 2,
+    "POWER_SUBSTEP": 3,
+    "FAILED_NUMERICAL": 1,
+    "PAST_CONNECTED_BRANCH_BOUNDARY": 4
+  },
+  "total_direct_s": 33.92787409998709,
+  "total_recovery_s": 261.64074029997573,
+  "wall_onset_dbm": -18.105263157894736
+}

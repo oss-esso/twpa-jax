@@ -1,0 +1,44 @@
+{
+  "nodes": 2,
+  "jj_branches": 1,
+  "C_nnz": 4,
+  "G_nnz": 1,
+  "K_nnz": 0,
+  "Bphi_nnz": 1,
+  "ports": {
+    "1": 0
+  },
+  "metadata": {
+    "pump_freqs_ghz": [
+      4.75001
+    ],
+    "pump_sources": [
+      {
+        "port": 1,
+        "mode": [
+          1
+        ],
+        "current_a": 5.65e-09
+      }
+    ],
+    "signal_ghz": {
+      "start": 4.5,
+      "stop": 5.0,
+      "step": 0.001
+    },
+    "Npumpharmonics": [
+      16
+    ],
+    "Nmodulationharmonics": [
+      8
+    ],
+    "features": {
+      "single_pump": true,
+      "multi_pump": false,
+      "needs_dc": false,
+      "complex_valued": false
+    },
+    "recommended_first_test": "reflection gain, source_port=1, out_port=1"
+  },
+  "branch_law": {}
+}

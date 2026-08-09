@@ -15,6 +15,11 @@ class ScatterSpec:
     distribution: str = "normal"
     clip_min: float = 0.5
     clip_max: float = 1.5
+    mode: str = "independent"
+
+    def __post_init__(self) -> None:
+        if self.mode not in {"independent", "plasma_locked"}:
+            raise ValueError(f"unknown scatter mode: {self.mode}")
 
 
 def draw_factors(spec: ScatterSpec, n: int, rng: np.random.Generator) -> np.ndarray:
@@ -46,6 +51,8 @@ def component_rng(master_seed: int, component: str) -> np.random.Generator:
 def apply_scatter(
     nominal: np.ndarray, spec: ScatterSpec, rng: np.random.Generator
 ) -> tuple[np.ndarray, dict[str, Any]]:
+    if spec.mode != "independent":
+        raise ValueError("plasma_locked is derived and cannot be applied directly")
     nominal = np.asarray(nominal, dtype=float)
     factors = draw_factors(spec, nominal.size, rng)
     values = nominal * factors
@@ -61,5 +68,6 @@ def apply_scatter(
         "clip_hits": int(np.count_nonzero((factors == spec.clip_min) |
                                            (factors == spec.clip_max))),
         "factor_digest": digest,
+        "mode": spec.mode,
     }
     return values, metadata

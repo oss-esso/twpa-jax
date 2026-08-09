@@ -21,6 +21,9 @@ from typing import Any
 import numpy as np
 import scipy.sparse as sp
 
+from twpa_solver.core.kinetic import KineticInductorBranchLaw, resolve_ki_model
+from twpa_solver.core.nonlinear import CompositeBranchLaw, JosephsonBranchLaw
+
 PHI0 = 2.0678338484619295e-15
 PHI0_REDUCED = PHI0 / (2.0 * math.pi)
 
@@ -73,6 +76,18 @@ class JosephsonBranch:
 
 
 @dataclass
+class KineticBranch:
+    name: str
+    n1: str
+    n2: str
+    Lk: float
+    Ic: float
+    model: str
+    Istar2: float | None = None
+    Istar4: float | None = None
+
+
+@dataclass
 class CircuitBuilder:
     name: str
     node_map: dict[str, int] = field(default_factory=dict)
@@ -81,6 +96,7 @@ class CircuitBuilder:
     linear_inductors: dict[str, LinearInductor] = field(default_factory=dict)
     mutuals: list[MutualCoupling] = field(default_factory=list)
     josephson: list[JosephsonBranch] = field(default_factory=list)
+    kinetic: list[KineticBranch] = field(default_factory=list)
     ports: dict[int, Port] = field(default_factory=dict)
     element_counts: dict[str, int] = field(default_factory=dict)
 
@@ -130,6 +146,28 @@ class CircuitBuilder:
         self._touch(n1); self._touch(n2)
         self.josephson.append(JosephsonBranch(name, str(n1), str(n2), float(Lj), PHI0_REDUCED / float(Lj)))
         self._count("josephson_inductor")
+
+    def kinetic_inductor(
+        self, name: str, n1: str | int, n2: str | int,
+        Lk: float, Ic: float, model: str = "hung_2025",
+        Istar2: float | None = None, Istar4: float | None = None,
+    ) -> None:
+        """Add a nonlinear kinetic branch; its inductance is not stamped into K."""
+        self._touch(n1); self._touch(n2)
+        if any(branch.name == name for branch in self.kinetic):
+            raise ValueError(f"duplicate kinetic inductor name {name}")
+        if not np.isfinite(Lk) or Lk <= 0 or not np.isfinite(Ic) or Ic <= 0:
+            raise ValueError("Lk and Ic must be finite and strictly positive")
+        if (Istar2 is None) != (Istar4 is None):
+            raise ValueError("Istar2 and Istar4 must be supplied together")
+        if Istar2 is None:
+            i2, i4 = resolve_ki_model(model, np.asarray([Ic]))
+            Istar2, Istar4 = float(i2[0]), float(i4[0])
+        elif (not np.isfinite(Istar2) or Istar2 <= 0 or
+              not np.isfinite(Istar4) or Istar4 <= 0):
+            raise ValueError("Istar2 and Istar4 must be finite and strictly positive")
+        self.kinetic.append(KineticBranch(name, str(n1), str(n2), float(Lk), float(Ic), model, float(Istar2), float(Istar4)))
+        self._count("kinetic_inductor")
 
     def mutual(self, name: str, l1_name: str, l2_name: str, k: float) -> None:
         self.mutuals.append(MutualCoupling(name, l1_name, l2_name, float(k)))
@@ -216,8 +254,9 @@ class CircuitBuilder:
         bj_rows: list[int] = []
         bj_cols: list[int] = []
         bj_vals: list[float] = []
-        Ic = np.zeros(len(self.josephson), dtype=np.float64)
-        Lj = np.zeros(len(self.josephson), dtype=np.float64)
+        total_branches = len(self.josephson) + len(self.kinetic)
+        Ic = np.zeros(total_branches, dtype=np.float64)
+        Lj = np.zeros(total_branches, dtype=np.float64)
         for col, jj in enumerate(self.josephson):
             for row, val in self._b_entries(jj.n1, jj.n2):
                 bj_rows.append(row)
@@ -225,7 +264,32 @@ class CircuitBuilder:
                 bj_vals.append(float(val))
             Ic[col] = jj.Ic
             Lj[col] = jj.Lj
-        Bphi = sp.coo_matrix((bj_vals, (bj_rows, bj_cols)), shape=(n, len(self.josephson)), dtype=np.float64).tocsr()
+        kinetic_lk = []
+        kinetic_i2 = []
+        kinetic_i4 = []
+        for offset, branch in enumerate(self.kinetic, start=len(self.josephson)):
+            for row, val in self._b_entries(branch.n1, branch.n2):
+                bj_rows.append(row); bj_cols.append(offset); bj_vals.append(float(val))
+            Ic[offset] = branch.Ic
+            kinetic_lk.append(branch.Lk); kinetic_i2.append(float(branch.Istar2)); kinetic_i4.append(float(branch.Istar4))
+        Bphi = sp.coo_matrix((bj_vals, (bj_rows, bj_cols)), shape=(n, total_branches), dtype=np.float64).tocsr()
+
+        branch_law = None
+        if self.kinetic and not self.josephson:
+            branch_law = KineticInductorBranchLaw(
+                np.asarray(kinetic_lk), Ic[len(self.josephson):],
+                np.asarray(kinetic_i2), np.asarray(kinetic_i4), self.kinetic[0].model,
+            )
+        elif self.kinetic and self.josephson:
+            jj_law = JosephsonBranchLaw(Ic[:len(self.josephson)], PHI0_REDUCED)
+            ki_law = KineticInductorBranchLaw(
+                np.asarray(kinetic_lk), Ic[len(self.josephson):],
+                np.asarray(kinetic_i2), np.asarray(kinetic_i4), self.kinetic[0].model,
+            )
+            branch_law = CompositeBranchLaw(
+                (jj_law, ki_law),
+                (np.arange(len(self.josephson)), np.arange(len(self.josephson), total_branches)),
+            )
 
         ports = {}
         for pnum, p in sorted(self.ports.items()):
@@ -243,6 +307,9 @@ class CircuitBuilder:
             "complex_valued": complex_valued,
             "node_count": n,
             "jj_count": len(self.josephson),
+            "ki_count": len(self.kinetic),
+            "Lj": Lj,
+            "branch_law": branch_law,
         }
 
     def write(self, outdir: Path, metadata: dict[str, Any]) -> dict[str, Any]:
@@ -260,7 +327,31 @@ class CircuitBuilder:
         sp.save_npz(outdir / "Bphi.npz", Bphi)
         # Export the Josephson inductance vector in the pump-solver schema.
         # Some earlier patch paths only created Ic, so compute Lj directly here.
-        Lj = np.array([float(jj.Lj) for jj in self.josephson], dtype=np.float64)
+        Lj = np.full(Ic.size, np.nan, dtype=np.float64)
+        if self.josephson:
+            Lj[:len(self.josephson)] = np.array(
+                [float(jj.Lj) for jj in self.josephson], dtype=np.float64
+            )
+        branch_arrays: dict[str, np.ndarray] = {}
+        branch_metadata: dict[str, Any] = {}
+        if self.kinetic:
+            total_branches = int(Ic.size)
+            kinetic_columns = np.arange(len(self.josephson), total_branches, dtype=np.int64)
+            branch_kind = np.zeros(total_branches, dtype=np.int8)
+            branch_kind[kinetic_columns] = 1
+            ki_lk = np.full(total_branches, np.nan, dtype=np.float64)
+            ki_istar2 = np.full(total_branches, np.nan, dtype=np.float64)
+            ki_istar4 = np.full(total_branches, np.nan, dtype=np.float64)
+            branch_arrays = {
+                "branch_law_kind": branch_kind,
+                "ki_lk": ki_lk,
+                "ki_istar2": ki_istar2,
+                "ki_istar4": ki_istar4,
+            }
+            branch_arrays["ki_lk"][kinetic_columns] = np.asarray([branch.Lk for branch in self.kinetic], dtype=float)
+            branch_arrays["ki_istar2"][kinetic_columns] = np.asarray([branch.Istar2 for branch in self.kinetic], dtype=float)
+            branch_arrays["ki_istar4"][kinetic_columns] = np.asarray([branch.Istar4 for branch in self.kinetic], dtype=float)
+            branch_metadata = assembled["branch_law"].metadata
 
         port_numbers = np.array(sorted(assembled["ports"].keys()), dtype=np.int64)
         port_indices = np.array([assembled["ports"][k] for k in sorted(assembled["ports"].keys())], dtype=np.int64)
@@ -280,6 +371,7 @@ class CircuitBuilder:
             Ic=Ic,
             Lj=Lj,
             phi0_reduced=np.array([PHI0_REDUCED], dtype=np.float64),
+            **branch_arrays,
         )
 
         summary = {
@@ -298,6 +390,7 @@ class CircuitBuilder:
             "complex_valued": bool(assembled["complex_valued"]),
             "element_counts": self.element_counts,
             "metadata": metadata,
+            "branch_law": branch_metadata,
         }
         (outdir / "summary.json").write_text(json.dumps(summary, indent=2, default=safe_float_or_pair), encoding="utf-8")
         (outdir / "ipm_summary.json").write_text(json.dumps(summary, indent=2, default=safe_float_or_pair), encoding="utf-8")

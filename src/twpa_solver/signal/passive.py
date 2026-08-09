@@ -11,6 +11,7 @@ import scipy.sparse.linalg as spla
 
 from twpa_solver.core.circuit import load_circuit
 from twpa_solver.core.linear import dynamic_block, port_s_from_unit_current_response
+from twpa_solver.core.nonlinear import make_branch_law
 
 
 def db20(x: np.ndarray) -> np.ndarray:
@@ -23,6 +24,7 @@ def passive_s_matrix(
     *,
     ports: tuple[int, ...] = (1, 2, 3, 4),
     z0_ohm: float = 50.0,
+    dc_branch_flux: np.ndarray | None = None,
 ) -> np.ndarray:
     """Return ``S[frequency, output_port, source_port]`` with pump off."""
     circuit = load_circuit(circuit_dir)
@@ -37,11 +39,16 @@ def passive_s_matrix(
         rhs[index, column] = 1.0
     result = np.zeros((freqs.size, len(ports), len(ports)), dtype=np.complex128)
 
-    gamma_off = circuit.Ic / circuit.phi0
+    dc = np.zeros(circuit.Bphi.shape[1]) if dc_branch_flux is None else np.asarray(dc_branch_flux, dtype=float)
+    if dc.shape != (circuit.Bphi.shape[1],):
+        raise ValueError("dc_branch_flux must have one value per branch")
+    gamma_off = make_branch_law(circuit).tangent(dc[None, :])[0]
     extra_k = (circuit.Bphi @ sp.diags(gamma_off) @ circuit.Bphi.T).astype(np.complex128).tocsr()
     for row, frequency_hz in enumerate(freqs):
         omega = 2.0 * math.pi * float(frequency_hz)
         solution = spla.spsolve(dynamic_block(circuit, omega, extra_K=extra_k), rhs)
+        if solution.ndim == 1:
+            solution = solution[:, None]
         for source_column, source_port in enumerate(ports):
             for output_row, output_port in enumerate(ports):
                 voltage = 1j * omega * solution[indices[output_row], source_column]

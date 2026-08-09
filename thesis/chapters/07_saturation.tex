@@ -1,0 +1,612 @@
+\chapter{The Saturation Regime: Multitone Harmonic Balance}
+\label{chap:saturation}
+
+\section{Why a new formulation is needed}
+
+At large signal power the assumption underpinning \cref{chap:floquet} fails: the
+generated sidebands carry enough power to modify the pump. Pump and signal must
+then be found \emph{simultaneously} as a single nonlinear problem.
+
+This is not a small change. The Floquet formulation of \cref{chap:floquet}
+treats the sideband ladder as a linear system that can be factored once; that is
+exactly what makes a gain map affordable. Solving pump and signal together
+removes that structure --- the sidebands now appear inside the nonlinear
+residual --- and restores the full Newton machinery of \cref{chap:pumphb} at a
+much larger basis.
+
+\begin{remark}[the cost is structural, not an implementation artefact]
+The multitone Jacobian is block-dense in tone index, so memory scales as
+$(n_{\mathrm{pump}} + 2S + 1)^{2}$ (\cref{chap:numerics}). On the same circuit,
+moving from a gain-map pump basis with $H=10$ to a multitone basis at $S=10$
+with $H=31$ takes the Jacobian from \num{2.46e6} to \num{23.6e6} nonzeros --- a
+factor $9.6 \approx (31/10)^{2}$ --- while the dimension grows only $3.1\times$.
+That factor is exactly the cost the Floquet split avoids, and it is the price of
+asking a question the split cannot answer.
+\end{remark}
+
+\section{The tone lattice}
+
+\subsection{Two incommensurate frequencies}
+
+A pumped, signal-driven circuit has two fundamental frequencies. Rather than
+treat the signal as a perturbation at $\ws$, we work with the pump frequency
+$\wp$ and the \emph{detuning}
+\begin{equation}
+  \delta = \wp - \ws,
+\end{equation}
+and index every tone by an integer pair.
+
+\begin{definition}[tone index]
+A tone is a lattice coordinate $(h,q)\in\mathbb{Z}^{2}$ with physical frequency
+\begin{equation}
+  \boxed{\;\omega_{(h,q)} = h\,\wp + q\,\delta .\;}
+  \label{eq:tone-frequency}
+\end{equation}
+\end{definition}
+
+The three fundamental tones are
+\begin{center}
+\begin{tabular}{@{}l l l@{}}
+\toprule
+Tone & Coordinate & Frequency \\
+\midrule
+Pump   & $(1,0)$  & $\wp$ \\
+Signal & $(1,-1)$ & $\wp - \delta = \ws$ \\
+Idler  & $(1,1)$  & $\wp + \delta = 2\wp - \ws$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+and the mixing relation $2\wp = \ws + \wi$ is the lattice identity
+$2(1,0) = (1,-1) + (1,1)$ --- four-wave mixing becomes exact integer arithmetic.
+
+\begin{remark}[why this indexing]
+The alternative --- indexing by absolute frequency --- makes mixing a
+floating-point coincidence test, which is fragile. On the lattice, whether two
+tones mix is decided by integer addition, and the alias structure of the
+transform is exact. The pump harmonics ($q=0$) and the signal sidebands
+($q=\pm1$) live in the same index space, so a single basis carries both.
+\end{remark}
+
+\subsection{Positive-frequency representation}
+
+Only positive-frequency tones are retained; a negative-frequency combination is
+represented by the conjugate of its positive partner.
+
+\begin{implnote}[\code{canonicalize} and the basis invariants]
+\code{canonicalize} maps $(h,q)$ to a positive-frequency representative and a
+conjugation flag. The \code{MultiToneBasis} constructor enforces:
+\begin{itemize}
+\item no DC tone $(0,0)$, and no exactly zero-frequency combination;
+\item no duplicates;
+\item no tone \emph{and} its conjugate both retained (that would double-count);
+\item every retained tone strictly positive in frequency;
+\item the three required tones $(1,0)$, $(1,-1)$, $(1,1)$ all present.
+\end{itemize}
+Each is checked with a specific error message. These are not defensive
+boilerplate: a basis violating any of them produces a solvable but physically
+meaningless system.
+\end{implnote}
+
+\subsection{The torus and its exact transform}
+
+Two frequencies means a two-dimensional torus. Introduce phases
+$\theta_p = \wp t$ and $\theta_\delta = \delta t$ and sample on an
+$N_p\times N_\delta$ grid,
+\begin{equation}
+  \theta_p^{(r)} = \frac{2\pi r}{N_p},
+  \qquad
+  \theta_\delta^{(s)} = \frac{2\pi s}{N_\delta}.
+\end{equation}
+Synthesis is
+\begin{equation}
+  \boxed{\;
+  \xvec(\theta_p,\theta_\delta)
+  = 2\,\Real\!\left[\sum_{(h,q)\in\toneset}
+      X_{(h,q)}\,e^{i(h\theta_p + q\theta_\delta)}\right],
+  \;}
+  \label{eq:torus-synthesis}
+\end{equation}
+the same positive-phasor convention as \cref{conv:phasor}, now in two
+dimensions.
+
+\begin{implnote}[FFT-based, exact]
+\code{scatter\_signed\_spectrum} places each retained coefficient at
+$(h \bmod N_p,\; q \bmod N_\delta)$ and its conjugate at the mirrored index;
+\code{synthesize} is then a 2-D inverse FFT scaled by $N_pN_\delta$, and
+\code{project} is the forward FFT divided by the same factor followed by a
+gather of the retained modes. The transform pair is exact --- no interpolation,
+no windowing.
+\end{implnote}
+
+\begin{proposition}[alias-free grid sizes]
+Products of retained tones reach $(h+h', q+q')$. The grid must therefore satisfy
+\begin{equation}
+  N_p \ge 2\max_{h,h'}|h+h'| + 1,
+  \qquad
+  N_\delta \ge 2\max_{q,q'}|q+q'| + 1,
+\end{equation}
+with both rounded up to even.
+\end{proposition}
+
+\begin{implnote}[defaults are computed from the basis]
+\code{MultiToneBasis.\_\_post\_init\_\_} computes these minima from the actual
+tone list and uses them as defaults; explicitly supplied values are validated
+against them and rejected if too small. A user cannot silently under-sample.
+\end{implnote}
+
+\subsection{Basis construction}
+
+Two constructors are used in practice.
+
+\paragraph{Sideband-matched (production).} Cover exactly the Floquet sidebands
+$m\in[-S,S]$ of \cref{chap:floquet}, plus the pump harmonics. Each signed
+sideband $m$ is first written as $(m+1,-1)$; negative-frequency results are
+canonicalised, which naturally supplies the $q=+1$ representatives.
+
+\begin{implnote}[coverage is proved, not assumed]
+\code{build\_sideband\_matched\_basis} maps every requested sideband, then
+verifies
+\begin{lstlisting}
+covered = basis.covered_sidebands()
+if covered != set(range(-sidebands, sidebands + 1)):
+    raise ValueError(f"sideband coverage mismatch: missing=..., extra=...")
+\end{lstlisting}
+with the inverse map
+\begin{lstlisting}
+def floquet_sideband_of(tone):
+    if tone.q == -1: return tone.h - 1
+    if tone.q ==  1: return -(tone.h + 1)
+    return None
+\end{lstlisting}
+It also raises if \code{omega\_max} would clip a requested sideband or a pump
+tone, and if two requests fold onto the same positive-frequency tone. A basis
+that silently omits a sideband would produce a plausible, wrong compression
+number.
+\end{implnote}
+
+\paragraph{Lattice.} A rectangular block $h\in\text{pump modes}$,
+$q\in[-Q,Q]$, clipped by $\omega_{\max}$. Used by the convergence study, where
+the natural knob is the signal order $Q$ rather than a Floquet sideband count.
+
+\paragraph{Three-tone.} $\{(1,0),(1,-1),(1,1)\}$ only. Valid \emph{only} with a
+fundamental-only pump basis.
+
+\begin{caveat}[three-tone is a trap]
+If the pump basis retains harmonics, a three-tone basis silently drops them ---
+which changes the pump waveform and therefore every derived quantity. The driver
+raises rather than dropping any pump $(h,0)$ mode.
+\end{caveat}
+
+\section{The multitone problem}
+
+\subsection{Residual}
+
+The structure is identical to \cref{chap:pumphb} with the mode index $k$
+replaced by the tone index $(h,q)$:
+\begin{equation}
+  \boxed{\;
+  R_{(h,q)}(\Xvec;\tau)
+  = \Dmat\bigl(\omega_{(h,q)}\bigr)X_{(h,q)}
+  + N_{(h,q)}(\Xvec)
+  - S_{(h,q)}(\tau) = 0,
+  \;}
+\end{equation}
+with $\Dmat(\omega)$ the same dynamic block \eqref{eq:dynamic-block} and the
+nonlinear term computed by the same AFT cycle, now on the torus:
+\begin{align}
+  \psi &= \Bphi^{\mathsf T}\xvec(\theta_p,\theta_\delta) + \psi_{\mathrm{dc}},\\
+  \iJ  &= \text{branch}(\psi) - \text{branch}(\psi_{\mathrm{dc}}),\\
+  N &= \mathcal{P}\left[\Bphi\,\iJ\right],
+\end{align}
+where $\mathcal{P}$ is the torus projection. Note the same DC-current
+subtraction as \cref{impl:dc-subtraction}, and the same delegation to the
+circuit's branch law --- so a SNAIL device solves without any change to this
+layer.
+
+\subsection{The affine source path}
+
+Continuation in \cref{chap:pumphb} scaled a single source from zero. Here there
+are two sources, and the useful paths turn one on while holding the other fixed.
+
+\begin{definition}[affine source path]
+\begin{equation}
+  \Svec(\tau) = \Svec_{\mathrm{start}} + \tau\,\Svec_{\Delta},
+  \qquad \tau\in[0,1].
+\end{equation}
+\end{definition}
+
+\begin{implnote}[three named paths]
+\begin{center}
+\begin{tabular}{@{}l l l@{}}
+\toprule
+Constructor & $\Svec_{\mathrm{start}}$ & $\Svec_\Delta$ \\
+\midrule
+\code{pump\_turn\_on} & $\vect{0}$ & $\Svec_p$ \\
+\code{signal\_turn\_on} & $\vect{0}$ & $\Svec_p + \Svec_s$ \\
+\code{signal\_substep} & $\Svec_p + \Svec_s^{\mathrm{old}}$
+                       & $\Svec_s^{\mathrm{target}} - \Svec_s^{\mathrm{old}}$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+The third is the important one: it holds the pump at full strength and moves
+only the signal, which is the physically meaningful continuation when marching
+up a compression curve. Because the tangent predictor uses
+\code{source\_coeffs(1) - source\_coeffs(0)} (\cref{sec:continuation}), it gives
+$\Svec_\Delta$ correctly for all three without modification.
+\end{implnote}
+
+\subsection{Preconditioning}
+
+The preconditioner hierarchy transfers unchanged. The exact real-coupled
+construction \eqref{eq:real-superblock} is assembled over tone pairs, with the
+required $\Khat$ offsets being exactly $\{k-q\}\cup\{k+q\}$ over all retained
+tone pairs --- now differences and sums of \emph{lattice coordinates}.
+
+\begin{implnote}[cache survives \code{dataclasses.replace}]
+A compression sweep rebuilds the problem once per signal-power point with only
+\code{source\_path} changed. Everything expensive --- the dynamic blocks, the
+scatter map, the symbolic factorisation --- depends on the circuit and basis
+only. \code{FullMultiToneProblem} therefore carries an explicit \code{cache}
+dict that survives \code{replace}, so that work happens once per sweep rather
+than once per power point. Forgetting to carry \code{preconditioner} across the
+rebuild silently reverts to the default; that is now explicit in
+\code{\_problem\_with\_path}.
+\end{implnote}
+
+\section{Compression}
+
+\subsection{Definition}
+
+\begin{definition}[compression and $P_{1\mathrm{dB}}$]
+For small-signal gain $G_0$ and gain $G(P_s)$ at input signal power $P_s$,
+\begin{equation}
+  \mathrm{compression}(P_s) = G_0 - G(P_s)\quad[\si{\dB}],
+\end{equation}
+and the input-referred 1\,dB compression point $P_{1\mathrm{dB}}$ is the
+smallest $P_s$ at which the compression reaches \SI{1}{\dB}.
+\end{definition}
+
+\subsection{Four reference states}
+
+Reporting gain and depletion in a normalised way requires four solves:
+
+\begin{center}
+\begin{tabular}{@{}l l l@{}}
+\toprule
+State & Pump & Signal \\
+\midrule
+\code{pump\_off\_signal\_on} & off & finite \\
+\code{pump\_on\_signal\_off} & on & off \\
+\code{pump\_on\_signal\_infinitesimal} & on & $\SI{1e-12}{\ampere}$ \\
+\code{pump\_on\_signal\_finite} & on & finite \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+From these,
+\begin{align}
+  \text{gain} &= 20\log_{10}\frac{|S_{21}^{\mathrm{signal}}|_{\text{pump on}}}
+                                  {|S_{21}^{\mathrm{signal}}|_{\text{pump off}}},
+  \label{eq:mt-gain}\\
+  \text{pump depletion} &= 20\log_{10}
+    \frac{|S_{21}^{\mathrm{pump}}|_{\text{signal finite}}}
+         {|S_{21}^{\mathrm{pump}}|_{\text{signal off}}}.
+  \label{eq:mt-depletion}
+\end{align}
+The infinitesimal-signal state exists to provide a well-conditioned seed for the
+finite-signal solve and to give the small-signal gain in the same basis as the
+compressed one --- so that the compression is a difference of like quantities.
+
+\begin{caveat}[read gain through \code{tone\_s21}]
+Gain must be read through \code{multitone.observables.tone\_s21} and reported as
+the pump-on/pump-off ratio. An earlier path reconstructed it as
+$|i\omega X|/V_{\mathrm{in}}$; that was biased by \SI{12.041}{\dB} on the SNAIL
+benchmark. \code{tone\_s21} applies the reconstruction factor of two, forms
+$V = 2i\omega X$, and routes through
+\code{port\_s\_from\_unit\_current\_response}.
+\end{caveat}
+
+\subsection{\texorpdfstring{Locating $P_{1\mathrm{dB}}$}{Locating P1dB}}
+
+A coarse sweep brackets the crossing; the crossing is then located precisely.
+
+\begin{implnote}[interpolation versus refinement]
+Two estimates are emitted from \emph{one} sweep, so the difference between
+methods is a single-variable comparison:
+\begin{itemize}
+\item \code{p1db\_interpolated\_dbm}: log-linear interpolation between the two
+      coarse points bracketing \SI{1}{\dB}.
+\item \code{p1db}: bracketed bisection with \emph{additional nonlinear solves}
+      inside the bracket (\code{refine\_p1db}), to a tolerance
+      \code{--p1db-power-tol-db} (default \SI{0.1}{\dB}).
+\end{itemize}
+\code{refine\_p1db} validates its bracket first --- it requires
+$f(\text{low})<0\le f(\text{high})$ --- and raises rather than returning a
+meaningless bisection of a non-bracketing interval.
+\end{implnote}
+
+\begin{measured}[refinement versus interpolation]
+\begin{center}
+\begin{tabular}{@{}l r r r@{}}
+\toprule
+Device & Published & Refined & $\Delta$ \\
+\midrule
+JTWPA \SI{6.6}{\giga\hertz} & $-111.458017$ & $-111.118089$ & $+\SI{0.339928}{\dB}$ \\
+2c \SI{7.440816}{\giga\hertz} & $-95.083826$ & $-94.857885$ & $+\SI{0.225941}{\dB}$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+Each run's interpolated value reproduces the published number to
+$\SI{5.1e-9}{\dB}$ (JTWPA) and $\SI{6.0e-9}{\dB}$ (2c), confirming the two
+methods are being compared on identical sweeps.
+
+The errors are $0.23$--$\SI{0.34}{\dB}$: above the \SI{0.2}{\dB} scale,
+single-signed (refined is always higher, so devices compress \emph{later} than
+published), and not grounds for re-running the campaigns wholesale.
+\end{measured}
+
+\begin{remark}[an earlier, larger claim was wrong]
+A previously reported discrepancy of $+0.461/+\SI{2.920}{\dB}$ is withdrawn. It
+was measured on a nine-point coarse grid that no published number used; that
+grid placed the 2c first crossing \SI{8.4}{\dB} away from its true value, making
+the ``$+2.920$'' a grid artefact rather than a method difference.
+\end{remark}
+
+\subsection{Curve metadata}
+
+\begin{implnote}[\code{build\_compression\_curve}]
+The curve records more than a single number:
+\begin{itemize}
+\item \code{first\_1db\_crossing\_dbm} --- the first crossing, found only
+      between \emph{adjacent valid} points, so a failed solve cannot create a
+      spurious crossing;
+\item \code{number\_of\_crossings} --- more than one indicates non-monotone
+      compression;
+\item \code{nonmonotonic\_compression} --- true if compression ever decreases
+      with power;
+\item \code{failed\_signal\_power\_dbm} --- the powers at which the solve failed
+      or produced non-finite compression.
+\end{itemize}
+A curve with several crossings, or with failures inside the region of interest,
+must not be summarised by its first crossing alone.
+\end{implnote}
+
+\subsection{Signal-power continuation}
+\label{sec:signal-substep}
+
+Marching up in signal power is itself a continuation problem, with a recovery
+ladder analogous to \cref{sec:continuation}:
+
+\begin{enumerate}
+\item \textbf{previous} --- warm start from the last converged point;
+\item \textbf{secant} --- extrapolate from the last two, in signal current;
+\item \textbf{rescaled Floquet} --- rescale the small-signal solution to the new
+      amplitude;
+\item \textbf{signal substep} --- adaptive continuation along
+      \code{signal\_substep} between the last converged current and the target,
+      with step sizes set in \si{\dB} of signal power and converted to a
+      $\tau$ fraction;
+\item \textbf{arclength} --- optional, for turning points.
+\end{enumerate}
+
+\begin{implnote}[fallback sizing is deliberately coarse]
+The substep's fixed-step fallback is sized like the cold-start path
+(\code{\_FALLBACK\_FIXED\_STEPS = 20}), \emph{not} as
+$\text{span}/\text{min\_step}$. The latter makes the fallback finest exactly
+when adaptive stepping has already failed, scheduling thousands of micro-steps
+that only the wall-clock deadline ever stops. Measured before the fix: 6881
+steps, $\approx\SI{29}{\hour}$, for one power point.
+\end{implnote}
+
+Statuses are distinguished --- \code{VALID\_SOLVED},
+\code{SIGNAL\_CONTINUATION\_FAILED}, \code{SIGNAL\_SUBSTEP\_STALL},
+\code{DEADLINE}, \code{NONFINITE\_STATE} --- so that a timeout is never reported
+as a physical boundary.
+
+\section{Conservation diagnostics}
+
+\subsection{Power balance}
+\label{sec:power-balance}
+
+In steady state, power supplied must equal power dissipated. The solver forms
+both sides independently.
+
+\emph{Internal:} averaged over the torus,
+\begin{equation}
+  P_{\mathrm{supplied}} = \left\langle \dot{\xvec}\cdot
+    \left(\Cmat\ddot{\xvec} + \Gmat\dot{\xvec} + \Kmat\xvec
+          + \Bphi\iJ\right)\right\rangle,
+  \qquad
+  P_{\mathrm{diss}} = \left\langle\dot{\xvec}\cdot\Gmat\dot{\xvec}\right\rangle.
+\end{equation}
+
+\emph{External:} from port power waves. With
+\begin{equation}
+  a = \frac{V + Z_0 I}{2\sqrt{Z_0}},\qquad
+  b = \frac{V - Z_0 I}{2\sqrt{Z_0}},
+\end{equation}
+the net power into the network at a tone is
+$\tfrac12\sum_{\text{ports}}(|a|^{2}-|b|^{2})$.
+
+\begin{implnote}[two boundary subtleties, both once-live bugs]
+First, \code{extract\_port\_waves} removes the port resistor's own current
+before forming $a,b$: the KCL value is the \emph{Norton source} current, and the
+resistor itself carries $V/Z_0$, so the current entering the network is the
+difference. Consequently the corresponding shunt loss must \emph{also} be
+removed from the dissipation side --- otherwise the two sides describe different
+boundaries and the balance can be $O(1)$ wrong.
+
+Second, when a pump-only reference state is supplied, the external quantities
+are formed as \emph{differences} from it. A pump-only solution already contains
+harmonic conversion (for example $h{=}1 \to h{=}3$), which is energy-conserving
+but is not part of signal/idler saturation; leaving it in gives a spurious
+residual.
+\end{implnote}
+
+\subsection{Manley--Rowe}
+\label{sec:manley-rowe}
+
+The Manley--Rowe relations express photon-number bookkeeping: in a lossless
+parametric process, the net photon flux summed over the participating modes
+vanishes,
+\begin{equation}
+  \sum_{\mu}\frac{P_\mu}{\omega_\mu} = 0 .
+  \label{eq:manley-rowe}
+\end{equation}
+
+Two scopes are computed, and \emph{they are not equally valid}.
+
+\paragraph{Conversion scope.} Restricted to $\{(1,0),(1,-1),(1,1)\}$ --- pump,
+signal, idler. This is the three-wave conversion channel and
+\eqref{eq:manley-rowe} is a genuine invariant for it.
+
+\paragraph{All-tone scope.} Summed over every retained tone.
+
+\begin{caveat}[never gate on the all-tone quantity]
+\code{conversion\_manley\_rowe\_rel\_err} is correct, with a real floor of
+$\approx\SI{2.2}{\percent}$ from numerical and truncation effects.
+
+\code{all\_tone\_manley\_rowe\_rel\_err} is \textbf{not a valid invariant}. It
+peaks at the \emph{smallest} signal power ($0.533$ for JTWPA, $0.500$ for 2c)
+--- near-identical across two very different devices, which is the signature of
+a fixed factor rather than of physics. The all-tone sum includes pump-harmonic
+conversion that is energy-conserving but outside the signal/idler channel, and
+it produces a spurious residual of about one half. It is retained as a
+diagnostic and must never be used as a pass/fail gate.
+\end{caveat}
+
+\begin{implnote}[evaluability floor]
+Below a photon scale of $10^{-28}$ the quotient in \eqref{eq:manley-rowe} is
+dominated by cancellation and round-off. Such points are marked
+\code{manley\_rowe\_evaluable = 0} rather than reported as a large physical
+error, and the scale itself (\code{manley\_rowe\_photon\_scale}) is emitted
+alongside so the reader can see why.
+\end{implnote}
+
+\subsection{Junction diagnostics}
+
+\code{junction\_diagnostics} reports, per branch,
+\code{max\_abs\_phase}, \code{max\_abs\_sine} and \code{min\_cosine} over the
+torus. The last is the important one: $\min_t\cos(\psi/\rphi)$ going negative
+means the junction has passed $\psi/\rphi=\pi/2$ somewhere in the cycle and has
+negative differential inductance there --- a saturation mechanism entirely
+distinct from pump depletion.
+
+\section{Spatial attribution}
+\label{sec:spatial}
+
+\begin{implnote}[\code{spatial\_profiles}]
+Branch-resolved amplitudes along the chain: $|\psi_p|$, $|\psi_s|$, $|\psi_i|$
+per branch, plus the three-wave phase
+\begin{equation}
+  \theta_b = 2\arg\psi_{p,b} - \arg\psi_{s,b} - \arg\psi_{i,b},
+\end{equation}
+unwrapped along the chain, and its gradient
+$\Delta k_{\mathrm{eff}} = \mathrm{d}\theta/\mathrm{d}b$ in radians per cell.
+This is the local phase mismatch of \eqref{eq:linear-mismatch}, measured rather
+than assumed, and it makes visible where along the device the phase matching
+degrades.
+\end{implnote}
+
+\begin{caveat}[branch index is validated before use as position]
+Treating branch index as cell index is only legitimate if $\Bphi$ is an ordered,
+connected two-node chain. \code{\_chain\_branch\_nodes} verifies this and raises
+otherwise. For one device studied here the nonlinear branches are monotone but
+segmented by five intentional node-number gaps: the spatial mapping validates
+\emph{order}, not literal node adjacency, and results must be read accordingly.
+\end{caveat}
+
+\code{spatial\_profile\_summary} reduces a profile to an overlap integral
+\begin{equation}
+  \frac{\sum_b |\psi_{p,b}||\psi_{s,b}||\psi_{i,b}|}
+       {\|\psi_p\|\,\|\psi_s\|\,\|\psi_i\|}
+\end{equation}
+and the branch range over which the pump exceeds \SI{10}{\percent} of its peak
+--- i.e.\ the effective interaction length.
+
+\section{Stability of the large-signal state}
+
+A converged periodic solution is not necessarily a stable one. Linearising about
+the converged large-signal state and examining the Floquet exponents identifies
+growing perturbations.
+
+\begin{implnote}[opt-in, and previously wrong]
+Stability checking is opt-in (\code{--check-stability}); without it
+\code{stability\_status} stays \code{NOT\_CHECKED}. A deep-saturation solution
+without the check is not a stability claim.
+
+A previously reported result --- ``stable, dominant exponent
+$+\SI{2.87e-6}{\per\second}$'' --- is \textbf{withdrawn}. Two defects:
+\begin{enumerate}
+\item the stability module passed pump-harmonic keys where
+      \code{assemble\_conversion\_matrix} expects a sideband ladder;
+\item $\sigma_{\min}$ was owned by a near-DC sideband, giving a value
+      bit-identical with the pump on and off up to $\psi/\rphi = 57000$.
+\end{enumerate}
+The committed tests could not catch either, because they ran on $I_c=0$ --- a
+\emph{linear} circuit --- at a zero state. Both are fixed and mutation-verified;
+near-DC cases now return \code{INCONCLUSIVE} with a stated reason rather than a
+confident \code{STABLE}.
+\end{implnote}
+
+\begin{measured}[exponents at the three operating points]
+\begin{center}
+\begin{tabular}{@{}l r r r@{}}
+\toprule
+Device & Zero signal & $P_{1\mathrm{dB}}$ & Deepest saturation \\
+\midrule
+JTWPA & $-\num{3.3785e8}$ (STABLE) & $-\num{1.7638e8}$ (INCONCL.) & $-\num{1.1316e8}$ (INCONCL.) \\
+2c    & $-\num{1.1034e-2}$ (STABLE) & $-\num{1.6045e-2}$ (STABLE) & $-\num{1.8755e-2}$ (STABLE) \\
+\bottomrule
+\end{tabular}
+\end{center}
+All exponents negative (decaying), and now state-dependent as they must be.
+\textbf{No unstable point was found.} The JTWPA \code{INCONCLUSIVE} entries are
+a resonance-refinement non-convergence, not the near-DC guard; production points
+are clear of that guard (closest sideband \SI{0.52}{\giga\hertz} for JTWPA,
+\SI{0.10}{\giga\hertz} for 2c, against thresholds of $\approx\SI{7}{\mega\hertz}$).
+\end{measured}
+
+\begin{caveat}[always quote exponents against $\wp$]
+A bare exponent in \si{\per\second} is not interpretable. JTWPA's
+$|\sigma|/\wp \approx \num{8e-3}$ is real damping; 2c's
+$\approx\num{4e-13}$ is numerically marginal. The same numerical value can mean
+opposite things on two devices.
+\end{caveat}
+
+\section{Results}
+
+\begin{measured}[four-device compression campaign]
+\begin{center}
+\begin{tabular}{@{}l r r r r@{}}
+\toprule
+Device & $S$ & Gain [\si{\dB}] & Input $P_{1\mathrm{dB}}$ [\si{\dBm}]
+& Depletion at $P_{1\mathrm{dB}}$ [\si{\dB}] \\
+\midrule
+JPA     & 2  & $13.305144$ & $-132.732343$ & $-3.368085$ \\
+JTWPA   & 10 & $27.541036$ & $-111.458017$ & $-0.351776$ \\
+FQJTWPA & 6  & $28.534877$ & $-107.386000$ & $-0.598642$ \\
+2c      & 10 & $15.916611$ & $\phantom{0}-95.083826$ & $-0.622737$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+\end{measured}
+
+\begin{measured}[frequency-resolved]
+JTWPA reached $P_{1\mathrm{dB}}$ at 8 of 10 frequencies (minimum
+$\SI{-112.280936}{\dBm}$ at \SI{6.888889}{\giga\hertz}); FQJTWPA at 8 of 10
+(minimum $\SI{-107.881062}{\dBm}$ at \SI{7.533333}{\giga\hertz}); 2c at 10 of 10
+(minimum $\SI{-94.011690}{\dBm}$ at \SI{7.422222}{\giga\hertz}).
+\code{NO\_GAIN\_AT\_OPERATING\_POINT} is retained at the dead-band frequencies
+rather than reporting a meaningless $P_{1\mathrm{dB}}$.
+\end{measured}
+
+\begin{caveat}[every $P_{1\mathrm{dB}}$ here carries an unquantified uncertainty]
+The sideband counts in the table above were selected by a procedure that has
+since been retired (\cref{chap:validation}), and production-basis
+self-convergence has never been measured. Furthermore, the matched basis
+constrains $|q|\le1$ at every sideband count; opening $q$ to $\pm2$ cuts
+compression by $\SI{44}{\percent}$, which means the published $P_{1\mathrm{dB}}$
+values are biased \emph{low}. These numbers should be read as the output of a
+specific, documented truncation --- not as converged predictions.
+\end{caveat}

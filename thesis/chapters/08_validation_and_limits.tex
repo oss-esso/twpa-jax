@@ -1,0 +1,418 @@
+\chapter{Validation and Its Limits}
+\label{chap:validation}
+
+A simulator that agrees with itself is not validated. This chapter states
+precisely what has been established, what has been retracted, and what currently
+rests on nothing external. It is deliberately the least flattering chapter in
+this thesis, because the alternative --- presenting internal consistency as
+physical evidence --- is how simulation results become unfalsifiable.
+
+\section{A taxonomy of checks}
+
+It is useful to separate four kinds of evidence, in increasing order of strength:
+
+\begin{center}
+\begin{tabular}{@{}l p{0.62\textwidth}@{}}
+\toprule
+\textbf{Kind} & \textbf{What it establishes} \\
+\midrule
+Unit / numerical
+& That a routine computes the formula it claims to. Necessary, never sufficient.
+  Includes machine-precision identities and mutation-tested gates. \\
+\addlinespace
+Internal consistency
+& That two independent code paths agree where they must --- e.g.\ the multitone
+  solve reproducing the Floquet solve in the small-signal limit. Strong evidence
+  \emph{about the implementation}, silent about the model. \\
+\addlinespace
+Cross-code agreement
+& That this solver and another solver produce the same number. Establishes that
+  two implementations of the same model agree. \textbf{Not} physical evidence. \\
+\addlinespace
+External physical
+& That the model reproduces a measurement of a real device, with independently
+  calibrated inputs. The only kind that validates physics. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Most of what exists for this solver is in the first two rows.
+
+\section{What is established}
+
+\subsection{Numerical identities}
+
+Several quantities were verified to machine precision against independently
+constructed references, as reported in \cref{chap:pumphb}:
+the dynamic block $\Dmat_k$ (relative deviation $\num{0}$); the tangent-stiffness
+harmonic $\Khat_\ell$ ($\num{0}$); the convergence norm (twelve digits); the
+DC-subtracted branch current ($\num{2.6e-23}$).
+
+The fast preconditioner backend reproduces the reference assembly to
+$\num{1.0e-11}$ relative, tested quadrant by quadrant --- necessary because a
+sign error there would only make the preconditioner slower, and every physics
+gate would still pass.
+
+\subsection{Conjugate symmetry}
+
+$\ghat_{-\ell} = \overline{\ghat_\ell}$ is an exact identity for a real pump
+waveform (\cref{eq:conj-symmetry}), reported per sideband in
+\code{gamma\_hat\_summary.csv}. It is the sharpest available check that the
+pump waveform, its basis metadata, and its phase convention all agree.
+
+\subsection{Component reproducibility}
+
+The production circuit rebuilds bit-identically from its own stored parameters:
+$16312/16312$ elements matching, with maximum matrix difference exactly $0.0$.
+The scatter RNG stream is pinned so that historical results reproduce at the
+same seed.
+
+\subsection{Basis-convergence, partially}
+
+\begin{measured}[JTWPA lattice family, 8 of 9 settings]
+\begin{center}
+\begin{tabular}{@{}l l r l@{}}
+\toprule
+Knob & Top two settings & $|\Delta P_{1\mathrm{dB}}|$ & Verdict \\
+\midrule
+Signal order $Q$ & $Q{=}2$, $Q{=}3$ & \SI{0.059163}{\dB} & PASS \\
+Torus scale & $\text{sc}{=}1$, $\text{sc}{=}2$ & \SI{0.000000}{\dB} & PASS \\
+Pump order & order 1, order 3 & \SI{1.656572}{\dB} & \textbf{not evaluable} \\
+Odd vs dense & dense order-5 did not run & --- & \textbf{not evaluated} \\
+\bottomrule
+\end{tabular}
+\end{center}
+\end{measured}
+
+Torus scale is converged \emph{exactly}: doubling $N_p$ and $N_\delta$ moves
+nothing, confirming the alias-free grid sizing of \cref{chap:saturation}.
+
+The pump-order number spans a gap and is therefore not a convergence
+measurement: the odd order-2 basis $\{1,3\}$ fails its pump solve reproducibly
+in $\approx\SI{1.4}{\second}$ across two independent runs, while $\{1\}$ and
+$\{1,3,5\}$ both converge. Orders 1 and 3 are not adjacent settings, so
+\SI{1.66}{\dB} between them measures nothing. The dense order-5 point --- the
+mandatory odd-versus-dense comparison --- exhausted memory.
+
+A consistency check that did pass: \code{three\_tone} and \code{lattice} at
+$Q{=}1$, order 1 agree to all six reported decimals ($-112.748281$), as they must,
+being literally the same basis.
+
+\begin{caveat}[this does not discharge the production-basis question]
+Every setting in that matrix solves at $3.756$--\SI{7.894}{\dB} small-signal
+gain, against production's \SI{27.541}{\dB}, and the study builds
+\code{build\_lattice\_basis} where production uses
+\code{build\_sideband\_matched\_basis} at $S=10$. It converges the lattice family
+at a much weaker operating point. The production basis has \emph{not} passed a
+\SI{0.2}{\dB} convergence gate and must not be described as having done so.
+\end{caveat}
+
+\section{What has been retracted}
+
+\subsection{Cross-code agreement is not validation}
+\label{sec:jc-retraction}
+
+The sideband truncations used in production ($S=10$ for JTWPA, $S=6$ for
+FQJTWPA, $S=10$ for 2c) were originally selected by gating small-signal gain
+against a reference implementation in another language, to \SI{0.2}{\dB}.
+
+That gate is void, for two independent reasons:
+
+\begin{enumerate}
+\item The reference is another simulator. It has no reference of its own. Two
+      codes agreeing establishes that they implement the same equations, which
+      is a useful \emph{regression} check and nothing more.
+\item Two of the seven parity designs are that code's own documentation
+      examples. Validating a solver against designs distributed by the code it
+      is being compared to is circular.
+\end{enumerate}
+
+\begin{caveat}[what this leaves unresolved]
+JTWPA gain is \textbf{non-monotone in $S$}:
+\begin{center}
+\begin{tabular}{@{}r r r r r@{}}
+\toprule
+$S$ & 2 & 4 & 6 & 10 \\
+\midrule
+Gain [\si{\dB}] & $30.7152$ & $24.2021$ & $26.5563$ & $27.5410$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+Without an external reference, $S=10$ cannot be selected from that sequence by
+agreement. Selecting it requires a self-convergence argument --- $S=10$ against
+$S=12$ and $S=14$ --- which has never been run. Non-monotonicity means $S=10$
+may still be climbing. The 2c device never had a cross-code reference at all and
+inherited $S=10$ by analogy.
+
+Same-$S$ multitone/Floquet parity remains a valid internal check and should
+still pass.
+\end{caveat}
+
+The parity results themselves are retained as \emph{provenance}: six of seven
+designs match to $<\SI{0.0024}{\dB}$, and one lossy design remains
+$\approx\SI{0.89}{\dB}$ off pending reconciliation of the lossy pump convention.
+That is a statement about numerical drift between two codes. It is reported as
+such.
+
+\subsection{The stability result}
+
+The dominant-exponent result reported in an earlier draft is withdrawn; see
+\cref{chap:saturation}. Two defects, both now fixed and mutation-verified.
+The instructive part is \emph{why} the tests missed them: they ran on $I_c=0$,
+which is a linear circuit, at a zero state. A test that exercises no
+nonlinearity cannot detect an error in the nonlinear tangent.
+
+\subsection{\texorpdfstring{The $P_{1\mathrm{dB}}$ refinement discrepancy}
+                          {The P1dB refinement discrepancy}}
+
+An earlier claim of $+0.461/+\SI{2.920}{\dB}$ between interpolated and refined
+$P_{1\mathrm{dB}}$ is withdrawn: it was measured on a coarse grid no published
+number used, which placed one crossing \SI{8.4}{\dB} off. The correct figures
+are $0.23$--$\SI{0.34}{\dB}$ (\cref{chap:saturation}).
+
+\section{What has no external reference}
+
+\subsection{Saturation}
+
+\begin{caveat}[saturation currently rests on internal checks only]
+Two candidate external references were considered and both are unavailable:
+\begin{itemize}
+\item The cross-code reference is retired for the reasons in
+      \cref{sec:jc-retraction}, and in any case is regression-only.
+\item The available measurement cube from the cryogenic setup sweeps pump power
+      against signal frequency. It has \textbf{no signal-power axis}, so it
+      cannot validate saturation or $P_{1\mathrm{dB}}$ at all. (It remains a
+      valid reference for gain maps.)
+\end{itemize}
+
+Saturation correctness therefore rests entirely on:
+\begin{enumerate}
+\item the conversion-scope Manley--Rowe invariant (valid, with a real
+      $\approx\SI{2.2}{\percent}$ floor);
+\item power balance;
+\item production-basis self-convergence (\textbf{never measured});
+\item the small-signal Floquet limit (a genuine cross-path check).
+\end{enumerate}
+Items 3 and 4 are the ones that would carry weight, and item 3 has not been done.
+\end{caveat}
+
+A later dataset does sweep signal power and would constitute the first genuine
+external compression reference. Reconciling its calibration and gain-reference
+conventions is future work.
+
+\subsection{The truncation bias}
+
+\begin{measured}[the matched basis caps $|q|$ at 1]
+\code{build\_sideband\_matched\_basis} produces tones with $|q|\le1$ at
+\emph{every} sideband count. Opening $q$ to $\pm2$ cuts compression by
+\SI{44}{\percent}.
+\end{measured}
+
+This is a definite, signed bias: the published $P_{1\mathrm{dB}}$ values are
+\emph{low}. It is a property of the basis constructor, not of the solver, and it
+is the most concrete known limitation of the compression results.
+
+\section{Comparison with measurement}
+
+\subsection{Fitting calibration offsets}
+
+Comparing a simulated map to a measured one requires aligning calibration
+offsets in frequency and power. Rather than tune them by hand, they are fitted
+as nuisance parameters:
+\begin{equation}
+  G_{\mathrm{meas}}(f,P) \approx
+  G_{\mathrm{sim}}(f - \Delta f,\; P - \Delta P) + \Delta G .
+  \label{eq:map-alignment}
+\end{equation}
+For weighted least squares $\Delta G$ is analytic given $(\Delta f,\Delta P)$, so
+only a two-dimensional grid search remains. Non-overlapping and failed cells are
+masked; the amplified ridge is weighted above the flat background so that the
+fit is driven by the feature of interest.
+
+\begin{measured}[per-section fits are far better identified]
+A whole-map fit gives $\Delta f = \SI{-0.30}{\giga\hertz}$,
+$\Delta P = \SI{+2.55}{\dB}$, $\Delta G = \SI{-1.30}{\dB}$, RMS \SI{6.0}{\dB},
+with a frequency-elongated (weakly identified) basin --- because a single
+$\Delta f$ cannot align all comb lobes when the comb phase drifts.
+
+Restricting to one comb branch gives $\Delta f \approx 0$ --- the two datasets'
+combs are already frequency-aligned --- and
+$\Delta P \approx +2.5$ to $\SI{+3.3}{\dB}$ robustly across
+$6.2$--\SI{7.45}{\giga\hertz}, with a compact single minimum. That is the one
+real calibration offset.
+\end{measured}
+
+Per-lobe RMS remains $2$--\SI{4}{\dB}, for two reasons that are model-fidelity
+and coverage gaps rather than fit failures: the simulation does not reach the
+measured high-power lobes (a numerical-boundary cap), and its comb periodicity
+differs slightly.
+
+\begin{implnote}[guard against tiny-overlap fits]
+A soft $1/\text{overlap}$ penalty alone lets a $\approx9$-cell corner with
+near-zero local residual win the fit. \code{--min-overlap-frac} (default $0.25$)
+rejects those outright. The threshold is relative to the floor-weighted window,
+whose maximum achievable overlap is only $0.3$--$0.4$ because the simulation
+fails at high power --- so $0.25$ is the practical ceiling, not a lax setting.
+\end{implnote}
+
+\subsection{The model-fidelity gap}
+
+\begin{measured}[gain-map reproduction]
+Power-substep recovery reduced the failed-cell count on a measurement-matched
+map from 1017 to 103 --- i.e.\ the \emph{numerical} boundary was largely solved.
+The model nonetheless undershoots the measured peak gain by
+$\approx\SI{6.5}{\dB}$. That residual is a model-fidelity gap, not a
+convergence problem.
+\end{measured}
+
+\begin{measured}[compression, six frequencies]
+Against the live device, the model compresses \emph{late} at all six measured
+frequencies, by $+1.15$ to $+\SI{5.51}{\dB}$. The gain band itself matches well
+(a uniform \SI{0.92}{\dB} deficit). Ripple makes few-frequency comparisons
+unreliable: the spread across frequencies exceeds the mean offset.
+\end{measured}
+
+\begin{caveat}[compare at equal gain, and quote a slope]
+A single-frequency comparison of $P_{1\mathrm{dB}}$ between model and
+measurement is nearly meaningless, because $P_{1\mathrm{dB}}$ depends strongly on
+gain and both datasets sweep frequency, not gain. The defensible comparison is
+the \emph{slope} of $P_{1\mathrm{dB}}$ against gain.
+
+Even that is confounded: every available slope on both sides is a frequency
+sweep in disguise. The model's slopes span $-0.63$ to $-3.85$; at $G>\SI{25}{\dB}$
+the JTWPA slope is $-3.85$, steeper than the hardware's. A measured
+$\approx\SI{2.6}{\dB\per\dB}$ gap survives testing against estimator artefacts,
+shared gain-reference noise, and five other candidate mechanisms.
+\end{caveat}
+
+\subsection{Pump calibration}
+
+\begin{measured}[on-chip pump confirmed]
+The on-chip pump power is confirmed to \SI{0.7}{\dB} by two independent routes
+($\SI{-65.98}{\dBm}$ against $\SI{-66.7}{\dBm}$). The apparent
+$\approx\SI{7.9}{\dB}$ gap between model and measurement is therefore not a
+calibration error.
+\end{measured}
+
+Of that gap, $\SI{6.02}{\dB}$ is the Norton-termination factor of
+\cref{chap:circuit}: the ports are Norton-terminated, so computing on-chip power
+as $I^{2}Z_0/2$ overstates it. Correcting for it leaves $\approx\SI{1.1}{\dB}$.
+
+\begin{caveat}[line loss must be applied]
+Two campaigns ran with \emph{no} pump-line loss at all. The measured loss model
+of \cref{chap:circuit} gives \SI{34.54}{\dB} at \SI{7.1}{\giga\hertz}; omitting
+it is not a small correction. All future work uses the measured model.
+\end{caveat}
+
+\begin{implnote}[on-chip dielectric-loss gate]
+With the pump off, the on-chip tangent is checked independently of another
+simulator: $\ln|S_{21}|$ must scale linearly with $\tan\delta$ and
+$|S_{21}|$ must decrease monotonically. This is the analytic
+$\exp(-\alpha L)$ attenuation check, separate from measured input-line loss.
+It does not make saturation an externally validated result.
+\end{implnote}
+
+\section{Two structural findings}
+
+\subsection{The device is not travelling-wave}
+
+\begin{measured}
+For the two-chip device, $|V^-|/|V^+| = 0.359$: it is a standing-wave resonant
+structure. This is \emph{not} a port mismatch --- two earlier explanations,
+based on the midpoint impedance and on an \SI{84.6}{\ohm} characteristic
+impedance, were both checked and both wrong.
+\end{measured}
+
+The consequence is interpretive rather than numerical: the solver computes the
+full scattering solution correctly either way, but coupled-mode expressions of
+the form \eqref{eq:gain-cme}, and any reasoning that assumes a monotonically
+growing envelope, do not apply.
+
+\subsection{Design directories are the source of truth}
+
+\begin{caveat}[an entire campaign ran on a stale circuit]
+Output directories from previous runs contain circuit matrices, and they are
+easy to mistake for designs. They are not: they are snapshots. A series of
+compression campaigns ran on a stale circuit taken from an output directory
+rather than from the live design.
+
+The live designs are under \file{designs/}. This is why the design directory
+convention, the topology gate of \cref{sec:profiles}, and the rebuild-from-stored
+parameters property all matter operationally, not just aesthetically.
+\end{caveat}
+
+\section{Testing methodology}
+
+\subsection{Mutation testing}
+
+Every gate in the component-profile and scatter suite (95 tests) was verified by
+\emph{mutation}: deliberately breaking the implementation and confirming the test
+fails. A test that has never been seen to fail is not evidence.
+
+This methodology directly caught the two stability defects described above ---
+the original tests passed on a linear circuit at a zero state and could not have
+detected either.
+
+\subsection{Clone testing}
+
+Local test runs can pass spuriously because files remain on disk after being
+removed from version control. A dependency dropped from the repository is still
+importable locally. Verification therefore includes a clean-clone run: check out
+the repository fresh, install, and run the suite.
+
+This caught a missing package that every local run had silently satisfied.
+
+\subsection{Verifying agent-assisted work}
+
+Where automated tooling reports work as complete, the claim is checked against
+the object database (\code{git ls-tree}) rather than accepted from a summary. On
+one occasion the repository head was unimportable for eight consecutive commits
+despite each being reported as complete and tested.
+
+\section{Summary of the validation position}
+
+\begin{center}
+\begin{tabular}{@{}l l p{0.42\textwidth}@{}}
+\toprule
+\textbf{Quantity} & \textbf{Status} & \textbf{Basis} \\
+\midrule
+Pump periodic steady state
+& Established
+& Machine-precision identities; conjugate symmetry; residual convergence. \\
+\addlinespace
+Passive S-parameters
+& Established
+& Direct linear solve, explicit residual check. \\
+\addlinespace
+Small-signal gain (given a basis)
+& Established numerically
+& Explicit linear residual; internal consistency. Cross-code agreement
+  reported as regression only. \\
+\addlinespace
+Choice of sideband count $S$
+& \textbf{Open}
+& Selection gate retired; self-convergence never measured; gain non-monotone
+  in $S$. \\
+\addlinespace
+Gain map versus measurement
+& Partial
+& Numerical boundary largely resolved; $\approx\SI{6.5}{\dB}$ peak-gain
+  model-fidelity gap remains. \\
+\addlinespace
+$P_{1\mathrm{dB}}$ / compression
+& \textbf{Open}
+& No external reference available; known signed low bias from the $|q|\le1$
+  truncation; basis convergence unmeasured. \\
+\addlinespace
+Large-signal stability
+& Preliminary
+& Earlier result withdrawn; current implementation fixed and
+  mutation-verified; no unstable point found. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The honest summary is that the \emph{numerics} are in good shape and the
+\emph{physics validation} is incomplete, with the incompleteness concentrated
+exactly where the scientific interest is highest --- the saturation regime.
+Stating that plainly is more useful than a validation section that reads well.

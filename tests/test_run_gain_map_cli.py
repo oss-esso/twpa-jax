@@ -10,6 +10,26 @@ import numpy as np
 import scripts.run_gain_map as run_gain_map
 
 
+def test_measurement_grid_loader_preserves_nonuniform_themis_axes() -> None:
+    measurement_dir = Path(
+        "docs/development/17.03.10_Themis_SetupAug25_noVTS_transmission_15mK"
+    )
+    powers, freqs = run_gain_map.load_measurement_grid(measurement_dir)
+
+    assert powers.size == 31
+    assert freqs.size == 51
+    assert np.isclose(powers[0], -25.96)
+    assert np.isclose(powers[-1], -16.94666666666667)
+    assert np.isclose(freqs[0], 7.043)
+    assert np.isclose(freqs[-1], 7.373)
+    assert not np.allclose(freqs, np.linspace(freqs[0], freqs[-1], freqs.size))
+
+
+def test_signal_attenuation_override_is_separate_from_pump_model() -> None:
+    args = SimpleNamespace(signal_attenuation_db=7.5)
+    assert run_gain_map.signal_attenuation_db_for(8.0, args) == 7.5
+
+
 def test_inproc_fail_fast_is_opt_in(monkeypatch) -> None:
     monkeypatch.setattr(sys, "argv", ["run_gain_map.py"])
 
@@ -25,6 +45,47 @@ def test_inproc_fail_fast_flag_enables_fast_failure(monkeypatch) -> None:
     args = run_gain_map.parse_args()
 
     assert args.inproc_fail_fast is True
+
+
+def test_recovery_arclength_flags_default_to_no_change(monkeypatch) -> None:
+    # 0 for both -- solve_arclength treats rescale_every=0 as disabled and
+    # max_steps_after_fold=0 as mathematically identical to its own None
+    # default (see docs/development/arclength_fold_resolution_plan.md Phase 4).
+    monkeypatch.setattr(sys, "argv", ["run_gain_map.py"])
+
+    args = run_gain_map.parse_args()
+
+    assert args.recovery_arclength_rescale_every == 0
+    assert args.recovery_arclength_max_steps_after_fold == 0
+
+
+def test_recovery_arclength_flags_are_settable(monkeypatch) -> None:
+    monkeypatch.setattr(sys, "argv", [
+        "run_gain_map.py",
+        "--recovery-arclength-rescale-every", "5",
+        "--recovery-arclength-max-steps-after-fold", "150",
+    ])
+
+    args = run_gain_map.parse_args()
+
+    assert args.recovery_arclength_rescale_every == 5
+    assert args.recovery_arclength_max_steps_after_fold == 150
+
+
+def test_write_points_csv_carries_arclength_fold_current(tmp_path) -> None:
+    import csv
+
+    row_with_fold = {"pass": 0, "point_index": 0, "status": "FAILED",
+                      "pump_arclength_fold_current_a": 1.163e-05}
+    row_without_fold = {"pass": 0, "point_index": 1, "status": "PASS"}
+    out = tmp_path / "points.csv"
+
+    run_gain_map.write_points_csv(out, [row_with_fold, row_without_fold])
+
+    with open(out, newline="", encoding="utf-8") as f:
+        rows = list(csv.DictReader(f))
+    assert rows[0]["pump_arclength_fold_current_a"] == "1.163e-05"
+    assert rows[1]["pump_arclength_fold_current_a"] == ""
 
 
 def test_all_intra_cell_continuation_methods_are_selectable(monkeypatch) -> None:

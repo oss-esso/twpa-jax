@@ -11,7 +11,7 @@ import scipy.sparse.linalg as spla
 
 from twpa_solver.core import CircuitMatrices
 from twpa_solver.core.nonlinear import make_branch_law
-from twpa_solver.core.linear import dynamic_block
+from twpa_solver.core.linear import default_loss_model_for, dynamic_block
 from twpa_solver.multitone.basis import MultiToneBasis, ToneIndex
 from twpa_solver.multitone.grid import TorusGrid
 from twpa_solver.multitone.source import AffineSourcePath
@@ -36,9 +36,10 @@ class FullMultiToneProblem:
     circuit: CircuitMatrices
     basis: MultiToneBasis
     source_path: AffineSourcePath
-    loss_model: str | object = "current_complex_c"
+    loss_model: str | object | None = None
     input_power_dbm: float | None = None
     dc_branch_flux: np.ndarray | None = None
+    environment: object | None = None
     preconditioner: str | None = None
     # Survives ``dataclasses.replace``: the compression sweep rebuilds the
     # problem once per signal-power point with only ``source_path`` changed,
@@ -52,6 +53,8 @@ class FullMultiToneProblem:
             resolve_multitone_preconditioner,
         )
 
+        if self.loss_model is None:
+            self.loss_model = default_loss_model_for(self.circuit)
         self.preconditioner = resolve_multitone_preconditioner(
             self.preconditioner
         )
@@ -87,9 +90,14 @@ class FullMultiToneProblem:
                         "multitone",
                         self.input_power_dbm,
                     )
-                self._linear_blocks.append(
-                    dynamic_block(self.circuit, omega, loss_model=str(selected_loss)).tocsc()
-                )
+                block = dynamic_block(self.circuit, omega, loss_model=str(selected_loss))
+                if self.environment is not None:
+                    node = next(iter(self.circuit.port_to_index.values()))
+                    correction = self.environment.admittance(float(omega))
+                    block = block + sp.csr_matrix(
+                        (np.asarray([correction]), ([node], [node])), shape=block.shape
+                    )
+                self._linear_blocks.append(block.tocsc())
             self.cache[blocks_key] = self._linear_blocks
         else:
             self._linear_blocks = cached_blocks
@@ -221,10 +229,10 @@ class FullMultiToneProblem:
         return {"coeff_abs": coeff_abs, "coeff_rel": coeff_abs / max(source_abs, 1e-30), "time_abs": time_abs, "time_rel": time_rel}
 
     def time_residual(self, X: np.ndarray, tau: float) -> np.ndarray:
-        x_t = self.grid.synthesize(X)
-        dx = self._synthesize_derivative(X, 1)
-        ddx = self._synthesize_derivative(X, 2)
-        residual = (self.C @ ddx.T).T + (self.G @ dx.T).T + (self.K @ x_t.T).T
+        linear = np.asarray([
+            block @ row for block, row in zip(self._linear_blocks, X)
+        ])
+        residual = self.grid.synthesize(linear)
         return np.asarray(residual + self.nonlinear_current_time(X) - self.source_time(tau), dtype=float)
 
     def source_time(self, tau: float) -> np.ndarray:

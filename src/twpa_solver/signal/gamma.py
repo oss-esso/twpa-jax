@@ -9,6 +9,7 @@ import scipy.sparse as sp
 
 
 from twpa_solver.core.circuit import CircuitMatrices
+from twpa_solver.core.nonlinear import make_branch_law
 from twpa_solver.signal.io import PumpSolution
 
 logger = logging.getLogger(__name__)
@@ -86,7 +87,7 @@ def compute_gamma_hat(
     psi_t = (circuit.Bphi.T @ x_t.T).T
     if dc_branch_flux is not None:
         psi_t = psi_t + dc_branch_flux[None, :]
-    gamma_t = (circuit.Ic[None, :] / circuit.phi0) * np.cos(psi_t / circuit.phi0)
+    gamma_t = make_branch_law(circuit).tangent(psi_t)
     logger.debug("gamma_hat_time_domain_built psi_shape=%s gamma_shape=%s gamma_abs_range=(%s,%s)", psi_t.shape, gamma_t.shape, np.min(np.abs(gamma_t)), np.max(np.abs(gamma_t)))
 
     gamma_hat: dict[int, np.ndarray] = {}

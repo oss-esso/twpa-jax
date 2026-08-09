@@ -11,6 +11,8 @@ import numpy as np
 from twpa_solver.core import CircuitMatrices
 from twpa_solver.core.nonlinear import make_branch_law
 from twpa_solver.core.linear import (
+    default_loss_model_for,
+    require_real,
     dynamic_block,
     port_s_from_unit_current_response,
     port_waves,
@@ -25,12 +27,19 @@ from twpa_solver.multitone.source import AffineSourcePath
 
 
 def _port_current_coefficients(
-    X_full: np.ndarray, basis: MultiToneBasis, circuit: CircuitMatrices
+    X_full: np.ndarray,
+    basis: MultiToneBasis,
+    circuit: CircuitMatrices,
+    dc_branch_flux: np.ndarray | None = None,
 ) -> np.ndarray:
     """Return physical port currents from the multitone KCL residual."""
     waveform = basis.synthesize(X_full)
     phase = (circuit.Bphi.T @ waveform.T).T
-    nonlinear_time = circuit.Bphi @ make_branch_law(circuit).current(phase).T
+    law = make_branch_law(circuit)
+    dc = np.zeros(circuit.Bphi.shape[1]) if dc_branch_flux is None else np.asarray(dc_branch_flux, dtype=float)
+    if dc.shape != (circuit.Bphi.shape[1],):
+        raise ValueError("dc_branch_flux must have one value per branch")
+    nonlinear_time = circuit.Bphi @ (law.current(phase + dc[None, :]) - law.current(dc[None, :])).T
     nonlinear = basis.project(nonlinear_time.T)
     currents = np.empty_like(X_full)
     for row, omega in enumerate(basis.omegas):
@@ -45,10 +54,11 @@ def extract_port_waves(
     circuit: CircuitMatrices,
     ports: list[int] | tuple[int, ...],
     z0_ohm: float = 50.0,
+    dc_branch_flux: np.ndarray | None = None,
 ) -> dict[str, Any]:
     """Extract voltage and power-wave values for every retained tone/port."""
     values: dict[str, Any] = {"a": {}, "b": {}, "a_power": {}, "b_power": {}}
-    currents = _port_current_coefficients(X_full, basis, circuit)
+    currents = _port_current_coefficients(X_full, basis, circuit, dc_branch_flux)
     for row, tone in enumerate(basis.tones):
         omega = float(basis.omegas[row])
         for port in ports:
@@ -150,16 +160,29 @@ def power_balance(
         acceleration += basis.synthesize(coefficient)
     phase = (circuit.Bphi.T @ waveform.T).T
     nonlinear = circuit.Bphi @ make_branch_law(circuit).current(phase).T
-    internal = (
-        (circuit.C @ acceleration.T).T
-        + (circuit.G @ derivative.T).T
-        + (circuit.K @ waveform.T).T
-        + nonlinear.T
+    linear_coeffs = np.asarray([
+        dynamic_block(
+            circuit, omega, loss_model=default_loss_model_for(circuit)
+        ) @ X_full[row]
+        for row, omega in enumerate(basis.omegas)
+    ])
+    internal = require_real(
+        basis.synthesize(linear_coeffs) + nonlinear.T,
+        what="multitone internal residual",
     )
     internal_supplied_power = float(np.mean(np.sum(derivative * internal, axis=1)))
     dissipation = float(
         np.mean(np.sum(derivative * (circuit.G @ derivative.T).T, axis=1))
     )
+    loss_dissipation = 0.0
+    if circuit.has_loss:
+        for row, omega in enumerate(basis.omegas):
+            voltage = 1j * omega * X_full[row]
+            loss_conductance = -abs(float(omega)) * circuit.C.imag
+            loss_dissipation += 2.0 * float(
+                np.real(np.vdot(voltage, loss_conductance @ voltage))
+            )
+    dissipation += loss_dissipation
     reference_dissipation = 0.0
     port_resistor_dissipation = 0.0
     reference_port_resistor_dissipation = 0.0
@@ -343,6 +366,7 @@ def power_balance(
         "reference_port_resistor_dissipated_power": reference_port_resistor_dissipation,
         "external_power_balance_rel_err": external_power_balance_relative,
         "dissipated_power": dissipation,
+        "dielectric_dissipated_power": float(loss_dissipation),
         "power_balance_rel_err": relative,
         "manley_rowe_photon_flux": photon_flux,
         "manley_rowe_photon_scale": photon_scale,

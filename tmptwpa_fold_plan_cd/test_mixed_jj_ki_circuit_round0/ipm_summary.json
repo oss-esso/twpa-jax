@@ -1,0 +1,52 @@
+{
+  "case": "mixed_persist",
+  "nodes": 2,
+  "C_nnz": 0,
+  "G_nnz": 0,
+  "K_nnz": 0,
+  "Bphi_shape": [
+    2,
+    2
+  ],
+  "Bphi_nnz": 2,
+  "Ic_min": 3.291059784754533e-07,
+  "Ic_max": 0.001,
+  "Ic_median": 0.0005001645529892377,
+  "phi0_reduced": 3.291059784754533e-16,
+  "ports": {
+    "1": 0
+  },
+  "complex_valued": false,
+  "element_counts": {
+    "port": 1,
+    "josephson_inductor": 1,
+    "kinetic_inductor": 1
+  },
+  "metadata": {},
+  "branch_law": {
+    "type": "composite",
+    "parts": [
+      {
+        "type": "josephson",
+        "phi0": 3.291059784754533e-16
+      },
+      {
+        "type": "kinetic_inductor",
+        "model": "hung_2025",
+        "quartic": true,
+        "Lk_h": [
+          1e-09
+        ],
+        "Ic_a": [
+          0.001
+        ],
+        "Istar2_a": [
+          0.002826086956521739
+        ],
+        "Istar4_a": [
+          0.0014782608695652173
+        ]
+      }
+    ]
+  }
+}

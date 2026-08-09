@@ -1,0 +1,349 @@
+\chapter{The Circuit Model}
+\label{chap:circuit}
+
+\section{Node-flux formulation}
+
+\subsection{The governing equation}
+
+Let $\phi_j(t)$ be the flux at node $j$, defined as the time integral of the
+node voltage, and let $\xvec(t)\in\mathbb{R}^{n}$ collect the fluxes of all
+non-ground nodes. Kirchhoff's current law at every node, with capacitive,
+resistive, linear-inductive and nonlinear branches, gives the second-order
+system
+
+\begin{equation}
+  \boxed{\;
+  \Cmat\,\ddot{\xvec}(t)
+  + \Gmat\,\dot{\xvec}(t)
+  + \Kmat\,\xvec(t)
+  + \Bphi\,\iJ\!\left(\psi_{\mathrm{dc}} + \Bphi^{\mathsf T}\xvec(t)\right)
+  = \isrc(t).
+  \;}
+  \label{eq:governing}
+\end{equation}
+
+Each term is a node-current contribution:
+
+\begin{itemize}
+\item $\Cmat\ddot{\xvec}$ --- capacitive currents. A capacitor $C$ between
+      nodes $j$ and $k$ contributes $+C$ at $(j,j)$ and $(k,k)$ and $-C$ at
+      $(j,k)$ and $(k,j)$; a capacitor to ground contributes only the diagonal
+      term.
+\item $\Gmat\dot{\xvec}$ --- resistive currents, including the port
+      terminations. A port of reference impedance $Z_0$ appears as a
+      conductance $1/Z_0$ to ground at the port node.
+\item $\Kmat\xvec$ --- linear inductive currents. A linear inductor $L$ between
+      $j$ and $k$ contributes $\pm 1/L$ in the same stencil as the capacitor.
+\item $\Bphi\,\iJ(\cdot)$ --- nonlinear branch currents, discussed below.
+\item $\isrc$ --- injected source currents (Norton sources at the ports).
+\end{itemize}
+
+\subsection{The nonlinear branches}
+\label{sec:k-vs-branch}
+
+$\Bphi \in \mathbb{R}^{n\times n_b}$ is the node--branch incidence matrix
+\emph{restricted to the nonlinear branches}: column $b$ has $+1$ at the branch's
+start node, $-1$ at its stop node (and only one entry if the branch is grounded).
+Consequently
+\begin{equation}
+  \psi = \Bphi^{\mathsf T}\xvec \in \mathbb{R}^{n_b}
+\end{equation}
+is the vector of branch fluxes, and $\Bphi\,\iJ(\psi)$ maps branch currents back
+to node currents. The pair
+$(\Bphi^{\mathsf T}\!\cdot,\;\Bphi\,\cdot)$ is the discrete gradient/divergence
+of the network, and it appears in exactly this adjoint pattern in every
+expression in this thesis.
+
+\begin{implnote}[Josephson inductances never enter $\Kmat$]
+This is worth stating as a rule because violating it is silent and destructive.
+A Josephson branch is represented \emph{only} through $\Bphi$ and $\Ic$, with
+$I_c = \rphi / L_J$. Its small-signal slope $1/L_J$ must \emph{not} also be
+stamped into $\Kmat$: the nonlinear term already contains it, since
+$\partial i_J/\partial\psi|_{0} = I_c/\rphi = 1/L_J$.
+
+What \emph{is} stamped, into $\Cmat$, is the junction's shunt capacitance $C_J$.
+
+A builder that stamps both produces a circuit with twice the correct inductive
+stiffness on every junction. The passive response still looks superficially
+plausible --- the line still propagates --- but the gain collapses, because the
+nonlinear branch is now a small correction to a linear element rather than the
+dominant one. This was a live defect in the SNAIL benchmark builder and cost
+substantial effort to localise.
+\end{implnote}
+
+\subsection{Static bias}
+
+$\psi_{\mathrm{dc}}$ is a static branch-flux offset representing a DC current
+bias or an applied flux. It is obtained from a separate DC solve and is held
+fixed throughout the AC problem.
+
+\begin{implnote}[the DC branch current is subtracted]
+\label{impl:dc-subtraction}
+The implementation does not evaluate \eqref{eq:governing} literally. In
+\file{pump/problem.py} the nonlinear node current is
+\begin{lstlisting}
+def nonlinear_current_time(self, X):
+    psi_t = self.branch_flux_time(X)
+    psi_total_t = psi_t + self.dc_branch_flux[None, :]
+    i_t = (self.branch.current(psi_total_t)
+           - self.branch.current(self.dc_branch_flux[None, :]))
+    return (self.Bphi @ i_t.T).T
+\end{lstlisting}
+That is, the \emph{static} branch current $\iJ(\psi_{\mathrm{dc}})$ is
+subtracted. The AC problem therefore solves for the deviation from the biased
+operating point, and the static current --- which is balanced by the DC bias
+network, not by the AC sources --- does not appear as a spurious DC forcing
+term.
+
+The subtraction is identically zero for unbiased four-wave-mixing devices
+($\psi_{\mathrm{dc}}=\vect{0}$), which covers the JPA, JTWPA and FQJTWPA
+families. It matters only for the DC-biased three-wave-mixing designs.
+
+Verified numerically on a biased test problem: the maximum deviation between
+the coded result and the literal form of \eqref{eq:governing} is
+$\num{1.384e-7}$, whereas against the DC-subtracted form it is
+$\num{2.647e-23}$.
+\end{implnote}
+
+\subsection{Complex matrices and loss}
+
+$\Cmat$, $\Gmat$ and $\Kmat$ are permitted to be complex. This is how
+frequency-independent dielectric loss is represented: a loss tangent
+$\tan\delta$ becomes an imaginary part of the capacitance,
+$C \to C(1 - i\tan\delta)$. The physical node fluxes stay real; only the
+dynamic operator becomes non-Hermitian.
+
+\begin{implnote}[loss conventions]
+\code{dynamic\_block} in \file{core/linear.py} builds
+$\Dmat(\omega) = \Kmat - \omega^{2}\Cmat + i\omega\Gmat$ under one of seven
+selectable loss conventions (\code{LOSS\_MODELS}). The default,
+\code{current\_complex\_c}, uses the complex $\Cmat$ directly. The alternatives
+exist because different reference codes place the loss differently ---
+in $\Gmat$ with $\sgn\omega$, with $|\omega|$, or in the conjugate of $\Cmat$
+--- and reconciling a lossy pump convention with an external reference requires
+being able to reproduce each of them. \code{real\_capacitance} discards the
+imaginary part entirely and is the lossless comparison case.
+\end{implnote}
+
+For the canonical lossy solve the imaginary capacitance is moved into a
+positive conductance using $G_{\mathrm{loss}}=|\omega|C\tan\delta$. This keeps
+negative-frequency sidebands dissipative and gives
+$\Dmat(-\omega)=\Dmat(\omega)^*$. IPM loss applies to substrate and coupling
+capacitors only; the junction barrier capacitance $C_j$ remains lossless.
+
+\section{Data structure and persistence}
+
+\begin{implnote}[\code{CircuitMatrices}]
+\file{core/circuit.py} defines the single circuit container:
+\begin{lstlisting}
+@dataclass
+class CircuitMatrices:
+    C: sp.csr_matrix      # (n, n)
+    G: sp.csr_matrix      # (n, n)
+    K: sp.csr_matrix      # (n, n)
+    Bphi: sp.csr_matrix   # (n, n_b)
+    Ic: np.ndarray        # (n_b,)
+    phi0: float = PHI0_REDUCED
+    nodes: np.ndarray | None = None
+    port_to_index: dict[int, int] = field(default_factory=dict)
+    Lj: np.ndarray | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
+    branch_law: Any | None = None
+\end{lstlisting}
+It is deliberately geometry-agnostic: nothing in the solver knows whether the
+circuit is a JPA, a JTWPA or a two-chip cascade. \code{save\_circuit} /
+\code{load\_circuit} round-trip it to a directory of \code{.npz} files plus a
+JSON summary; the file is still named \file{ipm\_arrays.npz} for backwards
+compatibility with earlier experiment scripts.
+
+\code{branch\_law} is optional and defaults to the Josephson law; when present
+and of type \code{effective\_snail}, the loader reconstructs
+\code{EffectiveSnailBranchLaw} from stored \code{snail\_ratio},
+\code{phi\_ext} and \code{equilibrium\_flux} arrays. Any object implementing
+\code{current(flux)} and \code{tangent(flux)} is accepted.
+\end{implnote}
+
+The netlist CSV emitted alongside the matrices is a faithful intermediate: the
+matrices are exactly its stamp. This has been verified element by element --- a
+representative production design rebuilds bit-identically from its own stored
+parameters at $16312/16312$ elements with maximum matrix difference exactly
+$0.0$. That property is what makes rebuild-and-restamp a safe operation, and it
+underpins the variant-design machinery of \cref{sec:profiles}.
+
+\section{Ports and scattering}
+
+\subsection{Port convention}
+
+Ports are Norton-terminated: a port is a node carrying a shunt conductance
+$1/Z_0$ (stamped into $\Gmat$) and, when driven, an injected current source. For
+a unit current injected at the source port, the response voltage at the output
+port gives the scattering parameter through
+
+\begin{equation}
+  S = \frac{2 V_{\mathrm{out}}}{Z_0 I_{\mathrm{in}}}
+      \;-\;\delta_{\text{source},\text{out}} ,
+  \label{eq:s-from-response}
+\end{equation}
+where the subtraction of unity applies only for reflection ($S_{11}$-type)
+measurements.
+
+\begin{implnote}[\code{port\_s\_from\_unit\_current\_response}]
+\begin{lstlisting}
+def port_s_from_unit_current_response(response_voltage, *,
+                                      source_port, out_port, z0_ohm=50.0):
+    s = 2.0 * response_voltage / z0_ohm
+    if int(source_port) == int(out_port):
+        s -= 1.0
+    return complex(s)
+\end{lstlisting}
+The voltage is recovered from the node flux by $V = i\omega\phi$
+(\code{voltage\_from\_flux}).
+\end{implnote}
+
+\begin{caveat}[the \SI{6.02}{\dB} Norton factor]
+Because the ports are Norton-terminated, the on-chip power delivered by a source
+of peak current $I$ is \emph{not} $I^{2}Z_0/2$. Half the source current flows
+into the port's own shunt resistor. Computing on-chip pump power as $I^{2}Z_0/2$
+overstates it by $\SI{6.02}{\dB}$. A discrepancy of $\sim\SI{7.9}{\dB}$ between
+the model's required pump power and the measured on-chip power was, on
+re-examination, largely this factor: correcting it leaves $\sim\SI{1.1}{\dB}$.
+\end{caveat}
+
+\subsection{Which port carries what}
+
+For the multi-port designs studied here the pump and the signal do not share a
+port. Signal scattering is $1\to 2$; the pump is injected at port 4. Using port
+1 for both leaves a promoted-pump residual of $\sqrt{2}$ --- a clean diagnostic
+signature of exactly this mistake.
+
+\begin{caveat}[measure depletion at the right port]
+A published set of pump-depletion numbers for one device was computed at port 2,
+which carries $\SI{9.1}{\percent}$ of the pump; port 3 carries
+$\SI{90.2}{\percent}$. Any single-port depletion figure must state its port, and
+the all-port net quantity (\code{pump\_net\_power\_delta\_w}, \cref{sec:power-balance})
+is the safer observable.
+\end{caveat}
+
+\section{Line loss}
+
+The pump reaches the chip through a lossy cable and attenuator chain. The
+solver converts a nominal generator power to an on-chip amplitude by
+subtracting a frequency-dependent insertion loss.
+
+\begin{implnote}[measured loss model]
+\file{loss.py} fits the measured attenuation to
+\begin{equation}
+  A_{\mathrm{dB}}(f) = C + A\sqrt{f} + B f,
+  \qquad f \text{ in } \si{\giga\hertz},
+  \label{eq:loss-model}
+\end{equation}
+with fitted coefficients
+\[
+  C = 27.3882,\quad A = 0.4579,\quad B = 0.8354,
+\]
+giving an RMS residual of $\SI{0.37}{\dB}$. The three terms are physically
+distinct: $C$ is fixed coupling loss, $A\sqrt{f}$ is the skin effect, $Bf$ is
+dielectric loss.
+
+The constant $C$ is not optional. The measurement shows $\approx\SI{26}{\dB}$
+of loss extrapolated to $f=0$; forcing $C=0$ gives an RMS residual of
+$\SI{4.6}{\dB}$ and a nonsensical negative $B$. As a sanity check, the model
+gives $\SI{35.4}{\dB}$ at \SI{8}{\giga\hertz}, matching the flat
+band-calibrated value used before the frequency dependence was measured.
+\end{implnote}
+
+\section{Power conversion}
+\label{sec:power-conversion}
+
+The pump power in \si{\dBm} is converted to an on-chip peak current by
+\begin{align}
+  P_{\mathrm{W}} &= \num{1e-3}\cdot 10^{(P_{\mathrm{dBm}} - A_{\mathrm{dB}})/10},
+  \label{eq:dbm-to-w}\\
+  I_{\mathrm{peak}} &= \sqrt{\frac{2 P_{\mathrm{W}}}{Z_0}}.
+  \label{eq:w-to-i}
+\end{align}
+
+\begin{caveat}[peak versus amplitude conventions]
+Equation~\eqref{eq:w-to-i} gives the \emph{peak} current. A factor of two
+relative to this appears in some reference codes because of a different
+definition of the source amplitude, and the solver exposes it as
+\code{--pump-current-jc-scale}. The validated conversion for this
+implementation is \code{1.0}; the parser default remains \code{2.0} purely for
+backwards compatibility, so current work must pass \code{1.0} explicitly.
+\end{caveat}
+
+\section{Circuit builders}
+
+Four builders emit \code{CircuitMatrices}:
+
+\begin{center}
+\begin{tabular}{@{}l l@{}}
+\toprule
+\textbf{Builder} & \textbf{Purpose} \\
+\midrule
+\code{builders/ipm.py} & the in-house multi-row cascade (the production device) \\
+\code{builders/jc\_doc.py} & the seven reference designs used for parity work \\
+\code{builders/le\_gal\_2025.py} & the effective-SNAIL literature benchmark \\
+\code{builders/scattered.py} & re-emission of an existing netlist with scatter \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Component profiles and scatter}
+\label{sec:profiles}
+
+Real devices are neither uniform nor exactly as designed. Two independent
+mechanisms are supported.
+
+\paragraph{Profiles} assign a deterministic value to each cell as a function of
+its index. A profile segment specifies a shape, endpoint values, a selection
+(row range, index range, or fractional range), and shape parameters. The
+available shapes are
+\code{const}, \code{linear}, \code{power}, \code{parabola}, \code{half\_cosine},
+\code{tanh}, \code{sine}, \code{cosine}, and \code{custom}.
+
+Every shape is a normalised kernel $s(t)$ on $t\in[0,1]$, with
+\begin{equation}
+  v_i = v_{\mathrm{start}} + (v_{\mathrm{end}} - v_{\mathrm{start}})\,s(t_i),
+  \qquad t_i = \frac{i}{N-1}.
+\end{equation}
+
+\begin{remark}[the sine/cosine exception]
+For \code{sine} and \code{cosine}, $v_{\mathrm{start}}$ and $v_{\mathrm{end}}$
+bound the oscillation \emph{envelope} rather than giving the first and last
+values. Periodicity and endpoint anchoring are mutually exclusive; the envelope
+reading is the useful one.
+\end{remark}
+
+\code{custom} accepts a user expression evaluated through an AST allowlist ---
+not \code{eval} on raw input --- permitting arithmetic, a whitelist of NumPy
+functions, and the constants $\pi$ and $e$, with \code{\_\_builtins\_\_}
+removed.
+
+\paragraph{Scatter} applies an independent multiplicative random factor per
+component, drawn relative to that component's \emph{own nominal value}, so that
+a $\sigma$ of $\SI{2}{\percent}$ means two percent of the local value rather
+than of a global mean. $L_J$, $C_J$ and $C_g$ each get an independent,
+reproducible random stream.
+
+\begin{implnote}[RNG stream contract]
+\begin{lstlisting}
+def component_rng(master_seed: int, component: str) -> np.random.Generator:
+    streams = {"Lj": 0, "Cj": 1, "Cg": 2}
+    if component == "Lj":
+        return np.random.default_rng(int(master_seed))
+    return np.random.default_rng(
+        np.random.SeedSequence([int(master_seed), streams[component]]))
+\end{lstlisting}
+The $L_J$ stream deliberately uses the bare seed so that it is bit-identical to
+the pre-profile implementation at the same seed --- old results stay
+reproducible. New components may be \emph{appended} to \code{streams}; existing
+entries must never be renumbered.
+\end{implnote}
+
+\paragraph{The topology gate.} A variant design must have the same topology as
+its source, differing only in component values. The check is subtle: gating the
+\emph{profiled} netlist against the source would reject every genuine variant.
+The gate therefore runs on a \emph{nominal} rebuild
+(\code{assert\_source\_topology}), confirming that the builder reproduces the
+source exactly before any profile is applied.

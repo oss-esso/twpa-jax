@@ -1,0 +1,387 @@
+[
+  {
+    "run": "D:\\Projects\\Thesis\\twpa_jax\\ladder_jtl16_025ic_hold40",
+    "classification": "INVALID_LEGACY",
+    "production_hb_residual_rel": 4.212947764533959,
+    "checkpoint_validated": false,
+    "hb_solver_family": "production_pump",
+    "state_shape": [
+      10,
+      17
+    ]
+  },
+  {
+    "run": "D:\\Projects\\Thesis\\twpa_jax\\ladder_jtl16_05ic",
+    "classification": "INVALID_LEGACY",
+    "production_hb_residual_rel": 4.212954770208274,
+    "checkpoint_validated": false,
+    "hb_solver_family": "production_pump",
+    "state_shape": [
+      10,
+      17
+    ]
+  },
+  {
+    "run": "D:\\Projects\\Thesis\\twpa_jax\\ladder_jtl16_075ic_hold40",
+    "classification": "INVALID_LEGACY",
+    "production_hb_residual_rel": 4.212954770208274,
+    "checkpoint_validated": false,
+    "hb_solver_family": "production_pump",
+    "state_shape": [
+      10,
+      17
+    ]
+  },
+  {
+    "run": "D:\\Projects\\Thesis\\twpa_jax\\ladder_jtl16_10ic",
+    "classification": "INVALID_LEGACY",
+    "production_hb_residual_rel": 4.212954770208274,
+    "checkpoint_validated": false,
+    "hb_solver_family": "production_pump",
+    "state_shape": [
+      10,
+      17
+    ]
+  },
+  {
+    "run": "D:\\Projects\\Thesis\\twpa_jax\\ladder_jtl16_10ic_fine",
+    "classification": "INVALID_LEGACY",
+    "production_hb_residual_rel": 4.212954770208274,
+    "checkpoint_validated": false,
+    "hb_solver_family": "production_pump",
+    "state_shape": [
+      10,
+      17
+    ]
+  },
+  {
+    "run": "D:\\Projects\\Thesis\\twpa_jax\\ladder_jtl16_10ic_hold40",
+    "classification": "INVALID_LEGACY",
+    "production_hb_residual_rel": 4.212954770208274,
+    "checkpoint_validated": false,
+    "hb_solver_family": "production_pump",
+    "state_shape": [
+      10,
+      17
+    ]
+  },
+  {
+    "run": "D:\\Projects\\Thesis\\twpa_jax\\ladder_jtl16_125ic",
+    "classification": "INVALID_LEGACY",
+    "production_hb_residual_rel": 4.212954770208274,
+    "checkpoint_validated": false,
+    "hb_solver_family": "production_pump",
+    "state_shape": [
+      10,
+      17
+    ]
+  },
+  {
+    "run": "D:\\Projects\\Thesis\\twpa_jax\\ladder_jtl16_125ic_fine",
+    "classification": "INVALID_LEGACY",
+    "production_hb_residual_rel": 4.212954770208274,
+    "checkpoint_validated": false,
+    "hb_solver_family": "production_pump",
+    "state_shape": [
+      10,
+      17
+    ]
+  },
+  {
+    "run": "D:\\Projects\\Thesis\\twpa_jax\\ladder_jtl16_15ic",
+    "classification": "INVALID_LEGACY",
+    "production_hb_residual_rel": 4.212954770208274,
+    "checkpoint_validated": false,
+    "hb_solver_family": "production_pump",
+    "state_shape": [
+      10,
+      17
+    ]
+  },
+  {
+    "run": "D:\\Projects\\Thesis\\twpa_jax\\ladder_jtl16_constant025",
+    "classification": "INVALID_LEGACY",
+    "production_hb_residual_rel": 4.213156574559062,
+    "checkpoint_validated": false,
+    "hb_solver_family": "production_pump",
+    "state_shape": [
+      10,
+      17
+    ]
+  },
+  {
+    "run": "D:\\Projects\\Thesis\\twpa_jax\\ladder_jtl32_025ic_hold40",
+    "classification": "INVALID_LEGACY",
+    "production_hb_residual_rel": 4.569680792500504,
+    "checkpoint_validated": false,
+    "hb_solver_family": "production_pump",
+    "state_shape": [
+      10,
+      33
+    ]
+  },
+  {
+    "run": "D:\\Projects\\Thesis\\twpa_jax\\ladder_jtl32_05ic",
+    "classification": "INVALID_LEGACY",
+    "production_hb_residual_rel": 4.569707126917394,
+    "checkpoint_validated": false,
+    "hb_solver_family": "production_pump",
+    "state_shape": [
+      10,
+      33
+    ]
+  },
+  {
+    "run": "D:\\Projects\\Thesis\\twpa_jax\\ladder_jtl32_10ic_hold40",
+    "classification": "INVALID_LEGACY",
+    "production_hb_residual_rel": 4.569707126917394,
+    "checkpoint_validated": false,
+    "hb_solver_family": "production_pump",
+    "state_shape": [
+      10,
+      33
+    ]
+  },
+  {
+    "run": "D:\\Projects\\Thesis\\twpa_jax\\ladder_jtl32_125ic",
+    "classification": "INVALID_LEGACY",
+    "production_hb_residual_rel": 4.569707126917394,
+    "checkpoint_validated": false,
+    "hb_solver_family": "production_pump",
+    "state_shape": [
+      10,
+      33
+    ]
+  },
+  {
+    "run": "D:\\Projects\\Thesis\\twpa_jax\\ladder_jtl32_125ic_fine",
+    "classification": "INVALID_LEGACY",
+    "production_hb_residual_rel": 4.569707126917394,
+    "checkpoint_validated": false,
+    "hb_solver_family": "production_pump",
+    "state_shape": [
+      10,
+      33
+    ]
+  },
+  {
+    "run": "D:\\Projects\\Thesis\\twpa_jax\\ladder_jtl32_125ic_hold40",
+    "classification": "INVALID_LEGACY",
+    "production_hb_residual_rel": 4.569707126917394,
+    "checkpoint_validated": false,
+    "hb_solver_family": "production_pump",
+    "state_shape": [
+      10,
+      33
+    ]
+  },
+  {
+    "run": "D:\\Projects\\Thesis\\twpa_jax\\ladder_jtl32_15ic",
+    "classification": "INVALID_LEGACY",
+    "production_hb_residual_rel": 4.569707126917394,
+    "checkpoint_validated": false,
+    "hb_solver_family": "production_pump",
+    "state_shape": [
+      10,
+      33
+    ]
+  },
+  {
+    "run": "D:\\Projects\\Thesis\\twpa_jax\\ladder_jtl32_15ic_fine",
+    "classification": "INVALID_LEGACY",
+    "production_hb_residual_rel": 4.569707126917394,
+    "checkpoint_validated": false,
+    "hb_solver_family": "production_pump",
+    "state_shape": [
+      10,
+      33
+    ]
+  },
+  {
+    "run": "D:\\Projects\\Thesis\\twpa_jax\\ladder_jtl32_constant025",
+    "classification": "INVALID_LEGACY",
+    "production_hb_residual_rel": 4.570466016791781,
+    "checkpoint_validated": false,
+    "hb_solver_family": "production_pump",
+    "state_shape": [
+      10,
+      33
+    ]
+  },
+  {
+    "run": "D:\\Projects\\Thesis\\twpa_jax\\ladder_jtl8_15ic_fine",
+    "classification": "INVALID_LEGACY",
+    "production_hb_residual_rel": 3.991533504229594,
+    "checkpoint_validated": false,
+    "hb_solver_family": "production_pump",
+    "state_shape": [
+      10,
+      9
+    ]
+  },
+  {
+    "run": "D:\\Projects\\Thesis\\twpa_jax\\ladder_jtl8_1625ic",
+    "classification": "INVALID_LEGACY",
+    "production_hb_residual_rel": 3.991533504229594,
+    "checkpoint_validated": false,
+    "hb_solver_family": "production_pump",
+    "state_shape": [
+      10,
+      9
+    ]
+  },
+  {
+    "run": "D:\\Projects\\Thesis\\twpa_jax\\ladder_jtl8_1625ic_fine",
+    "classification": "INVALID_LEGACY",
+    "production_hb_residual_rel": 3.991533504229594,
+    "checkpoint_validated": false,
+    "hb_solver_family": "production_pump",
+    "state_shape": [
+      10,
+      9
+    ]
+  },
+  {
+    "run": "D:\\Projects\\Thesis\\twpa_jax\\ladder_jtl8_175ic",
+    "classification": "INVALID_LEGACY",
+    "production_hb_residual_rel": 3.991533504229594,
+    "checkpoint_validated": false,
+    "hb_solver_family": "production_pump",
+    "state_shape": [
+      10,
+      9
+    ]
+  },
+  {
+    "run": "D:\\Projects\\Thesis\\twpa_jax\\ladder_jtl8_2ic",
+    "classification": "INVALID_LEGACY",
+    "production_hb_residual_rel": 3.991533504229594,
+    "checkpoint_validated": false,
+    "hb_solver_family": "production_pump",
+    "state_shape": [
+      10,
+      9
+    ]
+  },
+  {
+    "run": "D:\\Projects\\Thesis\\twpa_jax\\ladder_jtl8_h3",
+    "classification": "INVALID_LEGACY",
+    "production_hb_residual_rel": 3.991533504229594,
+    "checkpoint_validated": false,
+    "hb_solver_family": "production_pump",
+    "state_shape": [
+      10,
+      9
+    ]
+  },
+  {
+    "run": "D:\\Projects\\Thesis\\twpa_jax\\ladder_prod_n16_025",
+    "classification": "VALID_CURRENT_PRODUCTION",
+    "production_hb_residual_rel": 7.424704626998919e-15,
+    "checkpoint_validated": true,
+    "hb_solver_family": "production_pump",
+    "state_shape": [
+      10,
+      17
+    ]
+  },
+  {
+    "run": "D:\\Projects\\Thesis\\twpa_jax\\ladder_prod_n16_150",
+    "classification": "VALID_CURRENT_PRODUCTION",
+    "production_hb_residual_rel": 9.095282760008541e-14,
+    "checkpoint_validated": true,
+    "hb_solver_family": "production_pump",
+    "state_shape": [
+      10,
+      17
+    ]
+  },
+  {
+    "run": "D:\\Projects\\Thesis\\twpa_jax\\ladder_prod_n16_1625",
+    "classification": "VALID_CURRENT_PRODUCTION",
+    "production_hb_residual_rel": 6.977112325210426e-15,
+    "checkpoint_validated": true,
+    "hb_solver_family": "production_pump",
+    "state_shape": [
+      10,
+      17
+    ]
+  },
+  {
+    "run": "D:\\Projects\\Thesis\\twpa_jax\\ladder_prod_n32_150",
+    "classification": "VALID_CURRENT_PRODUCTION",
+    "production_hb_residual_rel": 4.992266876242663e-10,
+    "checkpoint_validated": true,
+    "hb_solver_family": "production_pump",
+    "state_shape": [
+      10,
+      33
+    ]
+  },
+  {
+    "run": "D:\\Projects\\Thesis\\twpa_jax\\ladder_prod_n32_1625",
+    "classification": "VALID_CURRENT_PRODUCTION",
+    "production_hb_residual_rel": 1.1501702417981965e-13,
+    "checkpoint_validated": true,
+    "hb_solver_family": "production_pump",
+    "state_shape": [
+      10,
+      33
+    ]
+  },
+  {
+    "run": "D:\\Projects\\Thesis\\twpa_jax\\ladder_prod_n8_150",
+    "classification": "VALID_CURRENT_PRODUCTION",
+    "production_hb_residual_rel": 4.444161208269822e-15,
+    "checkpoint_validated": true,
+    "hb_solver_family": "production_pump",
+    "state_shape": [
+      10,
+      9
+    ]
+  },
+  {
+    "run": "D:\\Projects\\Thesis\\twpa_jax\\ladder_prod_n8_1625",
+    "classification": "VALID_CURRENT_PRODUCTION",
+    "production_hb_residual_rel": 6.155879013456682e-13,
+    "checkpoint_validated": true,
+    "hb_solver_family": "production_pump",
+    "state_shape": [
+      10,
+      9
+    ]
+  },
+  {
+    "run": "D:\\Projects\\Thesis\\twpa_jax\\ladder_single_jj_2ic",
+    "classification": "INVALID_LEGACY",
+    "production_hb_residual_rel": 3.8015901423989686,
+    "checkpoint_validated": false,
+    "hb_solver_family": "production_pump",
+    "state_shape": [
+      10,
+      2
+    ]
+  },
+  {
+    "run": "D:\\Projects\\Thesis\\twpa_jax\\ladder_single_jj_3ic",
+    "classification": "INVALID_LEGACY",
+    "production_hb_residual_rel": 3.8015901423989686,
+    "checkpoint_validated": false,
+    "hb_solver_family": "production_pump",
+    "state_shape": [
+      10,
+      2
+    ]
+  },
+  {
+    "run": "D:\\Projects\\Thesis\\twpa_jax\\ladder_single_jj_h3",
+    "classification": "INVALID_LEGACY",
+    "production_hb_residual_rel": 3.8015901423989686,
+    "checkpoint_validated": false,
+    "hb_solver_family": "production_pump",
+    "state_shape": [
+      10,
+      2
+    ]
+  }
+]

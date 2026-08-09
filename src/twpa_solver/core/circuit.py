@@ -10,7 +10,8 @@ import numpy as np
 import scipy.sparse as sp
 
 from twpa_solver.core.constants import PHI0_REDUCED
-from twpa_solver.core.nonlinear import EffectiveSnailBranchLaw
+from twpa_solver.core.kinetic import KineticInductorBranchLaw
+from twpa_solver.core.nonlinear import CompositeBranchLaw, EffectiveSnailBranchLaw, JosephsonBranchLaw
 
 logger = logging.getLogger(__name__)
 
@@ -80,6 +81,18 @@ class CircuitMatrices:
             self.node_count, self.branch_count, self.C.nnz, self.G.nnz,
             self.K.nnz, self.Bphi.nnz, self.port_to_index,
         )
+        if self.has_loss:
+            real = np.abs(self.C.data.real)
+            tangent = np.divide(
+                -self.C.data.imag,
+                real,
+                out=np.zeros_like(self.C.data.imag, dtype=float),
+                where=real != 0.0,
+            )
+            logger.debug(
+                "circuit_loss_detected tan_delta_range=(%s,%s)",
+                float(np.min(tangent)), float(np.max(tangent)),
+            )
 
     @property
     def node_count(self) -> int:
@@ -88,6 +101,11 @@ class CircuitMatrices:
     @property
     def branch_count(self) -> int:
         return int(self.Bphi.shape[1])
+
+    @property
+    def has_loss(self) -> bool:
+        """Whether the stamped capacitance contains a non-zero loss term."""
+        return bool(np.iscomplexobj(self.C.data) and np.any(self.C.data.imag != 0.0))
 
     @property
     def summary(self) -> dict[str, Any]:
@@ -156,7 +174,37 @@ def load_circuit(circuit_dir: str | Path) -> CircuitMatrices:
 
     branch_law = None
     law_metadata = metadata.get("metadata", metadata)
-    if law_metadata.get("branch_law", {}).get("type") == "effective_snail":
+    branch_info = metadata.get("branch_law") or law_metadata.get("branch_law", {})
+    # Current persistence uses flat per-branch arrays.  This keeps mixed JJ/KI
+    # circuits easy to inspect and avoids a recursive schema.  The nested
+    # format below remains as a compatibility reader for circuits written by
+    # the first implementation of KI persistence.
+    if "branch_law_kind" in arrays.files:
+        kinds = np.asarray(arrays["branch_law_kind"], dtype=np.int8).reshape(-1)
+        if kinds.size != Ic.size or np.any(~np.isin(kinds, (0, 1))):
+            raise ValueError("invalid branch_law_kind in persisted circuit")
+        ki_columns = np.flatnonzero(kinds == 1)
+        jj_columns = np.flatnonzero(kinds == 0)
+        if ki_columns.size:
+            required = {"ki_lk", "ki_istar2", "ki_istar4"}
+            if not required.issubset(arrays.files):
+                raise ValueError("kinetic branch kind requires flat KI arrays")
+            istar4 = np.asarray(arrays["ki_istar4"], dtype=float)[ki_columns]
+            ki_law = KineticInductorBranchLaw(
+                np.asarray(arrays["ki_lk"], dtype=float)[ki_columns],
+                Ic[ki_columns],
+                np.asarray(arrays["ki_istar2"], dtype=float)[ki_columns],
+                istar4 if np.all(np.isfinite(istar4)) else None,
+                model=str(branch_info.get("model", "hung_2025")),
+            )
+            if jj_columns.size:
+                branch_law = CompositeBranchLaw(
+                    (JosephsonBranchLaw(Ic[jj_columns], phi0), ki_law),
+                    (jj_columns, ki_columns),
+                )
+            else:
+                branch_law = ki_law
+    if branch_law is None and branch_info.get("type") == "effective_snail":
         if "snail_ratio" in arrays.files and "phi_ext" in arrays.files:
             branch_law = EffectiveSnailBranchLaw(
                 Ic,
@@ -169,11 +217,42 @@ def load_circuit(circuit_dir: str | Path) -> CircuitMatrices:
                     else None
                 ),
                 external_flux_on_small_junction=bool(
-                    metadata.get("metadata", metadata)
-                    .get("branch_law", {})
+                    branch_info
                     .get("external_flux_on_small_junction", False)
                 ),
             )
+    elif branch_law is None and branch_info.get("type") == "kinetic_inductor":
+        required = {"kinetic_inductance_h", "istar2_a"}
+        if required.issubset(arrays.files):
+            branch_law = KineticInductorBranchLaw(
+                np.asarray(arrays["kinetic_inductance_h"], dtype=float),
+                Ic,
+                np.asarray(arrays["istar2_a"], dtype=float),
+                np.asarray(arrays["istar4_a"], dtype=float) if "istar4_a" in arrays.files else None,
+                model=str(branch_info.get("model", "hung_2025")),
+                newton_max_iter=int(branch_info.get("newton_max_iter", 20)),
+                newton_rtol=float(branch_info.get("newton_rtol", 1e-14)),
+            )
+    elif branch_law is None and branch_info.get("type") == "composite":
+        laws = []
+        columns = []
+        for index, part_info in enumerate(branch_info.get("parts", [])):
+            prefix = f"composite_{index}_"
+            if part_info.get("type") == "josephson":
+                columns.append(np.asarray(arrays[f"{prefix}columns"], dtype=int))
+                laws.append(JosephsonBranchLaw(Ic[columns[-1]], phi0))
+            elif part_info.get("type") == "kinetic_inductor":
+                columns.append(np.asarray(arrays[f"{prefix}columns"], dtype=int))
+                laws.append(KineticInductorBranchLaw(
+                    np.asarray(arrays[f"{prefix}kinetic_inductance_h"], dtype=float),
+                    Ic[columns[-1]],
+                    np.asarray(arrays[f"{prefix}istar2_a"], dtype=float),
+                    np.asarray(arrays[f"{prefix}istar4_a"], dtype=float) if f"{prefix}istar4_a" in arrays.files else None,
+                    model=str(part_info.get("model", "hung_2025")),
+                ))
+            else:
+                raise ValueError(f"unsupported persisted composite branch type: {part_info.get('type')!r}")
+        branch_law = CompositeBranchLaw(tuple(laws), tuple(columns))
     circuit = CircuitMatrices(
         C=C,
         G=G,
@@ -212,6 +291,7 @@ def save_circuit(circuit: CircuitMatrices, outdir: str | Path) -> None:
         Lj = np.asarray([], dtype=np.float64)
 
     branch_arrays: dict[str, np.ndarray] = {}
+    branch_metadata: dict[str, Any] = {}
     if isinstance(circuit.branch_law, EffectiveSnailBranchLaw):
         branch_arrays = {
             "snail_ratio": np.asarray(circuit.branch_law.ratio),
@@ -222,6 +302,46 @@ def save_circuit(circuit: CircuitMatrices, outdir: str | Path) -> None:
                 else np.zeros(circuit.branch_law.ratio.size)
             ),
         }
+        branch_metadata = circuit.branch_law.metadata
+    elif isinstance(circuit.branch_law, KineticInductorBranchLaw):
+        nbranch = circuit.branch_count
+        branch_arrays = {
+            "branch_law_kind": np.ones(nbranch, dtype=np.int8),
+            "ki_lk": np.asarray(circuit.branch_law.kinetic_inductance_h, dtype=np.float64),
+            "ki_istar2": np.asarray(circuit.branch_law.istar2_a, dtype=np.float64),
+            "ki_istar4": np.asarray(
+                circuit.branch_law.istar4_a
+                if circuit.branch_law.istar4_a is not None
+                else np.full(nbranch, np.nan),
+                dtype=np.float64,
+            ),
+        }
+        branch_metadata = {
+            **circuit.branch_law.metadata,
+            "newton_max_iter": circuit.branch_law.newton_max_iter,
+            "newton_rtol": circuit.branch_law.newton_rtol,
+        }
+    elif isinstance(circuit.branch_law, CompositeBranchLaw):
+        branch_metadata = circuit.branch_law.metadata
+        nbranch = circuit.branch_count
+        kinds = np.zeros(nbranch, dtype=np.int8)
+        ki_lk = np.full(nbranch, np.nan, dtype=np.float64)
+        ki_istar2 = np.full(nbranch, np.nan, dtype=np.float64)
+        ki_istar4 = np.full(nbranch, np.nan, dtype=np.float64)
+        for index, (law, columns) in enumerate(zip(circuit.branch_law.laws, circuit.branch_law.columns)):
+            if isinstance(law, KineticInductorBranchLaw):
+                columns = np.asarray(columns, dtype=np.int64)
+                kinds[columns] = 1
+                ki_lk[columns] = law.kinetic_inductance_h
+                ki_istar2[columns] = law.istar2_a
+                if law.istar4_a is not None:
+                    ki_istar4[columns] = law.istar4_a
+        branch_arrays.update({
+            "branch_law_kind": kinds,
+            "ki_lk": ki_lk,
+            "ki_istar2": ki_istar2,
+            "ki_istar4": ki_istar4,
+        })
     np.savez(
         d / "ipm_arrays.npz",
         nodes=np.asarray(circuit.nodes),
@@ -243,6 +363,7 @@ def save_circuit(circuit: CircuitMatrices, outdir: str | Path) -> None:
         "Bphi_nnz": int(circuit.Bphi.nnz),
         "ports": {str(k): int(v) for k, v in circuit.port_to_index.items()},
         "metadata": circuit.metadata,
+        "branch_law": branch_metadata,
     }
 
     (d / "circuit_summary.json").write_text(

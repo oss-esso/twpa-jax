@@ -8,17 +8,24 @@ import json
 import logging
 import math
 import os
-from dataclasses import replace
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
 import numpy as np
 
-from twpa_solver import default_loss_model
+from twpa_solver.loss import pump_loss_model, signal_line_loss_model, signal_loss_model
 from twpa_solver.builders.jc_doc import build_fqjtwpa, build_jpa, build_jtwpa
-from twpa_solver.core import CircuitMatrices, load_circuit
+from twpa_solver.builders.kimpa import KIMPA_FIXTURES, build_kimpa
+from twpa_solver.ports import (
+    port_available_power_w,
+    port_current_from_power_a,
+)
+from twpa_solver.core import CircuitMatrices, default_loss_model_for, load_circuit
+from twpa_solver.core.nonlinear import make_branch_law
+from twpa_solver.core.kinetic import kinetic_dc_branch_flux
 from twpa_solver.multitone.basis import (
     MultiToneBasis,
+    build_half_pump_basis,
     build_lattice_basis,
     build_sideband_matched_basis,
     build_three_tone_basis,
@@ -52,13 +59,14 @@ from twpa_solver.pump import (
     FullPumpProblem,
     HarmonicGrid,
     HarmonicNewtonKrylovSolver,
-    JosephsonBranchArray,
     NewtonKrylovSettings,
 )
 from twpa_solver.pump.basis import (
+    PumpBasis,
     load_pump_basis_from_solution,
     resolve_pump_basis,
 )
+from twpa_solver.pump.io import summarize_solution, write_results
 from twpa_solver.multitone.resources import (
     FastCoupledFootprint,
     ResourceLimitExceeded,
@@ -106,9 +114,30 @@ def build_parser() -> argparse.ArgumentParser:
         help="Power bracket tolerance for real-solve P1dB refinement; 0 disables it.",
     )
     parser.add_argument(
+        "--stop-after-p1db",
+        action="store_true",
+        help=(
+            "Stop the power sweep as soon as the first 1 dB-compression "
+            "crossing is bracketed, instead of solving every requested power "
+            "point. The points past that crossing are only ever used to plot "
+            "the deep-saturation tail of the curve -- both the interpolated "
+            "and the refined P1dB need only the two points straddling the "
+            "crossing, which are already in hand once it is found. Skips the "
+            "hardest, most convergence-prone points on the curve (deep "
+            "saturation, near/past device breakdown), so it also avoids the "
+            "stalls that make those points slow."
+        ),
+    )
+    parser.add_argument(
         "--multitone-basis",
         choices=("matched", "three_tone", "lattice"),
         default="matched",
+    )
+    parser.add_argument(
+        "--multitone-lattice",
+        choices=("full_pump", "half_pump"),
+        default="full_pump",
+        help="Use the physical-pump lattice or a half-pump fundamental lattice.",
     )
     parser.add_argument("--multitone-sidebands", type=int, default=2)
     parser.add_argument("--resource-budget-gb", type=float, default=8.0)
@@ -125,7 +154,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--signal-workers", type=int, default=1)
     parser.add_argument("--summary-json", type=Path)
     source = parser.add_mutually_exclusive_group()
-    source.add_argument("--fixture", choices=("jpa", "jtwpa", "fqjtwpa"))
+    source.add_argument("--fixture", choices=("jpa", "jtwpa", "fqjtwpa", *KIMPA_FIXTURES))
     source.add_argument("--circuit-dir", type=Path)
     parser.add_argument("--pump-solution-dir", type=Path)
     parser.add_argument("--pump-freq-ghz", type=float, default=4.75001)
@@ -135,6 +164,22 @@ def build_parser() -> argparse.ArgumentParser:
         help="Signal frequency in GHz; optional for a frequency-range sweep.",
     )
     parser.add_argument("--pump-current-a", type=float)
+    parser.add_argument(
+        "--pump-power-dbm",
+        type=float,
+        help=(
+            "External/source-referred pump power in dBm, converted to on-chip "
+            "peak current via pump_line_loss_model() at --pump-freq-ghz and "
+            "--power-convention -- the same conversion run_gain_map.py uses "
+            "(--pump-power-min/max-dbm). Mutually exclusive with "
+            "--pump-current-a/--pump-current-list, which set on-chip current "
+            "directly and bypass this conversion entirely."
+        ),
+    )
+    parser.add_argument(
+        "--dc-current-a", type=float, default=0.0,
+        help="Uniform kinetic-inductor DC bias current in amperes.",
+    )
     parser.add_argument(
         "--pump-current-list",
         type=float,
@@ -167,9 +212,44 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--out-port", type=int)
     parser.add_argument("--diagnostic-port", type=int)
     parser.add_argument("--attenuation-db", type=float, default=None)
+    parser.add_argument(
+        "--pump-attenuation-db", type=float, default=None,
+        help="Override pump-line attenuation for external pump referral.",
+    )
+    parser.add_argument(
+        "--signal-attenuation-db", type=float, default=None,
+        help="Override signal-line attenuation for input signal referral.",
+    )
     parser.add_argument("--z0-ohm", type=float, default=50.0)
-    parser.add_argument("--signal-current-min-a", type=float, default=1e-12)
-    parser.add_argument("--signal-current-max-a", type=float, default=1e-9)
+    parser.add_argument(
+        "--power-convention",
+        choices=("norton", "legacy_traveling_wave"),
+        default="legacy_traveling_wave",
+        help=(
+            "Port drive current -> available power relation. Every drive "
+            "port in the production netlists is an ideal current source in "
+            "parallel with Z0, a matched wave port (I is the incident "
+            "wave's own current amplitude), so available power is the "
+            "traveling-wave I^2*Z0/2, not the Norton-generator I^2*Z0/8. "
+            "'norton' is kept as a selectable alternate convention, offset "
+            "by exactly 6.0206 dB."
+        ),
+    )
+    parser.add_argument("--signal-current-min-a", type=float, default=None)
+    parser.add_argument("--signal-current-max-a", type=float, default=None)
+    parser.add_argument(
+        "--signal-power-min-dbm",
+        type=float,
+        help=(
+            "External/source-referred signal power bracket (dBm), converted "
+            "to the on-chip current sweep bounds via signal_line_loss_model() "
+            "at --signal-ghz and --power-convention -- the same physical "
+            "cable-to-fridge conversion the pump side uses "
+            "(--pump-power-dbm). Requires --signal-power-max-dbm; mutually "
+            "exclusive with --signal-current-min-a/--signal-current-max-a."
+        ),
+    )
+    parser.add_argument("--signal-power-max-dbm", type=float)
     parser.add_argument("--recovery", choices=("plain", "ladder"), default="ladder")
     parser.add_argument("--signal-substep-init-db", type=float, default=0.5)
     parser.add_argument("--signal-substep-min-db", type=float, default=0.01)
@@ -243,6 +323,9 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _fixture_circuit(name: str) -> tuple[CircuitMatrices, dict[str, object]]:
+    if name in KIMPA_FIXTURES:
+        circuit = build_kimpa(name)
+        return circuit, circuit.metadata
     builders = {"jpa": build_jpa, "jtwpa": build_jtwpa, "fqjtwpa": build_fqjtwpa}
     builder, metadata = builders[name]()
     arrays = builder.assemble()
@@ -257,6 +340,22 @@ def _fixture_circuit(name: str) -> tuple[CircuitMatrices, dict[str, object]]:
     ), metadata
 
 
+def _resolve_pump_port(args: argparse.Namespace, source_port: int) -> int:
+    """Explicit --pump-port wins; otherwise default to port 4 for loaded
+    designs (designs/ipm_2c_fixed's pump port -- see CLAUDE.md), or the
+    source port for the 2-port fixtures, which have no port 4.
+
+    A silent fallback to source_port on a --circuit-dir run previously
+    injected the multitone pump-on/signal-off reference at the wrong node
+    (a real pump solved at port 4, reference rebuilt at port 1), producing a
+    residual ~sqrt(2) relative to the source and stalling through adaptive
+    continuation -- see docs/development/psat_comparison_fix_plan.md history.
+    """
+    if args.pump_port is not None:
+        return int(args.pump_port)
+    return 4 if args.circuit_dir is not None else source_port
+
+
 def _load_source(args: argparse.Namespace) -> tuple[CircuitMatrices, dict[str, object], str]:
     if args.circuit_dir is not None:
         circuit = load_circuit(args.circuit_dir)
@@ -267,14 +366,134 @@ def _load_source(args: argparse.Namespace) -> tuple[CircuitMatrices, dict[str, o
 
 
 def _resolve_attenuation(args: argparse.Namespace) -> tuple[float, str]:
+    """Signal-line attenuation used to label ``signal_power_dbm``/
+    ``p1db_input_dbm`` as an external/instrument-referred power.
+
+    Must be the SIGNAL line (``loss_B1``) at the SIGNAL frequency -- this
+    used to evaluate the PUMP line (``default_loss_model()``, ``loss_A10``)
+    at the PUMP frequency instead, understating attenuation by ~25 dB across
+    6.55-8.15 GHz (measured 2026-08-05). That silently shifted every
+    absolute signal_power_dbm/p1db_input_dbm this script has ever reported
+    for a --circuit-dir run without an explicit --attenuation-db -- it never
+    affected on-chip current (the actual solve) or any purely-relative
+    comparison (e.g. Phase 3's p1db_output_dbm identity, which adds the same
+    constant to both sides), only the absolute dBm label.
+    """
     if args.attenuation_db is not None:
         return float(args.attenuation_db), "explicit"
     if args.circuit_dir is None:
         return 0.0, "fixture_default_zero"
     return (
-        float(default_loss_model().attenuation_db(args.pump_freq_ghz)),
-        "themis_default_loss_model",
+        float(signal_line_loss_model().attenuation_db(args.signal_ghz)),
+        "signal_line_loss_model",
     )
+
+
+def _resolve_attenuations(args: argparse.Namespace) -> tuple[float, str, float, str]:
+    """Resolve ``pump_db`` and ``signal_db`` independently.
+
+    The legacy scalar override intentionally forces both lines to the same
+    value so old runs remain replayable.  The compatibility
+    ``_resolve_attenuation`` helper above continues to expose the signal-side
+    pair used by existing callers.
+    """
+    if args.attenuation_db is not None:
+        value = float(args.attenuation_db)
+        return value, "explicit_both", value, "explicit_both"
+    if args.circuit_dir is None:
+        default_pump = 0.0
+        default_signal = 0.0
+        pump_source = signal_source = "fixture_default_zero"
+    else:
+        default_pump = float(pump_loss_model().attenuation_db(args.pump_freq_ghz))
+        signal_frequency = args.signal_ghz if args.signal_ghz is not None else args.pump_freq_ghz
+        default_signal = float(signal_loss_model().attenuation_db(signal_frequency))
+        pump_source = "pump_loss_model"
+        signal_source = "signal_loss_model"
+    pump_value = default_pump if args.pump_attenuation_db is None else float(args.pump_attenuation_db)
+    signal_value = default_signal if args.signal_attenuation_db is None else float(args.signal_attenuation_db)
+    return (
+        pump_value, pump_source if args.pump_attenuation_db is None else "explicit_pump",
+        signal_value, signal_source if args.signal_attenuation_db is None else "explicit_signal",
+    )
+
+
+def _dbm_to_on_chip_current_a(
+    power_dbm: float, attenuation_db: float, z0_ohm: float, convention: str
+) -> float:
+    """Source/external-referred dBm -> on-chip peak current (A).
+
+    Same physical cable: subtract the line's own attenuation to get on-chip
+    power, then invert the port's current<->power relation for the selected
+    convention. Shared by the pump and signal power-dbm resolvers so both
+    lines go through identical math.
+    """
+    on_chip_power_w = 1.0e-3 * 10.0 ** ((float(power_dbm) - attenuation_db) / 10.0)
+    return float(port_current_from_power_a(on_chip_power_w, z0_ohm, convention=convention))
+
+
+def _resolve_pump_current_a(
+    args: argparse.Namespace, default_current: float | None
+) -> tuple[float, str]:
+    """On-chip pump peak current (A), before ``--pump-current-jc-scale``.
+
+    Three sources, in priority order: explicit ``--pump-current-a`` (direct,
+    bypasses any loss/convention model entirely); ``--pump-power-dbm``
+    (converted via the same pump_line_loss_model()/--power-convention pipeline
+    run_gain_map.py uses -- see CLAUDE.md "Port power convention"); the
+    circuit's own metadata pump source, as a last-resort default.
+    """
+    if args.pump_current_a is not None:
+        return float(args.pump_current_a), "explicit_current"
+    if args.pump_power_dbm is not None:
+        pump_attenuation_db, _, _, _ = _resolve_attenuations(args)
+        current_a = _dbm_to_on_chip_current_a(
+            args.pump_power_dbm, pump_attenuation_db, args.z0_ohm, args.power_convention
+        )
+        return current_a, "pump_power_dbm"
+    if default_current is not None:
+        return float(default_current), "circuit_metadata"
+    raise ValueError(
+        "one of --pump-current-a / --pump-power-dbm is required when circuit "
+        "metadata has no pump source"
+    )
+
+
+_SIGNAL_CURRENT_MIN_A_DEFAULT = 1e-12
+_SIGNAL_CURRENT_MAX_A_DEFAULT = 1e-9
+
+
+def _resolve_signal_current_bracket_a(
+    args: argparse.Namespace,
+) -> tuple[float, float, str]:
+    """On-chip signal current sweep bounds (A): (min, max, source).
+
+    Same cable-to-fridge conversion as the pump side
+    (``_resolve_pump_current_a``), through ``signal_line_loss_model()`` at
+    ``--signal-ghz`` instead of the pump line. Falls back to the raw current
+    bounds (explicit or the module defaults) when ``--signal-power-min/max-dbm``
+    is not given.
+    """
+    if args.signal_power_min_dbm is not None:
+        _, _, signal_attenuation_db, _ = _resolve_attenuations(args)
+        min_a = _dbm_to_on_chip_current_a(
+            args.signal_power_min_dbm, signal_attenuation_db, args.z0_ohm, args.power_convention
+        )
+        max_a = _dbm_to_on_chip_current_a(
+            args.signal_power_max_dbm, signal_attenuation_db, args.z0_ohm, args.power_convention
+        )
+        return min_a, max_a, "signal_power_dbm"
+    min_a = (
+        _SIGNAL_CURRENT_MIN_A_DEFAULT
+        if args.signal_current_min_a is None
+        else float(args.signal_current_min_a)
+    )
+    max_a = (
+        _SIGNAL_CURRENT_MAX_A_DEFAULT
+        if args.signal_current_max_a is None
+        else float(args.signal_current_max_a)
+    )
+    return min_a, max_a, "explicit_current"
 
 
 def _build_multitone_basis(
@@ -286,10 +505,17 @@ def _build_multitone_basis(
     # Matched sidebands fold Floquet indices into h; the largest retained h
     # grows with the requested sideband count, even for a fundamental-only
     # pump.  The previous ``max(pump_modes)+1`` clipped S=10 production bases.
-    omega_max = omega_p * (
-        max(pump_modes) + float(args.multitone_sidebands) + 1.0
-    )
-    if args.multitone_basis == "matched":
+    if args.multitone_lattice == "half_pump":
+        omega_max = (omega_p / 2.0) * (
+            2 * max(pump_modes) + float(args.multitone_sidebands) + 1.0
+        )
+    else:
+        omega_max = omega_p * (max(pump_modes) + float(args.multitone_sidebands) + 1.0)
+    if args.multitone_lattice == "half_pump":
+        basis = build_half_pump_basis(
+            pump_modes, args.multitone_sidebands, omega_p, delta, omega_max
+        )
+    elif args.multitone_basis == "matched":
         basis = build_sideband_matched_basis(
             pump_modes,
             args.multitone_sidebands,
@@ -307,7 +533,8 @@ def _build_multitone_basis(
         )
     else:
         basis = build_three_tone_basis(omega_p, delta)
-    represented_modes = {tone.h for tone in basis.tones if tone.q == 0}
+    scale = basis.pump_tone.h
+    represented_modes = {tone.h // scale for tone in basis.tones if tone.q == 0 and tone.h % scale == 0}
     missing_modes = sorted(set(pump_modes) - represented_modes)
     if missing_modes:
         raise ValueError(
@@ -319,9 +546,34 @@ def _build_multitone_basis(
     return basis
 
 
-def _current_to_dbm(current_a: float, z0_ohm: float, attenuation_db: float) -> float:
-    power_w = current_a * current_a * z0_ohm / 2.0
+def _current_to_dbm(
+    current_a: float, z0_ohm: float, attenuation_db: float, convention: str
+) -> float:
+    power_w = port_available_power_w(current_a, z0_ohm, convention=convention)
     return 10.0 * math.log10(power_w / 1.0e-3) + attenuation_db
+
+
+# P1dB is read via the -1 dB threshold applied to points[0]'s gain (G0), so
+# if the sweep's lowest two currents don't already agree (the grid never
+# reached the flat small-signal region), G0 -- and everything downstream of
+# it, P1dB and P_sat -- reads too high. Measured on the exp20 jtwpa/2c sweep:
+# 15.9736 vs 15.9311 dB at the two lowest currents, delta 0.043 dB, passes.
+SMALL_SIGNAL_FLOOR_TOL_DB = 0.05
+
+
+def _small_signal_floor_delta_db(points: list[dict[str, object]]) -> float | None:
+    """|G(P_min) - G(P_min+delta)| across the two lowest VALID_SOLVED points.
+
+    None if fewer than two points solved (nothing to compare).
+    """
+    valid = [
+        point for point in points
+        if point["status"] == "VALID_SOLVED"
+        and np.isfinite(float(point["gain_vs_off_db"]))
+    ]
+    if len(valid) < 2:
+        return None
+    return abs(float(valid[0]["gain_vs_off_db"]) - float(valid[1]["gain_vs_off_db"]))
 
 
 def _interpolate_p1db_current(points: list[dict[str, object]]) -> float | None:
@@ -344,6 +596,131 @@ def _interpolate_p1db_current(points: list[dict[str, object]]) -> float | None:
     return None
 
 
+def _first_kinetic_threshold_current(points: list[dict[str, object]]) -> float | None:
+    """Return the first solved signal current reaching ``I/Ic >= 1``."""
+    point = next(
+        (
+            point for point in points
+            if point["status"] == "VALID_SOLVED"
+            and float(point.get("max_current_over_ic", 0.0)) >= 1.0
+        ),
+        None,
+    )
+    return None if point is None else float(point["signal_current_a"])
+
+
+def _effective_p1db_current(
+    smooth_current_a: float | None,
+    threshold_current_a: float | None,
+) -> tuple[float | None, str]:
+    """Choose the conservative effective P1dB criterion and report its source."""
+    if threshold_current_a is not None and (
+        smooth_current_a is None or threshold_current_a <= smooth_current_a
+    ):
+        return None, "THRESHOLD_CROSSED"
+    if smooth_current_a is not None:
+        return smooth_current_a, "SMOOTH_COMPRESSION"
+    return None, "NOT_REACHED"
+
+
+def _solve_pump_from_scratch(
+    args: argparse.Namespace,
+    circuit: CircuitMatrices,
+    metadata: dict[str, object],
+    pump_port: int,
+    pump_current: float,
+    omega_p: float,
+) -> tuple[np.ndarray, PumpBasis, list[object], FullPumpProblem]:
+    """Solve the pump from a zero seed via natural-parameter continuation.
+
+    Factored out of ``_solve_compression`` so a ``--n-signal-freq`` sweep can
+    solve it once and share the result across every signal-frequency point:
+    the pump state depends on pump_freq_ghz/pump_current_a/the circuit/the
+    pump basis, none of which vary with signal frequency.
+    """
+    pump_basis = resolve_pump_basis(
+        policy=args.pump_mode_policy,
+        omega_p=omega_p,
+        harmonics=args.pump_harmonics,
+        mode_count=args.pump_mode_count,
+        explicit_modes=args.pump_modes,
+        design_meta=metadata,
+    )
+    pump_problem = FullPumpProblem(
+        C=circuit.C, G=circuit.G, K=circuit.K, Bphi=circuit.Bphi,
+        branch=make_branch_law(circuit),
+        grid=HarmonicGrid(np.asarray(pump_basis.modes), nt=args.pump_nt, omega=omega_p),
+        pump_node_index=circuit.port_to_index[pump_port], pump_current_a=pump_current,
+        dc_branch_flux=kinetic_dc_branch_flux(circuit, args.dc_current_a),
+        loss_model=default_loss_model_for(circuit),
+    )
+    # precond_reuse=1 pins the Newton/GMRES iterate path -- and therefore the
+    # pump state everything else is pinned against -- independent of the
+    # multitone reuse setting used later for the signal sweep.
+    pump_settings = NewtonKrylovSettings(
+        newton_tol=1e-10, max_newton=20, gmres_rtol=1e-8, gmres_atol=0.0,
+        gmres_restart=20, gmres_maxiter=40, min_alpha=1.0 / 1024.0,
+        preconditioner="real_coupled",
+        compute_time_residual=False, verbose=False,
+        continuation_predictor="none", jvp_mode="aft",
+        precond_reuse=1, precond_reuse_refresh_gmres=0,
+    )
+    pump_state, pump_reports = HarmonicNewtonKrylovSolver(
+        pump_settings
+    ).solve_continuation(pump_problem, continuation_steps=4)
+    if not pump_reports[-1].converged:
+        final = pump_reports[-1]
+        raise RuntimeError(
+            "pump continuation failed before the multitone solve: "
+            f"source_scale={final.source_scale}, "
+            f"coeff_rel={final.coeff_rel:.6g}, "
+            f"reason={final.failure_reason}"
+        )
+    return pump_state, pump_basis, pump_reports, pump_problem
+
+
+def _solve_and_persist_shared_pump(args: argparse.Namespace) -> Path:
+    """Solve the pump once for a ``--n-signal-freq`` sweep and cache it to disk.
+
+    Without this, ``_run_frequency_sweep`` solves the identical pump state
+    from scratch for every frequency point (cold, no warm start) since each
+    point runs as an independent task -- N cold pump solves for a pump that
+    does not depend on signal frequency at all. Resumable: if a previous run
+    already wrote a solution here, it is reused rather than re-solved.
+    """
+    outdir = args.output_dir / "_shared_pump"
+    if (outdir / "pump_solution.npz").exists():
+        print(f"[run_compression] reusing existing shared pump: {outdir}", flush=True)
+        return outdir
+    circuit, metadata, _ = _load_source(args)
+    source_port = int(args.source_port or 1)
+    pump_port = _resolve_pump_port(args, source_port)
+    pump_sources = metadata.get("pump_sources", [])
+    default_current = pump_sources[0].get("current_a") if pump_sources else None
+    pump_current_base, _ = _resolve_pump_current_a(args, default_current)
+    pump_current = pump_current_base * float(args.pump_current_jc_scale)
+    omega_p = 2.0 * math.pi * args.pump_freq_ghz * 1e9
+    pump_state, pump_basis, pump_reports, pump_problem = _solve_pump_from_scratch(
+        args, circuit, metadata, pump_port, pump_current, omega_p
+    )
+    solution_summary = summarize_solution(pump_problem, pump_state)
+    write_results(
+        outdir,
+        pump_state,
+        pump_reports,
+        solution_summary,
+        {
+            **pump_basis.to_metadata(),
+            "pump_freq_ghz": args.pump_freq_ghz,
+            "pump_current_a": pump_current,
+            "pump_power_dbm": args.pump_power_dbm,
+            "nt": args.pump_nt,
+        },
+    )
+    print(f"[run_compression] shared pump solved once: {outdir}", flush=True)
+    return outdir
+
+
 def _solve_compression(
     args: argparse.Namespace,
 ) -> tuple[
@@ -353,9 +730,10 @@ def _solve_compression(
     list[dict[str, object]],
 ]:
     circuit, metadata, circuit_source = _load_source(args)
-    attenuation_db, attenuation_source = _resolve_attenuation(args)
+    dc_branch_flux = kinetic_dc_branch_flux(circuit, args.dc_current_a)
+    pump_attenuation_db, pump_attenuation_source, attenuation_db, attenuation_source = _resolve_attenuations(args)
     source_port = int(args.source_port or 1)
-    pump_port = int(args.pump_port or source_port)
+    pump_port = _resolve_pump_port(args, source_port)
     out_port = int(args.out_port or (1 if circuit_source == "jpa" else 2))
     diagnostic_port = int(args.diagnostic_port or out_port)
     for label, port in (("pump", pump_port), ("source", source_port), ("output", out_port), ("diagnostic", diagnostic_port)):
@@ -363,9 +741,8 @@ def _solve_compression(
             raise ValueError(f"{label} port {port} is absent from circuit ports {sorted(circuit.port_to_index)}")
     pump_sources = metadata.get("pump_sources", [])
     default_current = pump_sources[0].get("current_a") if pump_sources else None
-    if args.pump_current_a is None and default_current is None:
-        raise ValueError("--pump-current-a is required when circuit metadata has no pump source")
-    pump_current = float(args.pump_current_a or default_current) * float(args.pump_current_jc_scale)
+    pump_current_base, pump_current_source = _resolve_pump_current_a(args, default_current)
+    pump_current = pump_current_base * float(args.pump_current_jc_scale)
     omega_p = 2.0 * math.pi * args.pump_freq_ghz * 1e9
     selected_preconditioner = resolve_multitone_preconditioner(
         args.multitone_preconditioner
@@ -392,42 +769,12 @@ def _solve_compression(
         pump_reports: list[object] = []
         pump_converged = True
     else:
-        pump_basis = resolve_pump_basis(
-            policy=args.pump_mode_policy,
-            omega_p=omega_p,
-            harmonics=args.pump_harmonics,
-            mode_count=args.pump_mode_count,
-            explicit_modes=args.pump_modes,
-            design_meta=metadata,
+        pump_state, pump_basis, pump_reports, _pump_problem = _solve_pump_from_scratch(
+            args, circuit, metadata, pump_port, pump_current, omega_p
         )
-        pump_problem = FullPumpProblem(
-            C=circuit.C, G=circuit.G, K=circuit.K, Bphi=circuit.Bphi,
-            branch=JosephsonBranchArray(circuit.Ic, circuit.phi0),
-            grid=HarmonicGrid(np.asarray(pump_basis.modes), nt=args.pump_nt, omega=omega_p),
-            pump_node_index=circuit.port_to_index[pump_port], pump_current_a=pump_current,
-        )
-        # The pump solve keeps precond_reuse=1 so its Newton/GMRES iterate path
-        # -- and therefore the pump state other artifacts are pinned against --
-        # is unchanged by the multitone reuse setting.
-        pump_settings = replace(
-            settings,
-            preconditioner="real_coupled",
-            precond_reuse=1,
-            precond_reuse_refresh_gmres=0,
-        )
-        pump_state, pump_reports = HarmonicNewtonKrylovSolver(
-            pump_settings
-        ).solve_continuation(pump_problem, continuation_steps=4)
-        pump_converged = bool(pump_reports[-1].converged)
-        if not pump_converged:
-            final = pump_reports[-1]
-            raise RuntimeError(
-                "pump continuation failed before the multitone solve: "
-                f"source_scale={final.source_scale}, "
-                f"coeff_rel={final.coeff_rel:.6g}, "
-                f"reason={final.failure_reason}"
-            )
-    delta = omega_p - 2.0 * math.pi * args.signal_ghz * 1e9
+        pump_converged = True
+    omega_s = 2.0 * math.pi * args.signal_ghz * 1e9
+    delta = (omega_p / 2.0 if args.multitone_lattice == "half_pump" else omega_p) - omega_s
     basis = _build_multitone_basis(args, pump_basis.modes, omega_p, delta)
     pump_seed = promote_pump_solution(pump_state, pump_basis, basis)
     pump_source = MultiToneDrive(basis.pump_tone, circuit.port_to_index[pump_port], pump_current).to_coeffs(
@@ -460,6 +807,7 @@ def _solve_compression(
             path,
             preconditioner=selected_preconditioner,
             cache=problem_cache,
+            dc_branch_flux=dc_branch_flux,
         )
         if selected_backend == "full":
             return full
@@ -489,7 +837,10 @@ def _solve_compression(
             return problem.reconstruct_full(state)
         return state
 
-    currents = np.geomspace(args.signal_current_min_a, args.signal_current_max_a, max(args.n_signal_power, 1))
+    signal_current_min_a, signal_current_max_a, signal_current_source = (
+        _resolve_signal_current_bracket_a(args)
+    )
+    currents = np.geomspace(signal_current_min_a, signal_current_max_a, max(args.n_signal_power, 1))
     pump_off_path = AffineSourcePath.signal_turn_on(
         np.zeros_like(pump_source),
         signal_unit * float(currents[0]),
@@ -631,8 +982,12 @@ def _solve_compression(
             - 20.0 * np.log10(max(abs(pump_reference_s21), 1e-300))
         )
         gain_linear = float(10.0 ** (gain_vs_off_db / 10.0))
-        signal_power = float(signal_current_a**2 * args.z0_ohm / 2.0)
-        pump_power = float(pump_current**2 * args.z0_ohm / 2.0)
+        signal_power = port_available_power_w(
+            signal_current_a, args.z0_ohm, convention=args.power_convention
+        )
+        pump_power = port_available_power_w(
+            pump_current, args.z0_ohm, convention=args.power_convention
+        )
         depletion_model = depletion_only_gain_db(
             gain_linear, signal_power, pump_power
         )
@@ -649,6 +1004,7 @@ def _solve_compression(
             AffineSourcePath.signal_turn_on(
                 pump_source, signal_unit * float(signal_current_a)
             ),
+            dc_branch_flux=dc_branch_flux,
         )
         residual = residual_problem.residual_coeffs(state_full, 1.0)
         source_norm = np.linalg.norm(residual_problem.source_coeffs(1.0))
@@ -743,10 +1099,21 @@ def _solve_compression(
                 "pump_depletion_all_port_db": float("nan"),
             }
             hb_residual_rel = float("nan")
+        branch_flux = (circuit.Bphi.T @ state_full.T).T
+        total_current = make_branch_law(circuit).current(branch_flux + dc_branch_flux[None, :])
+        max_current_over_ic = float(np.max(np.abs(total_current) / circuit.Ic[None, :]))
+        kinetic_status = "SUPERCONDUCTING" if max_current_over_ic < 1.0 else "THRESHOLD_CROSSED"
+        compression_status = (
+            "SOLVER_FAILED"
+            if solved.status != "VALID_SOLVED"
+            else "THRESHOLD_CROSSED"
+            if max_current_over_ic >= 1.0
+            else "SMOOTH_COMPRESSION"
+        )
         points.append({
             "signal_current_a": float(current),
             "signal_power_dbm": _current_to_dbm(
-                float(current), args.z0_ohm, attenuation_db
+                float(current), args.z0_ohm, attenuation_db, args.power_convention
             ),
             "gain_db": gain_db,
             "gain_vs_off_db": gain_vs_off_db,
@@ -799,6 +1166,9 @@ def _solve_compression(
                 else float("nan")
             ),
             "status": solved.status,
+            "max_current_over_ic": max_current_over_ic,
+            "kinetic_status": kinetic_status,
+            "compression_status": compression_status,
             "recovery_rung": solved.used_recovery,
             "last_converged_signal_current_a": solved.last_converged_signal_current_a,
         })
@@ -809,6 +1179,13 @@ def _solve_compression(
                 states["zero_signal"] = state_full
             if index == len(currents) // 2:
                 states["mid"] = state_full
+            if (
+                args.stop_after_p1db
+                and reference_gain is not None
+                and (reference_gain - gain_vs_off_db) >= 1.0
+            ):
+                states["last"] = state_full
+                break
     small_signal_gain_db = (
         float(points[0]["gain_vs_off_db"]) if points else float("nan")
     )
@@ -816,19 +1193,36 @@ def _solve_compression(
     if no_gain:
         for point in points:
             point["compression_db"] = float("nan")
+    small_signal_floor_delta_db = _small_signal_floor_delta_db(points)
+    # Independent of no_gain: NO_GAIN_AT_OPERATING_POINT already takes status
+    # priority below and already forces p1db_current_a to None via the `or`
+    # a few lines down, so this must stay a raw measurement -- gating it on
+    # `not no_gain` would make the reported small_signal_floor_flat field lie
+    # (report "flat" on a grid that measurably was not, just because a
+    # separate failure mode also fired).
+    grid_not_flat = (
+        small_signal_floor_delta_db is not None
+        and small_signal_floor_delta_db >= SMALL_SIGNAL_FLOOR_TOL_DB
+    )
     curve = build_compression_curve(
         [float(point["signal_power_dbm"]) for point in points],
         [float(point["gain_vs_off_db"]) for point in points],
         small_signal_gain_db,
         [str(point["status"]) for point in points],
     )
-    p1db_current_a = None if no_gain else _interpolate_p1db_current(points)
+    p1db_current_a = None if (no_gain or grid_not_flat) else _interpolate_p1db_current(points)
+    threshold_current_a = _first_kinetic_threshold_current(points)
+    smooth_p1db_current_a = p1db_current_a
+    p1db_current_a, effective_status = _effective_p1db_current(
+        smooth_p1db_current_a, threshold_current_a,
+    )
+    threshold_wins = effective_status == "THRESHOLD_CROSSED"
     # Kept even when refinement overwrites p1db_current_a: the refined-versus-
     # interpolated delta is the number that decides whether already-published
     # sweeps need re-running, and reading it off two separate runs would fold
     # run-to-run variation into a comparison that has none.
-    p1db_interpolated_current_a = p1db_current_a
-    p1db_method = "interpolated"
+    p1db_interpolated_current_a = smooth_p1db_current_a
+    p1db_method = "interpolated" if smooth_p1db_current_a is not None else "none"
     p1db_refinement_failure: str | None = None
     adjacent_valid = (
         (left, right)
@@ -838,7 +1232,7 @@ def _solve_compression(
         and np.isfinite(float(left["compression_db"]))
         and np.isfinite(float(right["compression_db"]))
     )
-    for left, right in adjacent_valid:
+    for left, right in adjacent_valid if not threshold_wins else ():
         if (
             float(left["compression_db"]) < 1.0
             <= float(right["compression_db"])
@@ -850,10 +1244,10 @@ def _solve_compression(
                 )
 
                 def evaluate(power_dbm: float) -> float:
-                    current_trial = math.sqrt(
-                        2.0 * 1.0e-3
-                        * 10.0 ** ((power_dbm - attenuation_db) / 10.0)
-                        / args.z0_ohm
+                    current_trial = port_current_from_power_a(
+                        1.0e-3 * 10.0 ** ((power_dbm - attenuation_db) / 10.0),
+                        args.z0_ohm,
+                        convention=args.power_convention,
                     )
                     nearest = min(
                         state_by_current,
@@ -908,15 +1302,17 @@ def _solve_compression(
                         p1db_refinement_failure,
                     )
                 else:
-                    p1db_current_a = math.sqrt(
-                        2.0 * 1.0e-3
-                        * 10.0 ** ((p1db_dbm_refined - attenuation_db) / 10.0)
-                        / args.z0_ohm
+                    p1db_current_a = port_current_from_power_a(
+                        1.0e-3 * 10.0 ** ((p1db_dbm_refined - attenuation_db) / 10.0),
+                        args.z0_ohm,
+                        convention=args.power_convention,
                     )
                     p1db_method = "refined"
             break
     p1db_dbm = (
-        _current_to_dbm(p1db_current_a, args.z0_ohm, attenuation_db)
+        _current_to_dbm(
+            p1db_current_a, args.z0_ohm, attenuation_db, args.power_convention
+        )
         if p1db_current_a is not None
         else None
     )
@@ -957,9 +1353,28 @@ def _solve_compression(
         if p1db_dbm is not None
         else None
     )
+    # P_sat is defined as the output-referred 1 dB compression point, so it
+    # must equal p1db_input + (the gain that DEFINED the -1 dB threshold) - 1
+    # identically -- the same estimator on both sides of the sum. Guards
+    # against a future edit reintroducing the measured-pipeline's g0_local/
+    # G0_smooth mixing bug on the model side (see Phase 3 of
+    # docs/development/psat_comparison_fix_plan.md).
+    if p1db_output_dbm is not None:
+        small_signal_gain_vs_off_db = float(points[0]["gain_vs_off_db"])
+        expected_p1db_output_dbm = (
+            p1db_dbm + small_signal_gain_vs_off_db - 1.0
+        )
+        assert math.isclose(
+            p1db_output_dbm, expected_p1db_output_dbm, rel_tol=0.0, abs_tol=1e-9
+        ), (
+            "p1db_output_dbm must equal "
+            "p1db_input_dbm + small_signal_gain_vs_off_db - 1.0"
+        )
     summary_status = (
         "NO_GAIN_AT_OPERATING_POINT"
         if no_gain
+        else "G0_GRID_NOT_FLAT"
+        if grid_not_flat
         else "VALID_SOLVED"
         if all(point["status"] == "VALID_SOLVED" for point in points)
         else "CHECK"
@@ -973,7 +1388,8 @@ def _solve_compression(
             circuit,
             basis,
             AffineSourcePath.pump_turn_on(pump_source),
-            loss_model=getattr(circuit, "loss_model", "current_complex_c"),
+            loss_model=default_loss_model_for(circuit),
+            dc_branch_flux=dc_branch_flux,
         )
         for label in ("zero_signal", "p1db", "last"):
             candidate_state = states.get(label)
@@ -1006,6 +1422,8 @@ def _solve_compression(
         "pump_freq_ghz": args.pump_freq_ghz,
         "signal_ghz": args.signal_ghz,
         "pump_current_a": pump_current,
+        "pump_current_source": pump_current_source,
+        "pump_power_dbm": args.pump_power_dbm,
         "pump_converged": pump_converged,
         "pump_current_jc_scale": args.pump_current_jc_scale,
         "pump_solution_dir": str(args.pump_solution_dir) if args.pump_solution_dir else None,
@@ -1014,17 +1432,51 @@ def _solve_compression(
         "out_port": out_port,
         "diagnostic_port": diagnostic_port,
         "attenuation_db": attenuation_db,
+        "signal_attenuation_db": attenuation_db,
+        "signal_current_min_a": signal_current_min_a,
+        "signal_current_max_a": signal_current_max_a,
+        "signal_current_source": signal_current_source,
+        "signal_power_min_dbm": args.signal_power_min_dbm,
+        "signal_power_max_dbm": args.signal_power_max_dbm,
+        "signal_attenuation_source": attenuation_source,
+        "pump_attenuation_db": pump_attenuation_db,
+        "pump_attenuation_source": pump_attenuation_source,
         "attenuation_source": attenuation_source,
+        "power_convention": args.power_convention,
         "small_signal_gain_db": small_signal_gain_db,
         "small_signal_gain_vs_off_db": float(points[0]["gain_vs_off_db"]),
+        "small_signal_floor_delta_db": small_signal_floor_delta_db,
+        "small_signal_floor_tol_db": SMALL_SIGNAL_FLOOR_TOL_DB,
+        "small_signal_floor_flat": (
+            None if small_signal_floor_delta_db is None else not grid_not_flat
+        ),
         "pump_off_gain_db": pump_off_gain_db,
         "pump_reference_s21_real": float(np.real(pump_reference_s21)),
         "pump_reference_s21_imag": float(np.imag(pump_reference_s21)),
         "p1db": p1db_dbm,
-        "p1db_method": "none" if no_gain else p1db_method,
+        "p1db_method": "threshold_crossed" if threshold_wins else "none" if no_gain else p1db_method,
+        "p1db_smooth_dbm": (
+            _current_to_dbm(smooth_p1db_current_a, args.z0_ohm, attenuation_db, args.power_convention)
+            if smooth_p1db_current_a is not None else None
+        ),
+        "p_sc_dbm": (
+            _current_to_dbm(threshold_current_a, args.z0_ohm, attenuation_db, args.power_convention)
+            if threshold_current_a is not None else None
+        ),
+        "p1db_effective_dbm": p1db_dbm,
+        "p1db_effective_status": (
+            effective_status
+            if effective_status == "THRESHOLD_CROSSED" or p1db_current_a is not None
+            else "SOLVER_FAILED"
+            if any(point["status"] != "VALID_SOLVED" for point in points)
+            else effective_status
+        ),
         "p1db_interpolated_dbm": (
             _current_to_dbm(
-                p1db_interpolated_current_a, args.z0_ohm, attenuation_db
+                p1db_interpolated_current_a,
+                args.z0_ohm,
+                attenuation_db,
+                args.power_convention,
             )
             if p1db_interpolated_current_a is not None
             else None
@@ -1460,12 +1912,30 @@ def _estimate_worker_footprint(
             explicit_modes=args.pump_modes,
             design_meta=metadata,
         )
-    # The tone count is frequency-independent; any in-band signal frequency
-    # gives the same basis size, so the sweep midpoint is representative.
+    # The tone count is frequency-independent, so any one sweep frequency sizes
+    # the basis -- but it must not be the pump. The sweep midpoint is degenerate
+    # whenever the range is centred on the pump (5.2-9.0 GHz against a 7.1 GHz
+    # pump lands exactly on it), which made the basis builder refuse a DC tone
+    # and silently cost the run every worker but one. Pick the sweep frequency
+    # furthest from the pump instead; it is a real frequency the sweep will
+    # solve, so the estimate stays representative.
     signal_ghz = args.signal_ghz
     if signal_ghz is None:
-        signal_ghz = 0.5 * (float(args.signal_ghz_min) + float(args.signal_ghz_max))
-    delta = omega_p - 2.0 * math.pi * float(signal_ghz) * 1e9
+        candidates = np.linspace(
+            float(args.signal_ghz_min),
+            float(args.signal_ghz_max),
+            max(int(args.n_signal_freq), 1),
+        )
+        signal_ghz = float(
+            candidates[int(np.argmax(np.abs(candidates - args.pump_freq_ghz)))]
+        )
+    omega_s = 2.0 * math.pi * float(signal_ghz) * 1e9
+    delta = (omega_p / 2.0 if args.multitone_lattice == "half_pump" else omega_p) - omega_s
+    if delta == 0.0:
+        raise ValueError(
+            f"signal frequency {signal_ghz} GHz coincides with the pump; "
+            "cannot size a multitone basis at zero detuning"
+        )
     basis = _build_multitone_basis(args, pump_basis.modes, omega_p, delta)
     # The Schur backend retains the nonlinear nodes and ports; the full backend
     # keeps every node. Use the full node count, the conservative bound.
@@ -1487,16 +1957,25 @@ def _run_frequency_sweep(args: argparse.Namespace) -> dict[str, object]:
         args.n_signal_freq,
     )
     args.output_dir.mkdir(parents=True, exist_ok=True)
-    payloads = []
     summaries_by_index: dict[int, dict[str, object]] = {}
-    values = vars(args).copy()
+    pending: list[tuple[int, float, Path]] = []
     for index, frequency in enumerate(frequencies):
         subdir = args.output_dir / f"frequency_{index:03d}_{frequency:.6f}ghz"
         summary_path = subdir / "compression_summary.json"
         if summary_path.exists():
             summaries_by_index[index] = json.loads(summary_path.read_text(encoding="utf-8"))
         else:
-            payloads.append((index, (values, float(frequency), str(subdir))))
+            pending.append((index, float(frequency), subdir))
+    # The pump does not depend on signal frequency, so every pending point in
+    # this sweep shares one pump state. Solve it once here instead of letting
+    # each point solve it cold on its own -- see _solve_and_persist_shared_pump.
+    if pending and args.pump_solution_dir is None:
+        args.pump_solution_dir = _solve_and_persist_shared_pump(args)
+    values = vars(args).copy()
+    payloads = [
+        (index, (values, frequency, str(subdir)))
+        for index, frequency, subdir in pending
+    ]
     workers = _frequency_worker_limit(args, max(len(payloads), 1))
     if workers == 1:
         completed = [(index, _frequency_worker(payload)) for index, payload in payloads]
@@ -1579,6 +2058,18 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.pump_current_list and args.pump_current_a is not None:
         parser.error("--pump-current-a and --pump-current-list are mutually exclusive")
+    if args.pump_power_dbm is not None and args.pump_current_a is not None:
+        parser.error("--pump-power-dbm and --pump-current-a are mutually exclusive")
+    if args.pump_power_dbm is not None and args.pump_current_list:
+        parser.error("--pump-power-dbm and --pump-current-list are mutually exclusive")
+    if (args.signal_power_min_dbm is None) != (args.signal_power_max_dbm is None):
+        parser.error("--signal-power-min-dbm and --signal-power-max-dbm must be given together")
+    if args.signal_power_min_dbm is not None and (
+        args.signal_current_min_a is not None or args.signal_current_max_a is not None
+    ):
+        parser.error(
+            "--signal-power-min/max-dbm and --signal-current-min/max-a are mutually exclusive"
+        )
     if args.n_signal_freq == 1 and args.signal_ghz is None:
         parser.error("--signal-ghz is required for a single-frequency run")
     args.factor_backend = _select_factor_backend(args, max(args.n_signal_freq, 1))

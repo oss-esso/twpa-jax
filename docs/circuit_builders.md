@@ -207,6 +207,12 @@ constant profile this reduces to the legacy `Cg/2 + (array_length-1)*Cg + Cg/2`.
 
 ## Scatter
 
+Dielectric loss is selected with `--tan-delta` and repeatable
+`--tan-delta-role ROLE=VALUE`. The `jj_cj` role is always lossless; the
+default applies to other capacitor roles. Use
+`--cj-scatter-mode plasma_locked` to derive Cj from Lj scatter and preserve
+the plasma frequency (independent Cj sigma must be zero in that mode).
+
 Multiplicative, against each cell's **own nominal**, so sigma is a fraction of
 that cell's value rather than of a global mean. A cell at twice the nominal
 absorbs twice the absolute deviation.
@@ -224,9 +230,9 @@ stream. Streams are fixed and must never be reordered — only appended to:
 the pre-profile `apply_lj_scatter` at the same seed, and changing
 `--cg-scatter-sigma` cannot perturb the `Lj` realization.
 
-**Independent `Cj` scatter intentionally breaks constant plasma frequency.**
-Only *nominal* `Cj` tracks the `Lj` profile; the scatter draw is separate by
-design and must not be "corrected".
+Independent `Cj` scatter retains the historical behavior and intentionally
+breaks constant plasma frequency. `plasma_locked` is the opt-in mode for
+preserving it exactly.
 
 Factors are drawn `normal` or `uniform` (the uniform width is scaled so its
 standard deviation equals sigma) and clipped to `[clip_min, clip_max]`, default

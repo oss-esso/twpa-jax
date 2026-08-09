@@ -62,9 +62,9 @@ import math
 import os
 import re
 import shutil
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Mapping, Sequence
 
 import numpy as np
 import scipy.sparse as sp
@@ -98,6 +98,27 @@ class Element:
     kind: str
     role: str = ""
     cell_index: int | None = None
+
+
+LOSSLESS_CAPACITOR_ROLES = frozenset({"jj_cj"})
+
+
+@dataclass(frozen=True)
+class LossSpec:
+    """Dielectric loss tangent per capacitor role."""
+
+    default: float = 0.0
+    by_role: Mapping[str, float] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        values = [self.default, *self.by_role.values()]
+        if any(float(value) < 0.0 for value in values):
+            raise ValueError("loss tangent must be non-negative")
+
+    def tan_delta_for(self, role: str) -> float:
+        if role in LOSSLESS_CAPACITOR_ROLES:
+            return 0.0
+        return float(self.by_role.get(role, self.default))
 
 
 @dataclass(frozen=True)
@@ -744,7 +765,19 @@ def build_component_plan(
                                   cells_per_row=params.array_length,
                                   base_value=params.Cg)
     lj, lj_meta = apply_scatter(lj_nominal, lj_scatter, component_rng(seed, "Lj"))
-    cj, cj_meta = apply_scatter(cj_nominal, cj_scatter, component_rng(seed, "Cj"))
+    if cj_scatter.mode == "plasma_locked":
+        if cj_scatter.sigma != 0.0:
+            raise ValueError("cj scatter sigma must be zero in plasma_locked mode")
+        factors = lj / lj_nominal
+        cj = cj_nominal / factors
+        cj_meta = dict(lj_meta)
+        cj_meta["mode"] = "plasma_locked"
+        cj_meta["derived_factor_min"] = float(factors.min())
+        cj_meta["derived_factor_max"] = float(factors.max())
+        cj_meta["derived_factor_mean"] = float(factors.mean())
+        cj_meta["derived_factor_std"] = float(factors.std())
+    else:
+        cj, cj_meta = apply_scatter(cj_nominal, cj_scatter, component_rng(seed, "Cj"))
     cg, cg_meta = apply_scatter(cg_nominal, cg_scatter, component_rng(seed, "Cg"))
     # The per-cell arrays live in ipm_arrays.npz; the summary carries only what
     # is needed to regenerate them, so it stays small enough to load per solve.
@@ -964,7 +997,7 @@ def add_stamp_2node(
             data.append(value * ca * cb)
 
 
-def build_matrices(circuit: list[Element]) -> dict[str, Any]:
+def build_matrices(circuit: list[Element], loss: LossSpec = LossSpec()) -> dict[str, Any]:
     nodes = sorted(
         {int(e.n1) for e in circuit if isinstance(e.n1, int) and int(e.n1) != 0}
         | {int(e.n2) for e in circuit if isinstance(e.n2, int) and int(e.n2) != 0}
@@ -974,7 +1007,7 @@ def build_matrices(circuit: list[Element]) -> dict[str, Any]:
 
     C_r: list[int] = []
     C_c: list[int] = []
-    C_d: list[float] = []
+    C_d: list[complex | float] = []
 
     G_r: list[int] = []
     G_c: list[int] = []
@@ -992,7 +1025,9 @@ def build_matrices(circuit: list[Element]) -> dict[str, Any]:
 
     for e in circuit:
         if e.kind in ("capacitor", "coupling_capacitor"):
-            add_stamp_2node(C_r, C_c, C_d, node_to_idx, int(e.n1), int(e.n2), float(e.value))
+            td = loss.tan_delta_for(e.role)
+            value = float(e.value) * (1.0 - 1j * td) if td else float(e.value)
+            add_stamp_2node(C_r, C_c, C_d, node_to_idx, int(e.n1), int(e.n2), value)
 
         elif e.kind == "resistor":
             add_stamp_2node(G_r, G_c, G_d, node_to_idx, int(e.n1), int(e.n2), 1.0 / float(e.value))
@@ -1108,6 +1143,7 @@ def build_matrices(circuit: list[Element]) -> dict[str, Any]:
         "Lj": np.array(Lj, dtype=float),
         "ports": ports,
         "port_vectors": port_vectors,
+        "loss": loss,
     }
 
 
@@ -1181,6 +1217,7 @@ def write_outputs(
     mats: dict[str, Any] | None,
     extra_summary: dict[str, Any] | None = None,
     plan: ComponentPlan | None = None,
+    loss: LossSpec = LossSpec(),
 ) -> dict[str, Any]:
     os.makedirs(outdir, exist_ok=True)
 
@@ -1221,6 +1258,16 @@ def write_outputs(
     }
     if extra_summary:
         summary.update(extra_summary)
+    caps = [e for e in circuit if e.kind in ("capacitor", "coupling_capacitor")]
+    resolved = {role: loss.tan_delta_for(role) for role in sorted({e.role for e in caps})}
+    summary["loss"] = {
+        "default": float(loss.default),
+        "by_role": dict(loss.by_role),
+        "resolved_by_role": resolved,
+        "lossy_capacitor_count": sum(loss.tan_delta_for(e.role) != 0.0 for e in caps),
+        "lossless_capacitor_count": sum(loss.tan_delta_for(e.role) == 0.0 for e in caps),
+        "total_lossy_capacitance": float(sum(float(e.value) for e in caps if loss.tan_delta_for(e.role))),
+    }
 
     if mats is not None:
         summary["matrices"] = {
@@ -1417,6 +1464,7 @@ def build_variant_design(
     lj_scatter: ScatterSpec = ScatterSpec(), cj_scatter: ScatterSpec = ScatterSpec(),
     cg_scatter: ScatterSpec = ScatterSpec(), seed: int = 1,
     overwrite: bool = False, coupler_mode: str = "auto",
+    loss: LossSpec = LossSpec(),
 ) -> dict[str, Any]:
     """Rebuild a stored design, gate its topology, and emit a variant."""
     source = os.fspath(source_dir)
@@ -1432,12 +1480,12 @@ def build_variant_design(
                                 cg_scatter=cg_scatter, seed=seed)
     circuit, ends = make_ipm(params, coupler, plan=plan)
     return write_outputs(destination, circuit, params, coupler, ends,
-                         build_matrices(circuit),
+                         build_matrices(circuit, loss),
                          extra_summary={"component_plan": plan.metadata,
                                         "source_ipm_dir": source,
                                         "source_coupler_mode": resolved_mode,
                                         **legacy_scatter_summary(plan)},
-                         plan=plan)
+                         plan=plan, loss=loss)
 
 
 # =============================================================================
@@ -1500,6 +1548,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     # unset case when reconciling against the deprecated --lj-scatter-seed.
     p.add_argument("--scatter-seed", type=int, default=None)
     p.add_argument("--cj-scatter-sigma", type=float, default=0.0)
+    p.add_argument("--cj-scatter-mode", choices=["independent", "plasma_locked"], default="independent")
     p.add_argument("--cg-scatter-sigma", type=float, default=0.0)
     p.add_argument("--scatter-distribution", choices=["normal", "uniform"], default="normal")
     p.add_argument("--lj-scatter-clip-min", type=float, default=0.5)
@@ -1511,6 +1560,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--profile-json", type=str, default=None)
     p.add_argument("--lj-profile", action="append", default=[])
     p.add_argument("--cg-profile", action="append", default=[])
+    p.add_argument("--tan-delta", type=float, default=0.0)
+    p.add_argument("--tan-delta-role", action="append", default=[])
     return p.parse_args(argv)
 
 
@@ -1593,14 +1644,22 @@ def main(argv: list[str] | None = None) -> None:
         lj_scatter=ScatterSpec(args.lj_scatter_sigma, args.scatter_distribution,
                                args.lj_scatter_clip_min, args.lj_scatter_clip_max),
         cj_scatter=ScatterSpec(args.cj_scatter_sigma, args.scatter_distribution,
-                               args.cj_scatter_clip_min, args.cj_scatter_clip_max),
+                               args.cj_scatter_clip_min, args.cj_scatter_clip_max,
+                               args.cj_scatter_mode),
         cg_scatter=ScatterSpec(args.cg_scatter_sigma, args.scatter_distribution,
                                args.cg_scatter_clip_min, args.cg_scatter_clip_max),
         seed=seed,
     )
     circuit, ends = make_ipm(params, coupler, plan=plan)
 
-    mats = build_matrices(circuit) if args.write_matrices else None
+    role_overrides: dict[str, float] = {}
+    for item in args.tan_delta_role:
+        role, separator, value = item.partition("=")
+        if not separator or not role:
+            raise ValueError(f"invalid --tan-delta-role {item!r}; expected ROLE=VALUE")
+        role_overrides[role] = float(value)
+    loss = LossSpec(default=args.tan_delta, by_role=role_overrides)
+    mats = build_matrices(circuit, loss) if args.write_matrices else None
 
     summary = write_outputs(
         outdir=args.outdir,
@@ -1610,6 +1669,7 @@ def main(argv: list[str] | None = None) -> None:
         ends=ends,
         mats=mats,
         extra_summary={"component_plan": plan.metadata, **legacy_scatter_summary(plan)},
+        loss=loss,
         plan=plan,
     )
     print_summary(summary)
