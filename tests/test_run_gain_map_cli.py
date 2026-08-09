@@ -39,6 +39,18 @@ def test_inproc_fail_fast_is_opt_in(monkeypatch) -> None:
     assert args.fold_skip_patience == 0
 
 
+def test_adaptive_harmonics_is_on_by_default(monkeypatch) -> None:
+    monkeypatch.setattr(sys, "argv", ["run_gain_map.py"])
+    args = run_gain_map.parse_args()
+    assert args.adaptive_harmonics is True
+
+
+def test_adaptive_harmonics_can_be_disabled_for_diagnostics(monkeypatch) -> None:
+    monkeypatch.setattr(sys, "argv", ["run_gain_map.py", "--no-adaptive-harmonics"])
+    args = run_gain_map.parse_args()
+    assert args.adaptive_harmonics is False
+
+
 def test_inproc_fail_fast_flag_enables_fast_failure(monkeypatch) -> None:
     monkeypatch.setattr(sys, "argv", ["run_gain_map.py", "--inproc-fail-fast"])
 

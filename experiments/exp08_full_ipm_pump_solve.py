@@ -63,6 +63,7 @@ from pump_basis import (  # noqa: E402
     load_pump_basis_from_solution,
     promote_solution_to_basis,
     resolve_pump_basis,
+    with_dynamic_dc,
 )
 
 
@@ -441,11 +442,15 @@ class FullIPMPumpProblem:
             for q_idx, q in enumerate(modes_int):
                 K_k_minus_q = spectral.khat.get(k - q)
                 if K_k_minus_q is not None:
-                    acc = acc + K_k_minus_q @ V[q_idx]
+                    if q == 0:
+                        acc = acc + K_k_minus_q @ np.real(V[q_idx])
+                    else:
+                        acc = acc + K_k_minus_q @ V[q_idx]
 
-                K_k_plus_q = spectral.khat.get(k + q)
-                if K_k_plus_q is not None:
-                    acc = acc + K_k_plus_q @ np.conj(V[q_idx])
+                if q != 0:
+                    K_k_plus_q = spectral.khat.get(k + q)
+                    if K_k_plus_q is not None:
+                        acc = acc + K_k_plus_q @ np.conj(V[q_idx])
 
             JV[k_idx] = acc
 
@@ -589,6 +594,14 @@ class FullIPMPumpProblem:
                 L = spectral.khat.get(k - q, zero)
                 if ki == qi:
                     L = L + self._linear_blocks[ki]
+                if q == 0:
+                    A = L
+                    B = (1j * self._linear_blocks[ki]) if ki == qi else zero
+                    rrr.append(A.real.tocsr())
+                    rri.append(B.real.tocsr())
+                    rir.append(A.imag.tocsr())
+                    rii.append(B.imag.tocsr())
+                    continue
                 P = spectral.khat.get(k + q, zero)
                 Lr, Li = L.real, L.imag
                 Pr, Pi = P.real, P.imag
@@ -1367,13 +1380,16 @@ def write_results(
         pump_modes=pump_modes,
     )
 
+    default_status = (
+        "VALID_CONVERGED"
+        if reports and reports[-1].converged and abs(reports[-1].source_scale - 1.0) < 1e-12
+        else "FAIL"
+    )
     report_json = {
         "metadata": metadata,
         "solution_summary": solution_summary,
         "reports": [asdict(r) for r in reports],
-        "final_status": "VALID_CONVERGED"
-        if reports and reports[-1].converged and abs(reports[-1].source_scale - 1.0) < 1e-12
-        else "FAIL",
+        "final_status": str(metadata.get("pump_validation_status", default_status)),
     }
 
     with open(d / "pump_report.json", "w", encoding="utf-8") as f:
@@ -1558,12 +1574,6 @@ def main() -> None:
     print(f"pump_modes={basis.modes}")
     print(f"pump_basis={basis.basis}")
 
-    grid = HarmonicGrid(
-        modes=basis.k,
-        nt=args.nt,
-        omega=omega_p,
-    )
-
     branch = JosephsonBranchArray(
         Ic=ipm.Ic,
         phi0=ipm.phi0,
@@ -1574,6 +1584,14 @@ def main() -> None:
         print(f"dc_solution={args.dc_solution}")
         print(f"dc_branch_flux_max_abs={float(np.max(np.abs(dc_branch_flux))):.12e}")
         print(f"dc_branch_flux_over_phi0_max_abs={float(np.max(np.abs(dc_branch_flux / ipm.phi0))):.12e}")
+        basis = with_dynamic_dc(basis)
+        print(f"pump_modes_with_dynamic_dc={basis.modes}")
+
+    grid = HarmonicGrid(
+        modes=basis.k,
+        nt=args.nt,
+        omega=omega_p,
+    )
 
     problem = FullIPMPumpProblem(
         C=ipm.C,
