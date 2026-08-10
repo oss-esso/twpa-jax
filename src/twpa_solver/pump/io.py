@@ -7,10 +7,14 @@ from typing import Any
 
 import numpy as np
 
+from twpa_solver.pump.diagnostics import branch_stress_metrics
 from twpa_solver.pump.problem import FullPumpProblem
 from twpa_solver.pump.solver import StepReport
 
-def summarize_solution(problem: FullPumpProblem, X: np.ndarray) -> dict[str, float]:
+def summarize_solution(
+    problem: FullPumpProblem,
+    X: np.ndarray,
+) -> dict[str, float | int | None]:
     x_t = problem.grid.synthesize(X)
     psi_t = problem.branch_flux_time(X)
     psi_total_t = psi_t + problem.dc_branch_flux[None, :]
@@ -24,6 +28,7 @@ def summarize_solution(problem: FullPumpProblem, X: np.ndarray) -> dict[str, flo
         "branch_i_rms": float(np.sqrt(np.mean(i_t * i_t))),
         "branch_i_max_abs": float(np.max(np.abs(i_t))),
     }
+    out.update(branch_stress_metrics(problem, X))
 
     for h in range(problem.H):
         out[f"X_h{h + 1}_norm"] = float(np.linalg.norm(X[h]))

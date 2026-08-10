@@ -1,0 +1,775 @@
+"""CLI defaults for the gain-map runner."""
+
+import math
+from pathlib import Path
+from types import SimpleNamespace
+import sys
+
+import numpy as np
+
+import scripts.run_gain_map as run_gain_map
+
+
+def test_measurement_grid_loader_preserves_nonuniform_themis_axes() -> None:
+    measurement_dir = Path(
+        "docs/development/17.03.10_Themis_SetupAug25_noVTS_transmission_15mK"
+    )
+    powers, freqs = run_gain_map.load_measurement_grid(measurement_dir)
+
+    assert powers.size == 31
+    assert freqs.size == 51
+    assert np.isclose(powers[0], -25.96)
+    assert np.isclose(powers[-1], -16.94666666666667)
+    assert np.isclose(freqs[0], 7.043)
+    assert np.isclose(freqs[-1], 7.373)
+    assert not np.allclose(freqs, np.linspace(freqs[0], freqs[-1], freqs.size))
+
+
+def test_signal_attenuation_override_is_separate_from_pump_model() -> None:
+    args = SimpleNamespace(signal_attenuation_db=7.5)
+    assert run_gain_map.signal_attenuation_db_for(8.0, args) == 7.5
+
+
+def test_inproc_fail_fast_is_opt_in(monkeypatch) -> None:
+    monkeypatch.setattr(sys, "argv", ["run_gain_map.py"])
+
+    args = run_gain_map.parse_args()
+
+    assert args.inproc_fail_fast is False
+    assert args.fold_skip_patience == 0
+
+
+def test_adaptive_harmonics_is_on_by_default(monkeypatch) -> None:
+    monkeypatch.setattr(sys, "argv", ["run_gain_map.py"])
+    args = run_gain_map.parse_args()
+    assert args.adaptive_harmonics is True
+
+
+def test_adaptive_harmonics_can_be_disabled_for_diagnostics(monkeypatch) -> None:
+    monkeypatch.setattr(sys, "argv", ["run_gain_map.py", "--no-adaptive-harmonics"])
+    args = run_gain_map.parse_args()
+    assert args.adaptive_harmonics is False
+
+
+def test_high_power_recovery_enables_exhaustive_controls(monkeypatch) -> None:
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["run_gain_map.py", "--high-power-recovery"],
+    )
+
+    args = run_gain_map.parse_args()
+
+    assert args.high_power_recovery is True
+    assert args.column_recovery_ladder is True
+    assert args.high_power_max_newton == 32
+    assert args.high_power_harmonic_max_mode == 35
+    assert args.high_power_stall_patience == 0
+    assert math.isclose(args.high_power_min_alpha, 1.0 / 65536.0)
+    assert args.pump_full_residual_gate is None
+    assert args.inproc_schur_cache_size == 1
+
+
+def test_high_power_cache_size_can_be_overridden(monkeypatch) -> None:
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["run_gain_map.py", "--high-power-recovery", "--inproc-schur-cache-size", "2"],
+    )
+
+    args = run_gain_map.parse_args()
+
+    assert args.inproc_schur_cache_size == 2
+
+
+def test_engine_cache_clear_releases_all_cached_partitions() -> None:
+    class FakePartition:
+        def __init__(self) -> None:
+            self.released = 0
+
+        def release(self) -> None:
+            self.released += 1
+
+    engine = object.__new__(run_gain_map.InProcessEngine)
+    first = FakePartition()
+    second = FakePartition()
+    engine._schur_part_cache = {("a", (1,)): first, ("b", (1,)): second}
+
+    engine.clear_schur_cache()
+
+    assert engine._schur_part_cache == {}
+    assert first.released == 1
+    assert second.released == 1
+
+
+def test_enriched_warm_state_is_projected_back_to_base_basis() -> None:
+    from twpa_solver.pump.basis import PumpBasis
+
+    engine = object.__new__(run_gain_map.InProcessEngine)
+    engine.args = SimpleNamespace(
+        mixing_order=4,
+        pump_mode_policy="positive_odd_jc",
+        harmonics=3,
+        pump_mode_count=10,
+    )
+    engine.ipm08 = SimpleNamespace(summary={})
+    engine._last_pump_basis = PumpBasis(
+        modes=[1, 3, 5, 7, 9, 11, 13, 15, 17, 19, 21],
+        policy="positive_odd_jc",
+        omega_p=2.0 * math.pi * 7.6e9,
+    )
+    enriched = np.ones((11, 4), dtype=np.complex128)
+
+    projected = engine.project_to_base_pump_basis(7.6, enriched)
+
+    assert projected is not None
+    assert projected.shape == (10, 4)
+    np.testing.assert_array_equal(projected, enriched[:10])
+
+
+def test_inproc_fail_fast_flag_enables_fast_failure(monkeypatch) -> None:
+    monkeypatch.setattr(sys, "argv", ["run_gain_map.py", "--inproc-fail-fast"])
+
+    args = run_gain_map.parse_args()
+
+    assert args.inproc_fail_fast is True
+
+
+def test_recovery_arclength_flags_default_to_no_change(monkeypatch) -> None:
+    # 0 for both -- solve_arclength treats rescale_every=0 as disabled and
+    # max_steps_after_fold=0 as mathematically identical to its own None
+    # default (see docs/development/arclength_fold_resolution_plan.md Phase 4).
+    monkeypatch.setattr(sys, "argv", ["run_gain_map.py"])
+
+    args = run_gain_map.parse_args()
+
+    assert args.recovery_arclength_rescale_every == 0
+    assert args.recovery_arclength_max_steps_after_fold == 0
+
+
+def test_recovery_arclength_flags_are_settable(monkeypatch) -> None:
+    monkeypatch.setattr(sys, "argv", [
+        "run_gain_map.py",
+        "--recovery-arclength-rescale-every", "5",
+        "--recovery-arclength-max-steps-after-fold", "150",
+    ])
+
+    args = run_gain_map.parse_args()
+
+    assert args.recovery_arclength_rescale_every == 5
+    assert args.recovery_arclength_max_steps_after_fold == 150
+
+
+def test_write_points_csv_carries_arclength_fold_current(tmp_path) -> None:
+    import csv
+
+    row_with_fold = {"pass": 0, "point_index": 0, "status": "FAILED",
+                      "pump_arclength_fold_current_a": 1.163e-05}
+    row_without_fold = {"pass": 0, "point_index": 1, "status": "PASS"}
+    out = tmp_path / "points.csv"
+
+    run_gain_map.write_points_csv(out, [row_with_fold, row_without_fold])
+
+    with open(out, newline="", encoding="utf-8") as f:
+        rows = list(csv.DictReader(f))
+    assert rows[0]["pump_arclength_fold_current_a"] == "1.163e-05"
+    assert rows[1]["pump_arclength_fold_current_a"] == ""
+
+
+def test_all_intra_cell_continuation_methods_are_selectable(monkeypatch) -> None:
+    methods = {
+        "fixed",
+        "adaptive_copy",
+        "adaptive_secant",
+        "adaptive_tangent",
+        "affine",
+        "ptc",
+        "arclength",
+    }
+    for method in methods:
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            ["run_gain_map.py", "--inproc-continuation", method],
+        )
+        assert run_gain_map.parse_args().inproc_continuation == method
+
+
+def test_solve_deadline_alias_matches_canonical_flag(monkeypatch) -> None:
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["run_gain_map.py", "--inproc-solve-deadline", "14"],
+    )
+    assert run_gain_map.parse_args().inproc_solve_deadline_s == 14.0
+
+
+def test_column_arclength_recovery_is_opt_in(monkeypatch) -> None:
+    monkeypatch.setattr(sys, "argv", ["run_gain_map.py"])
+    assert run_gain_map.parse_args().column_arclength_recovery is False
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["run_gain_map.py", "--column-arclength-recovery"],
+    )
+    assert run_gain_map.parse_args().column_arclength_recovery is True
+
+
+def test_column_arclength_has_separate_trace_deadline(monkeypatch) -> None:
+    monkeypatch.setattr(sys, "argv", ["run_gain_map.py"])
+    assert run_gain_map.parse_args().column_arclength_deadline_s == 180.0
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["run_gain_map.py", "--column-arclength-deadline-s", "12"],
+    )
+    assert run_gain_map.parse_args().column_arclength_deadline_s == 12.0
+
+
+def test_column_power_substep_is_opt_in_with_defaults(monkeypatch) -> None:
+    monkeypatch.setattr(sys, "argv", ["run_gain_map.py"])
+    args = run_gain_map.parse_args()
+    assert args.column_power_substep is False
+    assert args.column_power_substep_init_db == 0.1
+    assert args.column_power_substep_min_db == 0.005
+    assert args.column_power_substep_deadline_s == 120.0
+
+    monkeypatch.setattr(
+        sys, "argv",
+        ["run_gain_map.py", "--column-power-substep",
+         "--column-power-substep-min-db", "0.01"],
+    )
+    args = run_gain_map.parse_args()
+    assert args.column_power_substep is True
+    assert args.column_power_substep_min_db == 0.01
+
+
+def test_column_recovery_ladder_is_opt_in_with_bounded_defaults(monkeypatch) -> None:
+    monkeypatch.setattr(sys, "argv", ["run_gain_map.py"])
+    args = run_gain_map.parse_args()
+    assert args.column_recovery_ladder is False
+    assert args.column_recovery_tier3_ds == 0.01
+    assert args.column_recovery_tier3_max_steps == 150
+    assert args.column_recovery_tier3_deadline_s == 60.0
+    assert args.column_recovery_tier4_anchor_deadline_s == 20.0
+    assert args.column_recovery_tier4_substep_deadline_s == 60.0
+    assert args.column_recovery_tier4_min_step_ghz == 0.0005
+
+    monkeypatch.setattr(
+        sys, "argv",
+        ["run_gain_map.py", "--column-recovery-ladder",
+         "--column-recovery-tier3-ds", "0.02",
+         "--column-recovery-tier3-max-steps", "40"],
+    )
+    args = run_gain_map.parse_args()
+    assert args.column_recovery_ladder is True
+    assert args.column_recovery_tier3_ds == 0.02
+    assert args.column_recovery_tier3_max_steps == 40
+
+
+def _fake_substep_engine(monkeypatch, converge_rule):
+    """Bind solve_power_substep to a fake engine with a scripted solver.
+
+    ``converge_rule(dist_db, step_db) -> bool`` decides convergence, where
+    ``dist_db`` is the dBm advanced from the start and ``step_db`` is the
+    proposed micro-step. The fake problem carries only its current; the guess
+    array encodes the last accepted current so the method's dBm bookkeeping is
+    exercised for real.
+    """
+    class _Report:
+        def __init__(self, converged: bool) -> None:
+            self.converged = converged
+
+    class _Solver:
+        def __init__(self, _settings) -> None:
+            pass
+
+        def solve_one(self, prob, guess, _scale):
+            trial = prob.cur
+            prev = float(guess[0])
+            step_db = 20.0 * math.log10(trial / prev)
+            dist_db = 20.0 * math.log10(trial / prob.start)
+            return np.array([trial]), _Report(converge_rule(dist_db, step_db))
+
+    monkeypatch.setattr(run_gain_map.exp08, "HarmonicNewtonKrylovSolver", _Solver)
+    start = 1.0
+
+    def build(freq, cur):
+        return SimpleNamespace(cur=cur, start=start), None, None
+
+    eng = SimpleNamespace(
+        _settings=lambda: None,
+        _build_problem=build,
+        _make_solve_problem=lambda prob, freq: prob,
+    )
+    method = run_gain_map.InProcessEngine.solve_power_substep.__get__(
+        eng, run_gain_map.InProcessEngine
+    )
+    return method, start
+
+
+def test_power_substep_crosses_a_crest_by_shrinking_step(monkeypatch) -> None:
+    # Crest between 0.5 and 0.7 dB tolerates only <=0.05 dB steps; elsewhere
+    # coarse 0.1 dB steps pass. The adaptive walk must shrink to cross it.
+    def rule(dist_db, step_db):
+        allowed = 0.05 if 0.5 <= dist_db <= 0.7 else 0.25
+        return step_db <= allowed + 1e-9
+
+    method, start = _fake_substep_engine(monkeypatch, rule)
+    target = start * 10.0 ** (1.0 / 20.0)  # +1.0 dB
+
+    X, info = method(8.0, np.array([start]), start, target,
+                     init_db=0.1, min_db=0.005, deadline_s=30.0)
+
+    assert X is not None
+    assert info["reached_target"] is True
+    assert info["terminal_reason"] == "reached"
+    assert info["min_step_db"] <= 0.05 + 1e-9  # had to shrink at the crest
+
+
+def test_power_substep_reports_step_floor_at_a_hard_fold(monkeypatch) -> None:
+    # Nothing converges past 0.5 dB (a fold); the walk must give up at the
+    # min-db floor and report a step-independent stall, not silently succeed.
+    def rule(dist_db, step_db):
+        return dist_db <= 0.5 + 1e-9
+
+    method, start = _fake_substep_engine(monkeypatch, rule)
+    target = start * 10.0 ** (1.0 / 20.0)  # +1.0 dB, past the fold
+
+    X, info = method(8.0, np.array([start]), start, target,
+                     init_db=0.1, min_db=0.05, deadline_s=30.0)
+
+    assert X is None
+    assert info["reached_target"] is False
+    assert info["terminal_reason"] == "step_floor"
+    # advanced to ~0.5 dB before stalling
+    assert 20.0 * math.log10(info["last_current"] / start) <= 0.5 + 1e-6
+
+
+def _fake_solve_point_engine(monkeypatch, *, converged: bool):
+    """Bind solve_point to a fake engine whose pump solve reports `converged`.
+
+    Stubs the heavy pump/gain internals so only the convergence-gate logic of
+    solve_point (does gain run? is X returned for chaining?) is exercised.
+    """
+    class _Report:
+        source_scale = 1.0
+        time_rel = None
+        newton_iterations = 4
+        gmres_iterations_total = 10
+        factor_runtime_s = 0.0
+        runtime_s = 0.1
+        preconditioner_assembly_runtime_s = 0.0
+        preconditioner_numeric_factor_runtime_s = 0.0
+
+        def __init__(self) -> None:
+            self.converged = converged
+            self.coeff_rel = 1e-12 if converged else 1e-3
+            self.failure_reason = None if converged else "stalled"
+
+    class _Solver:
+        def __init__(self, _settings) -> None:
+            pass
+
+        def solve_direct(self, prob, warm_X):
+            return np.array([1.0, 2.0, 3.0]), [_Report()]
+
+    monkeypatch.setattr(run_gain_map.exp08, "HarmonicNewtonKrylovSolver", _Solver)
+    monkeypatch.setattr(run_gain_map.exp08, "summarize_solution",
+                        lambda prob, X: {"branch_i_max_abs": 1.0})
+    monkeypatch.setattr(run_gain_map.exp08, "write_results",
+                        lambda *a, **k: None)
+
+    gain_calls: list[int] = []
+
+    def fake_gain(pump_dir, gain_dir, freq_ghz):
+        gain_calls.append(1)
+        g = SimpleNamespace(
+            status="VALID_SOLVED", gain_db=12.0, gain_vs_off_db=12.0,
+            gain_vs_pumpdiag_db=12.0, signal_ghz=6.0, linear_rel_residual=1e-9,
+        )
+        return g, {}, None
+
+    basis = SimpleNamespace(to_metadata=lambda: {"pump_basis": "x"})
+    args = SimpleNamespace(
+        inproc_pump_backend="full", nt=40, newton_tol=1e-9, inproc_max_newton=16,
+        inproc_gmres_maxiter=80, inproc_preconditioner="real_coupled",
+        inproc_solve_deadline_s=0.0, inproc_precond_reuse=0,
+        inproc_precond_refresh_gmres=0, inproc_continuation="adaptive_secant",
+    )
+    eng = SimpleNamespace(
+        args=args, ic_median=1.0, _gain=fake_gain,
+        _settings=lambda: None,
+        build_problem_for=lambda point: (object(), basis, 1.0, 1.0),
+        _make_solve_problem=lambda full, freq: full,
+    )
+    method = run_gain_map.InProcessEngine.solve_point.__get__(
+        eng, run_gain_map.InProcessEngine
+    )
+    return method, gain_calls
+
+
+def _make_point():
+    return run_gain_map.GridPoint(
+        index=0, i_power=0, j_freq=0, power_dbm=-20.0, pump_freq_ghz=8.0,
+        current_a=1e-6,
+    )
+
+
+def test_force_gain_computes_gain_and_chains_x_when_pump_not_converged(
+    monkeypatch, tmp_path
+) -> None:
+    method, gain_calls = _fake_solve_point_engine(monkeypatch, converged=False)
+    row, X = method(_make_point(), tmp_path, mode="warm",
+                    warm_X=np.array([0.0, 0.0, 0.0]), force_gain=True)
+    # gain ran on the non-converged pump waveform and X is returned for chaining
+    assert len(gain_calls) == 1
+    assert row["pump_status"] == "FAIL"
+    assert row["gain_status"] == "VALID_SOLVED"
+    assert row["gain_db"] == 12.0
+    assert X is not None
+
+
+def test_force_gain_off_skips_gain_and_drops_x_when_pump_not_converged(
+    monkeypatch, tmp_path
+) -> None:
+    method, gain_calls = _fake_solve_point_engine(monkeypatch, converged=False)
+    row, X = method(_make_point(), tmp_path, mode="warm",
+                    warm_X=np.array([0.0, 0.0, 0.0]), force_gain=False)
+    # default behaviour: no gain solve, X dropped so it can't seed the next cell
+    assert gain_calls == []
+    assert row["gain_status"] == "ERROR"
+    assert X is None
+
+
+def test_frequency_chunk_size_defaults_to_ten_columns(monkeypatch) -> None:
+    monkeypatch.setattr(sys, "argv", ["run_gain_map.py"])
+
+    args = run_gain_map.parse_args()
+
+    assert args.frequency_chunk_size == 10
+    assert args.resume_chunks is True
+    assert args.signal_spectrum is True
+    assert args.local_traversal_chunks is False
+
+
+def test_local_traversal_chunks_are_explicit(monkeypatch) -> None:
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["run_gain_map.py", "--local-traversal-chunks"],
+    )
+
+    args = run_gain_map.parse_args()
+
+    assert args.local_traversal_chunks is True
+
+
+def test_column_bridge_uses_generic_recovery_orchestrator(monkeypatch) -> None:
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["run_gain_map.py", "--traversal", "column", "--recovery", "bridge"],
+    )
+
+    args = run_gain_map.parse_args()
+
+    assert run_gain_map.uses_traversal_orchestrator(args) is True
+
+
+def test_legacy_column_control_keeps_legacy_orchestrator(monkeypatch) -> None:
+    monkeypatch.setattr(sys, "argv", ["run_gain_map.py"])
+
+    args = run_gain_map.parse_args()
+
+    assert run_gain_map.uses_traversal_orchestrator(args) is False
+
+
+def test_signal_spectrum_can_be_disabled(monkeypatch) -> None:
+    monkeypatch.setattr(sys, "argv", ["run_gain_map.py", "--no-signal-spectrum"])
+
+    args = run_gain_map.parse_args()
+
+    assert args.signal_spectrum is False
+
+
+def test_frequency_chunk_ranges_are_half_open() -> None:
+    assert run_gain_map.frequency_chunk_ranges(25, 10) == [(0, 10), (10, 20), (20, 25)]
+    assert run_gain_map.frequency_chunk_ranges(8, 10) == [(0, 8)]
+    assert run_gain_map.frequency_chunk_ranges(8, 0) == [(0, 8)]
+
+
+def test_chunk_worker_command_strips_parent_routing_options() -> None:
+    cmd = run_gain_map.chunk_worker_command(
+        [
+            "--outdir",
+            "outputs/full",
+            "--frequency-chunk-size",
+            "10",
+            "--gate-spotcheck=5",
+            "--overwrite",
+            "--n-frequency",
+            "50",
+            "--pump-freq-min-ghz",
+            "7.5",
+            "--pump-freq-max-ghz",
+            "8.5",
+        ],
+        outdir=Path("outputs/full/chunks/chunk_000"),
+        n_frequency=10,
+        pump_freq_min_ghz=7.5,
+        pump_freq_max_ghz=7.683673469387755,
+    )
+
+    assert "--chunk-worker" in cmd
+    assert "--n-frequency" in cmd
+    assert "10" in cmd
+    assert "--pump-freq-min-ghz" in cmd
+    assert "--pump-freq-max-ghz" in cmd
+    assert "7.5" in cmd
+    assert "7.68367346939" in cmd
+    assert "50" not in cmd
+    assert "8.5" not in cmd
+    assert "--frequency-chunk-size" not in cmd
+    assert "--gate-spotcheck=5" not in cmd
+    assert cmd.count("--outdir") == 1
+
+
+def test_read_chunk_rows_globalizes_frequency_and_point_indices(tmp_path) -> None:
+    chunk_dir = tmp_path / "chunk"
+    chunk_dir.mkdir()
+    (chunk_dir / "map_points.csv").write_text(
+        "pass,point_index,i_power,j_freq,pump_power_dbm,pump_freq_ghz,status\n"
+        "warm,0,0,0,-30,7.5,PASS\n"
+        "warm,3,1,1,-29,7.6,PASS\n",
+        encoding="utf-8",
+    )
+
+    _cold, warm = run_gain_map.read_chunk_rows(
+        [(chunk_dir, 10, 12)],
+        global_n_frequency=50,
+    )
+
+    assert warm[0]["j_freq"] == 10
+    assert warm[0]["point_index"] == 10
+    assert warm[1]["j_freq"] == 11
+    assert warm[1]["point_index"] == 61
+
+
+def test_fail_fast_does_not_retry_secant_fallback(tmp_path) -> None:
+    class FakeEngine:
+        def __init__(self) -> None:
+            self.args = SimpleNamespace(
+                inproc_fold_predictor="secant",
+                pump_current_jc_scale=1.0,
+                fold_skip_patience=0,
+            )
+            self.calls = []
+
+        def solve_point(self, point, pass_dir, *, mode, warm_X):
+            self.calls.append((point.index, mode, None if warm_X is None else warm_X.copy()))
+            status = "ERROR" if point.index == 2 else "PASS"
+            row = {
+                "point_index": point.index,
+                "status": status,
+                "gain_db": None,
+                "pump_newton_total": 1,
+                "pump_runtime_s": 0.1,
+            }
+            return row, np.array([float(point.index + 1)])
+
+    points = [
+        run_gain_map.GridPoint(0, 0, 0, -35.0, 7.5, 1.0),
+        run_gain_map.GridPoint(1, 1, 0, -34.0, 7.5, 2.0),
+        run_gain_map.GridPoint(2, 2, 0, -33.0, 7.5, 3.0),
+    ]
+    engine = FakeEngine()
+
+    rows = run_gain_map.run_warm_pass_inprocess(
+        points,
+        tmp_path,
+        engine,
+        fail_fast=True,
+    )
+
+    assert [call[0] for call in engine.calls] == [0, 1, 2]
+    assert rows[-1]["status"] == "ERROR"
+    assert rows[-1]["pump_predictor"] == "secant"
+
+
+def test_column_recovery_ladder_recovers_with_power_substep(tmp_path) -> None:
+    class FakeEngine:
+        def __init__(self) -> None:
+            self.args = SimpleNamespace(
+                inproc_fold_predictor="none",
+                pump_current_jc_scale=1.0,
+                fold_skip_patience=0,
+                column_recovery_ladder=True,
+                column_power_substep_init_db=0.1,
+                column_power_substep_min_db=0.005,
+                column_power_substep_deadline_s=1.0,
+                column_recovery_tier3_ds=0.01,
+                column_recovery_tier3_max_steps=10,
+                column_recovery_tier3_deadline_s=1.0,
+                column_recovery_tier4_anchor_deadline_s=1.0,
+                column_recovery_tier4_substep_deadline_s=1.0,
+                column_recovery_tier4_min_step_ghz=0.0005,
+            )
+            self.calls: list[tuple[int, str]] = []
+
+        def solve_point(self, point, pass_dir, *, mode, warm_X):
+            self.calls.append((point.index, mode))
+            recovered = point.index == 1 and warm_X is not None and warm_X[0] >= 2.0
+            status = "PASS" if point.index == 0 or recovered else "ERROR"
+            row = {
+                "point_index": point.index,
+                "status": status,
+                "gain_db": 10.0 if status == "PASS" else None,
+                "pump_newton_total": 1,
+                "pump_runtime_s": 0.1,
+            }
+            return row, np.array([2.0 if recovered else float(point.index + 1)])
+
+        def solve_power_substep(self, *args, **kwargs):
+            return np.array([2.0]), {
+                "substeps": 3,
+                "terminal_reason": "reached",
+                "last_current": 2.0,
+            }
+
+        def solve_arclength_forward(self, *args, **kwargs):
+            raise AssertionError("tier 3 must not run after tier 2 recovery")
+
+    points = [
+        run_gain_map.GridPoint(0, 0, 0, -35.0, 7.5, 1.0),
+        run_gain_map.GridPoint(1, 1, 0, -34.0, 7.5, 2.0),
+    ]
+    engine = FakeEngine()
+
+    rows = run_gain_map.run_warm_pass_inprocess(
+        points, tmp_path, engine, fail_fast=True,
+    )
+
+    assert [row["status"] for row in rows] == ["PASS", "PASS"]
+    assert rows[0]["column_recovery_route"] == "DIRECT"
+    assert rows[1]["column_recovery_route"] == "POWER_SUBSTEP"
+    assert rows[1]["tier2_recovered"] is True
+    assert engine.calls == [(0, "seed"), (1, "warm"), (1, "warm")]
+
+
+def test_consecutive_failures_do_not_skip_without_verified_fold(tmp_path) -> None:
+    class FakeEngine:
+        def __init__(self) -> None:
+            self.args = SimpleNamespace(
+                inproc_fold_predictor="none",
+                pump_current_jc_scale=1.0,
+                fold_skip_patience=1,
+                column_arclength_recovery=False,
+            )
+
+        def solve_point(self, point, pass_dir, *, mode, warm_X):
+            row = {
+                "point_index": point.index,
+                "status": "ERROR" if point.index >= 1 else "PASS",
+                "gain_db": None,
+                "pump_newton_total": 1,
+                "pump_runtime_s": 0.1,
+            }
+            return row, np.array([float(point.index + 1)])
+
+    points = [
+        run_gain_map.GridPoint(0, 0, 0, -35.0, 7.5, 1.0),
+        run_gain_map.GridPoint(1, 1, 0, -34.0, 7.5, 2.0),
+        run_gain_map.GridPoint(2, 2, 0, -33.0, 7.5, 3.0),
+    ]
+
+    rows = run_gain_map.run_warm_pass_inprocess(
+        points,
+        tmp_path,
+        FakeEngine(),
+        fail_fast=True,
+    )
+
+    assert len(rows) == 3
+    assert all(row["status"] == "ERROR" for row in rows[1:])
+
+
+def test_fold_skip_requires_arclength_turning_point(tmp_path) -> None:
+    class FakeEngine:
+        def __init__(self) -> None:
+            self.args = SimpleNamespace(
+                inproc_fold_predictor="none",
+                pump_current_jc_scale=1.0,
+                fold_skip_patience=1,
+                column_arclength_recovery=True,
+                column_arclength_deadline_s=1.0,
+            )
+
+        def solve_point(self, point, pass_dir, *, mode, warm_X):
+            status = "ERROR" if point.index == 2 else "PASS"
+            row = {
+                "point_index": point.index,
+                "status": status,
+                "gain_db": None,
+                "pump_newton_total": 1,
+                "pump_runtime_s": 0.1,
+            }
+            return row, np.array([float(point.index + 1)])
+
+        def trace_column_arclength(self, *args):
+            return {}, {"fold_lambdas": [0.99], "steps": 1, "trace_points": 2}
+
+    points = [
+        run_gain_map.GridPoint(i, i, 0, -35.0 + i, 7.5, float(i + 1))
+        for i in range(4)
+    ]
+    rows = run_gain_map.run_warm_pass_inprocess(
+        points,
+        tmp_path,
+        FakeEngine(),
+        fail_fast=True,
+    )
+
+    assert [row["status"] for row in rows] == ["PASS", "PASS", "ERROR", "SKIP_PAST_FOLD"]
+
+
+def test_partial_continuation_failures_enable_fold_skip(tmp_path) -> None:
+    class FakeEngine:
+        def __init__(self) -> None:
+            self.args = SimpleNamespace(
+                inproc_fold_predictor="none",
+                pump_current_jc_scale=1.0,
+                fold_skip_patience=2,
+                column_arclength_recovery=False,
+            )
+
+        def solve_point(self, point, pass_dir, *, mode, warm_X):
+            failed = point.index >= 1
+            row = {
+                "point_index": point.index,
+                "status": "ERROR" if failed else "PASS",
+                "gain_db": None,
+                "pump_newton_total": 1,
+                "pump_runtime_s": 0.1,
+                "pump_continuation_method": "adaptive_secant" if failed else "direct",
+                "pump_continuation_steps": 3 if failed else 1,
+                "pump_continuation_reached_target": False if failed else True,
+            }
+            return row, np.array([float(point.index + 1)])
+
+    points = [
+        run_gain_map.GridPoint(i, i, 0, -35.0 + i, 7.5, float(i + 1))
+        for i in range(5)
+    ]
+    rows = run_gain_map.run_warm_pass_inprocess(
+        points,
+        tmp_path,
+        FakeEngine(),
+        fail_fast=True,
+    )
+
+    assert [row["status"] for row in rows] == [
+        "PASS", "ERROR", "ERROR", "SKIP_PAST_FOLD", "SKIP_PAST_FOLD"
+    ]
