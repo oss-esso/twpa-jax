@@ -223,6 +223,7 @@ For an unbiased 4WM design, the normal basis is:
 | `--signal-attenuation-db VALUE` | Flat signal-line attenuation for spectrum referral. |
 | `--z0-ohm VALUE` | Reference impedance. |
 | `--power-convention legacy_traveling_wave\|norton` | Converts dBm to injected peak current. Keep the default unless a calibration explicitly requires the alternate convention. |
+| `--column-recovery-ladder` | Opt-in bounded column recovery: direct HB, adaptive power substeps, local pseudo-arclength, then nearby-frequency detour. It records the route and does not classify HB failure as physics. |
 
 ### Signal and pump options
 
