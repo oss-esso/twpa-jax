@@ -92,6 +92,7 @@ from twpa_solver.pump.backends.schur_operators import (  # noqa: E402
     build_schur_problem,
 )
 from twpa_solver.pump.backends.schur_partition import restrict  # noqa: E402
+from twpa_solver.pump.diagnostics import residual_spectrum_summary  # noqa: E402
 from twpa_solver.ports import (  # noqa: E402
     port_available_power_w,
     port_current_from_power_a,
@@ -322,6 +323,8 @@ def pump_metrics(report: dict[str, Any] | None) -> dict[str, Any]:
             "pump_preconditioner_assembly_runtime_s",
             "pump_preconditioner_numeric_factor_runtime_s", "pump_coeff_rel",
             "pump_time_rel", "pump_newton_total", "pump_branch_current_max",
+            "pump_branch_current_max_over_ic", "pump_strongest_branch_index",
+            "pump_branch_min_cos_phase", "pump_residual_max_omitted_mode_rel",
             "pump_failure_reason",
         )}
     reports = report.get("reports", [])
@@ -336,6 +339,18 @@ def pump_metrics(report: dict[str, Any] | None) -> dict[str, Any]:
         "pump_time_rel": finite_or_none(final.get("time_rel")),
         "pump_newton_total": int(sum(int(r.get("newton_iterations", 0)) for r in reports)),
         "pump_branch_current_max": finite_or_none(summ.get("branch_i_max_abs")),
+        "pump_branch_current_max_over_ic": finite_or_none(
+            summ.get("branch_current_max_over_ic")
+        ),
+        "pump_strongest_branch_index": summ.get("strongest_branch_index"),
+        "pump_branch_min_cos_phase": finite_or_none(
+            summ.get("branch_min_cos_phase")
+        ),
+        "pump_residual_max_omitted_mode_rel": finite_or_none(
+            report.get("metadata", {})
+            .get("pump_residual_spectrum", {})
+            .get("max_omitted_mode_rel")
+        ),
         "pump_failure_reason": _final_failure_reason(report),
     }
 
@@ -739,7 +754,9 @@ class InProcessEngine:
         # frequency unbounded is what OOMs large maps (50 partitions ~ 16 GB).
         # Keep the last few (insertion-ordered dict acts as the LRU).
         self._schur_part_cache: dict[tuple[float, tuple[int, ...]], Any] = {}
-        self._schur_cache_max = max(1, int(getattr(args, "inproc_schur_cache_size", 2)))
+        self._schur_cache_max = max(
+            1, int(getattr(args, "inproc_schur_cache_size", 2))
+        )
         self._signal_schur_part_cache: dict[tuple[Any, ...], Any] = {}
         self._signal_schur_cache_max = max(1, int(getattr(args, "inproc_schur_cache_size", 2)))
         logger.debug(
@@ -747,6 +764,31 @@ class InProcessEngine:
             "n_ports=%s schur_cache_max=%s",
             self.pump_idx, self.source_idx, self.out_idx, len(self.ports),
             self._schur_cache_max,
+        )
+
+    @staticmethod
+    def _release_cached_partition(part: Any) -> None:
+        """Release one cached Schur partition before dropping its reference."""
+        release = getattr(part, "release", None)
+        if callable(release):
+            release()
+            return
+        fast = getattr(part, "_fast_coupled", None)
+        if fast is not None:
+            fast_release = getattr(fast, "release", None)
+            if callable(fast_release):
+                fast_release()
+            part._fast_coupled = None
+
+    def clear_schur_cache(self) -> None:
+        """Release all cached pump Schur partitions and native factors."""
+        cached = list(self._schur_part_cache.values())
+        self._schur_part_cache.clear()
+        for part in cached:
+            self._release_cached_partition(part)
+        gc.collect()
+        logger.debug(
+            "engine_schur_cache_cleared released_partitions=%d", len(cached)
         )
 
     def _settings(self) -> exp08.NewtonKrylovSettings:
@@ -769,12 +811,31 @@ class InProcessEngine:
             self.args.inproc_max_newton, self.args.inproc_gmres_maxiter,
             self.args.inproc_solve_deadline_s,
         )
+        high_power = bool(getattr(self.args, "high_power_recovery", False))
+        max_newton = int(self.args.inproc_max_newton)
+        if high_power:
+            max_newton = max(max_newton, int(self.args.high_power_max_newton))
+        stall_patience = (
+            int(self.args.high_power_stall_patience)
+            if high_power
+            else int(self.args.inproc_stall_patience)
+        )
+        min_alpha = (
+            float(self.args.high_power_min_alpha)
+            if high_power
+            else float(self.args.inproc_min_alpha)
+        )
         return exp08.NewtonKrylovSettings(
-            newton_tol=self.args.newton_tol, max_newton=self.args.inproc_max_newton, gmres_rtol=1e-7,
+            newton_tol=self.args.newton_tol, max_newton=max_newton, gmres_rtol=1e-7,
             gmres_atol=0.0, gmres_restart=60, gmres_maxiter=self.args.inproc_gmres_maxiter,
-            min_alpha=1.0 / 1024.0,
+            min_alpha=min_alpha,
             preconditioner=self.args.inproc_preconditioner, compute_time_residual=True, verbose=False,
-            continuation_predictor=cont_pred, jvp_mode="aft", stall_ratio=0.8, stall_patience=4,
+            continuation_predictor=cont_pred, jvp_mode="aft",
+            stall_ratio=(
+                float(self.args.high_power_stall_ratio)
+                if high_power else float(self.args.inproc_stall_ratio)
+            ),
+            stall_patience=stall_patience,
             solve_deadline_s=self.args.inproc_solve_deadline_s,
             precond_reuse=self.args.inproc_precond_reuse,
             precond_reuse_refresh_gmres=self.args.inproc_precond_refresh_gmres,
@@ -787,6 +848,7 @@ class InProcessEngine:
         *,
         harmonics: int | None = None,
         nt: int | None = None,
+        mode_count: int | None = None,
     ):
         requested_harmonics = self.args.harmonics if harmonics is None else int(harmonics)
         requested_nt = self.args.nt if nt is None else int(nt)
@@ -794,14 +856,18 @@ class InProcessEngine:
             "engine_build_problem_start freq_ghz=%s current_a=%s policy=%s "
             "mode_count=%s harmonics=%s nt=%s",
             freq_ghz, current_a, self.args.pump_mode_policy,
-            self.args.pump_mode_count, requested_harmonics, requested_nt,
+            self.args.pump_mode_count if mode_count is None else mode_count,
+            requested_harmonics, requested_nt,
         )
         omega = 2.0 * math.pi * freq_ghz * 1e9
         basis = pump_basis.resolve_pump_basis(
             policy=("dense_real" if self.args.mixing_order == 3
                      and self.args.pump_mode_policy == "positive_odd_jc"
                      else self.args.pump_mode_policy), omega_p=omega,
-            harmonics=requested_harmonics, mode_count=self.args.pump_mode_count,
+            harmonics=requested_harmonics,
+            mode_count=(
+                self.args.pump_mode_count if mode_count is None else int(mode_count)
+            ),
             explicit_modes=None, design_meta=self.ipm08.summary,
         )
         if self.args.mixing_order == 3 and 0 not in basis.modes:
@@ -823,6 +889,53 @@ class InProcessEngine:
             freq_ghz, omega, basis.modes, problem.zeros().shape,
         )
         return problem, basis, omega
+
+    def project_to_base_pump_basis(
+        self, freq_ghz: float, X: np.ndarray | None,
+    ) -> np.ndarray | None:
+        """Return a chained state in the next point's production basis.
+
+        High-power harmonic enrichment may validate a point on a richer basis
+        than the map's base ``positive_odd_jc`` basis.  The enriched state is
+        useful for diagnostics and output, but it must be projected back before
+        it becomes ``last_good_X``: recovery routines for the next map point
+        are built on the base Schur problem.  Keeping this invariant prevents
+        a richer failed/accepted iterate from entering a lower-dimensional
+        problem and producing a misleading broadcast error.
+        """
+        if X is None:
+            return None
+        source = getattr(self, "_last_pump_basis", None)
+        if source is None or X.ndim != 2 or X.shape[0] != source.n_modes:
+            return X
+        omega = 2.0 * math.pi * float(freq_ghz) * 1e9
+        policy = (
+            "dense_real"
+            if self.args.mixing_order == 3
+            and self.args.pump_mode_policy == "positive_odd_jc"
+            else self.args.pump_mode_policy
+        )
+        destination = pump_basis.resolve_pump_basis(
+            policy=policy,
+            omega_p=omega,
+            harmonics=self.args.harmonics,
+            mode_count=self.args.pump_mode_count,
+            explicit_modes=None,
+            design_meta=self.ipm08.summary,
+        )
+        if self.args.mixing_order == 3 and 0 not in destination.modes:
+            destination = pump_basis.with_dynamic_dc(destination)
+        if source.modes == destination.modes:
+            return X
+        projected = pump_basis.promote_solution_to_basis(
+            X, source, destination
+        )
+        logger.debug(
+            "engine_project_chained_state_to_base_basis freq_ghz=%s "
+            "src_modes=%s dst_modes=%s shape=%s",
+            freq_ghz, source.modes, destination.modes, projected.shape,
+        )
+        return projected
 
     def _make_solve_problem(self, full_problem, freq_ghz: float):
         """The problem actually solved for a cell: Schur-reduced or full.
@@ -849,7 +962,8 @@ class InProcessEngine:
         cache[cache_key] = sprob.part
         while len(cache) > self._schur_cache_max:
             evicted = next(iter(cache))
-            del cache[evicted]  # evict oldest -> frees its splu
+            evicted_part = cache.pop(evicted)
+            self._release_cached_partition(evicted_part)
             logger.debug("engine_schur_cache_evict key=%s", evicted)
             gc.collect()
         logger.debug(
@@ -868,22 +982,41 @@ class InProcessEngine:
         solve_problem: Any,
         X: np.ndarray,
         reports: list[Any],
+        *,
+        retry_failed: bool = False,
     ) -> tuple[Any, pump_basis.PumpBasis, Any, np.ndarray, list[Any], dict[str, Any]]:
-        """Warm-promote a DC-inclusive 3WM pump when omitted harmonics dominate."""
+        """Warm-promote a pump when omitted harmonics dominate.
+
+        In high-power mode this method is also allowed to start from the last
+        failed Newton iterate.  A failed low-basis solve can still contain the
+        correct waveform envelope; enriching that iterate avoids throwing away
+        the information that the residual spectrum just exposed.
+        """
         info: dict[str, Any] = {
-            "enabled": bool(getattr(self.args, "adaptive_harmonics", False)),
+            "enabled": bool(
+                getattr(self.args, "adaptive_harmonics", False)
+                or getattr(self.args, "high_power_recovery", False)
+            ),
             "initial_modes": list(basis.modes),
             "final_modes": list(basis.modes),
             "promotions": [],
             "stop_reason": "disabled",
         }
-        if not info["enabled"] or self.args.mixing_order != 3:
+        if not info["enabled"]:
             return full_problem, basis, solve_problem, X, reports, info
 
         target_time_rel = float(
             getattr(self.args, "harmonic_enrichment_time_rel", 1e-4)
         )
-        max_harmonic = int(getattr(self.args, "harmonic_enrichment_max", 9))
+        max_harmonic = int(
+            getattr(
+                self.args,
+                "high_power_harmonic_max_mode",
+                getattr(self.args, "harmonic_enrichment_max", 9),
+            )
+            if getattr(self.args, "high_power_recovery", False)
+            else getattr(self.args, "harmonic_enrichment_max", 9)
+        )
         current_full = (
             solve_problem.reconstruct_full(X)
             if solve_problem is not full_problem and hasattr(solve_problem, "reconstruct_full")
@@ -893,19 +1026,33 @@ class InProcessEngine:
         info["initial_time_rel"] = norms["time_rel"]
         info["stop_reason"] = "full_residual_gate"
         solver = exp08.HarmonicNewtonKrylovSolver(self._settings())
+        last_converged = bool(reports and reports[-1].converged)
 
-        while float(norms["time_rel"] or 0.0) > target_time_rel:
+        while (
+            (retry_failed and not last_converged)
+            or float(norms["time_rel"] or 0.0) > target_time_rel
+        ):
             next_max = max(int(max(basis.modes)), 1) + 2
             if next_max > max_harmonic:
                 info["stop_reason"] = "harmonic_limit"
                 break
             previous_time_rel = float(norms["time_rel"] or 0.0)
-            next_full, next_basis, _next_omega = self._build_problem(
-                point.pump_freq_ghz,
-                injected,
-                harmonics=next_max,
-                nt=max(int(self.args.nt), 2 * next_max + 4),
-            )
+            if basis.policy == "positive_odd_jc":
+                next_count = len(basis.modes) + 1
+                next_full, next_basis, _next_omega = self._build_problem(
+                    point.pump_freq_ghz,
+                    injected,
+                    harmonics=next_max,
+                    nt=max(int(self.args.nt), 2 * next_max + 4),
+                    mode_count=next_count,
+                )
+            else:
+                next_full, next_basis, _next_omega = self._build_problem(
+                    point.pump_freq_ghz,
+                    injected,
+                    harmonics=next_max,
+                    nt=max(int(self.args.nt), 2 * next_max + 4),
+                )
             promoted = pump_basis.promote_solution_to_basis(
                 current_full, basis, next_basis
             )
@@ -918,9 +1065,6 @@ class InProcessEngine:
                 else promoted
             )
             next_X, next_report = solver.solve_one(next_solve, next_seed, 1.0)
-            if not next_report.converged:
-                info["stop_reason"] = "enrichment_newton_failed"
-                break
             next_full_X = (
                 next_solve.reconstruct_full(next_X)
                 if next_solve is not next_full
@@ -932,8 +1076,13 @@ class InProcessEngine:
                 "to_modes": list(next_basis.modes),
                 "time_rel": next_norms["time_rel"],
                 "coeff_rel": next_norms["coeff_rel"],
+                "converged": bool(next_report.converged),
             })
-            if float(next_norms["time_rel"] or 0.0) >= previous_time_rel:
+            if (
+                next_report.converged
+                and last_converged
+                and float(next_norms["time_rel"] or 0.0) >= previous_time_rel
+            ):
                 info["stop_reason"] = "no_residual_improvement"
                 break
             full_problem, basis, solve_problem, X = (
@@ -942,6 +1091,7 @@ class InProcessEngine:
             reports = [*reports, next_report]
             current_full = next_full_X
             norms = next_norms
+            last_converged = bool(next_report.converged)
             info["final_modes"] = list(basis.modes)
 
         info["final_time_rel"] = norms["time_rel"]
@@ -1177,7 +1327,12 @@ class InProcessEngine:
             "promotions": [],
             "stop_reason": "not_requested",
         }
-        if converged and self.args.mixing_order == 3:
+        high_power_harmonic_retry = bool(
+            getattr(a, "high_power_recovery", False)
+            and X is not None
+            and np.all(np.isfinite(X))
+        )
+        if (converged and (self.args.mixing_order == 3 or high_power_harmonic_retry)) or high_power_harmonic_retry:
             (
                 full_problem,
                 basis,
@@ -1186,12 +1341,134 @@ class InProcessEngine:
                 reports,
                 harmonic_info,
             ) = self._adaptive_harmonic_enrichment(
-                point, injected, full_problem, basis, solve_problem, X, reports
+                point,
+                injected,
+                full_problem,
+                basis,
+                solve_problem,
+                X,
+                reports,
+                retry_failed=high_power_harmonic_retry and not converged,
             )
             converged = bool(
                 reports and reports[-1].converged
                 and abs(reports[-1].source_scale - 1.0) < 1e-12
             )
+        # A failed low-basis Newton solve can still carry a useful waveform
+        # envelope.  In high-power mode the enrichment above promotes that
+        # iterate to the basis required by the full residual.  Give PTC one
+        # chance on this *same enriched problem* before the outer column
+        # recovery ladder falls back to the previous accepted state.  The
+        # earlier ladder-level PTC cannot do this because it deliberately
+        # operates on the last accepted (base-basis) state.
+        enriched_ptc_info: dict[str, Any] = {
+            "attempted": False,
+            "converged": False,
+            "iterations": 0,
+            "terminal_reason": None,
+            "runtime_s": 0.0,
+            "delta0_attempts": [],
+        }
+        if (
+            getattr(a, "high_power_recovery", False)
+            and not converged
+            and np.all(np.isfinite(X))
+            and bool(harmonic_info.get("promotions"))
+        ):
+            enriched_ptc_info["attempted"] = True
+            ptc_t0 = time.perf_counter()
+            ptc_settings = dataclasses.replace(
+                self._settings(),
+                stall_patience=0,
+                solve_deadline_s=float(
+                    getattr(a, "column_recovery_ptc_deadline_s", 90.0)
+                ),
+            )
+            try:
+                # A unit pseudo-timestep is not uniformly safe near a fold.
+                # Try progressively less aggressive shifts from the same best
+                # iterate, under one shared wall-clock budget.  This is a
+                # bounded portfolio, not an unbounded iteration increase.
+                delta0s = (1e-3, 1e-2, 1e-1, 1.0)
+                best_X = np.array(X, copy=True)
+                best_norm = float(
+                    solve_problem.norms(best_X, 1.0, False)["coeff_rel"]
+                )
+                ptc_reports_all: list[Any] = []
+                ptc_deadline = float(
+                    getattr(a, "column_recovery_ptc_deadline_s", 90.0)
+                )
+                ptc_max_iter = int(
+                    getattr(a, "column_recovery_ptc_max_iter", 128)
+                )
+                for delta0 in delta0s:
+                    elapsed = time.perf_counter() - ptc_t0
+                    remaining = ptc_deadline - elapsed
+                    if remaining <= 0.0:
+                        break
+                    ptc_solver = exp08.HarmonicNewtonKrylovSolver(
+                        dataclasses.replace(
+                            ptc_settings, solve_deadline_s=remaining
+                        )
+                    )
+                    X_ptc, ptc_reports = ptc_solver.solve_pseudo_transient(
+                        solve_problem,
+                        best_X,
+                        delta0=delta0,
+                        max_iter=ptc_max_iter,
+                    )
+                    ptc_reports_all.extend(ptc_reports)
+                    trial_norm = float(
+                        solve_problem.norms(X_ptc, 1.0, False)["coeff_rel"]
+                    )
+                    enriched_ptc_info["delta0_attempts"].append({
+                        "delta0": delta0,
+                        "coeff_rel": trial_norm,
+                        "converged": bool(
+                            ptc_reports
+                            and ptc_reports[-1].converged
+                            and abs(ptc_reports[-1].source_scale - 1.0) < 1e-12
+                        ),
+                    })
+                    if trial_norm < best_norm:
+                        best_X = np.array(X_ptc, copy=True)
+                        best_norm = trial_norm
+                    if (
+                        ptc_reports
+                        and ptc_reports[-1].converged
+                        and abs(ptc_reports[-1].source_scale - 1.0) < 1e-12
+                    ):
+                        X = X_ptc
+                        converged = True
+                        enriched_ptc_info["terminal_reason"] = None
+                        enriched_ptc_info["iterations"] = int(
+                            ptc_reports[-1].newton_iterations
+                        )
+                        break
+                else:
+                    X = best_X
+                if not converged:
+                    X = best_X
+                    reports = [*reports, *ptc_reports_all]
+                    enriched_ptc_info["iterations"] = int(
+                        ptc_reports_all[-1].newton_iterations
+                        if ptc_reports_all else 0
+                    )
+                    enriched_ptc_info["terminal_reason"] = (
+                        ptc_reports_all[-1].failure_reason
+                        if ptc_reports_all else "ptc portfolio exhausted"
+                    )
+                else:
+                    reports = [*reports, *ptc_reports]
+                enriched_ptc_info["converged"] = converged
+            except (FloatingPointError, RuntimeError, ValueError, OverflowError) as exc:
+                enriched_ptc_info["terminal_reason"] = repr(exc)
+                logger.debug(
+                    "engine_enriched_ptc_failed point=%s", point.index,
+                    exc_info=True,
+                )
+            enriched_ptc_info["runtime_s"] = time.perf_counter() - ptc_t0
+            harmonic_info["enriched_ptc"] = enriched_ptc_info
         logger.debug(
             "engine_solve_point_pump_complete point=%s converged=%s reports=%d "
             "last_coeff_rel=%s solve_wall_s=%.6f",
@@ -1208,10 +1485,19 @@ class InProcessEngine:
         three_wm = int(getattr(a, "mixing_order", 0)) == 3
         if hasattr(full_problem, "norms"):
             full_time_rel = full_problem.norms(X_full, 1.0, True)["time_rel"]
-            if three_wm:
+            configured_gate = getattr(a, "pump_full_residual_gate", None)
+            high_power_gate = (
+                1e-7 if getattr(a, "high_power_recovery", False) else None
+            )
+            if configured_gate is not None:
+                full_gate = float(configured_gate)
+            elif high_power_gate is not None:
+                full_gate = high_power_gate
+            elif three_wm:
                 full_gate = float(
                     getattr(a, "harmonic_enrichment_time_rel", 1e-4)
                 )
+            if full_gate is not None:
                 full_gate_passed = bool(
                     full_time_rel is not None
                     and np.isfinite(float(full_time_rel))
@@ -1233,6 +1519,17 @@ class InProcessEngine:
         )
         actual_grid = getattr(full_problem, "grid", None)
         actual_nt = int(getattr(actual_grid, "nt", getattr(a, "nt", 0)))
+        spectrum_info: dict[str, Any] = {}
+        if (
+            getattr(a, "pump_record_residual_spectrum", False)
+            or getattr(a, "high_power_recovery", False)
+        ) and np.all(np.isfinite(X_full)):
+            try:
+                spectrum_info = residual_spectrum_summary(
+                    full_problem, X_full, 1.0
+                )
+            except (FloatingPointError, ValueError, OverflowError) as exc:
+                spectrum_info = {"error": repr(exc)}
 
         metadata = {
             **basis.to_metadata(),
@@ -1255,6 +1552,15 @@ class InProcessEngine:
             ),
             "production_hb_full_residual_gate": full_gate,
             "production_hb_full_residual_passed": bool(full_gate_passed),
+            "pump_full_residual_gate_source": (
+                "explicit" if getattr(a, "pump_full_residual_gate", None) is not None
+                else "high_power_default"
+                if getattr(a, "high_power_recovery", False)
+                else "3wm_harmonic_gate"
+                if three_wm
+                else "disabled"
+            ),
+            "pump_residual_spectrum": spectrum_info,
             "pump_validation_status": (
                 "VALID_CONVERGED" if pump_valid
                 else "FAIL_FULL_HARMONIC_RESIDUAL"
@@ -1262,6 +1568,10 @@ class InProcessEngine:
                 else "FAIL"
             ),
             "pump_current_ratio_ic_median": injected / self.ic_median,
+            "pump_model_switching": "not_modelled_ideal_sine_junction",
+            "high_power_recovery": bool(
+                getattr(a, "high_power_recovery", False)
+            ),
             "pump_backend": a.inproc_pump_backend,
             # Production checkpoints are validation inputs.  Preserve enough
             # precision for the HB/TD handoff and independent residual checks.
@@ -1300,6 +1610,19 @@ class InProcessEngine:
             "pump_newton_total": int(sum(r.newton_iterations for r in reports)),
             "pump_gmres_total": int(sum(r.gmres_iterations_total for r in reports)),
             "pump_branch_current_max": finite_or_none(summary.get("branch_i_max_abs")),
+            "pump_branch_current_max_over_ic": finite_or_none(
+                summary.get("branch_current_max_over_ic")
+            ),
+            "pump_strongest_branch_index": summary.get("strongest_branch_index"),
+            "pump_branch_min_cos_phase": finite_or_none(
+                summary.get("branch_min_cos_phase")
+            ),
+            "pump_residual_max_omitted_mode_rel": finite_or_none(
+                spectrum_info.get("max_omitted_mode_rel")
+            ),
+            "pump_dominant_omitted_modes": spectrum_info.get(
+                "dominant_omitted_modes"
+            ),
             "pump_failure_reason": validation_failure,
             "pump_continuation_method": continuation_info["method"],
             "pump_continuation_steps": continuation_info["steps"],
@@ -1545,6 +1868,66 @@ class InProcessEngine:
         info["mu_final"] = mu_final
         if info.get("reached_target"):
             return X_final, info
+        return None, info
+
+    def solve_pseudo_transient_recovery(
+        self,
+        freq_ghz: float,
+        current_a: float,
+        from_X: np.ndarray,
+        *,
+        deadline_s: float = 90.0,
+        max_iter: int = 128,
+    ) -> tuple[np.ndarray | None, dict[str, Any]]:
+        """Use pseudo-transient continuation as a bounded branch bridge.
+
+        This is a numerical recovery method for a fixed-frequency target.  It
+        integrates the algebraically regularised HB residual and then validates
+        the returned state through the ordinary target solve.  It is intentionally
+        not used as evidence of a physical boundary or as the default map path.
+        """
+        info: dict[str, Any] = {
+            "reached_target": False,
+            "terminal_reason": "",
+            "iterations": 0,
+            "runtime_s": 0.0,
+        }
+        if from_X is None:
+            info["terminal_reason"] = "no_seed"
+            return None, info
+        started = time.perf_counter()
+        full_problem, _basis, _omega = self._build_problem(freq_ghz, current_a)
+        solve_problem = self._make_solve_problem(full_problem, freq_ghz)
+        settings = dataclasses.replace(
+            self._settings(),
+            stall_patience=0,
+            solve_deadline_s=float(deadline_s),
+        )
+        solver = exp08.HarmonicNewtonKrylovSolver(settings)
+        try:
+            X, reports = solver.solve_pseudo_transient(
+                solve_problem,
+                from_X,
+                delta0=1.0,
+                max_iter=int(max_iter),
+            )
+        except (FloatingPointError, RuntimeError, ValueError, OverflowError) as exc:
+            info["terminal_reason"] = "exception"
+            info["error"] = repr(exc)
+            info["runtime_s"] = time.perf_counter() - started
+            return None, info
+        info["iterations"] = int(sum(r.newton_iterations for r in reports))
+        info["last_coeff_rel"] = (
+            float(reports[-1].coeff_rel) if reports else None
+        )
+        info["terminal_reason"] = (
+            "reached" if reports and reports[-1].converged else
+            reports[-1].failure_reason if reports else "no_report"
+        )
+        info["runtime_s"] = time.perf_counter() - started
+        if reports and reports[-1].converged:
+            info["reached_target"] = True
+            return X, info
         return None, info
 
     def solve_frequency_substep(
@@ -1821,6 +2204,9 @@ def run_cold_pass_inprocess(
         print(f"[cold {point.index + 1}/{total}] P={point.power_dbm:.4g} dBm "
               f"fp={point.pump_freq_ghz:.4g} GHz status={row['status']} "
               f"gain={row.get('gain_db')} pump_s={row.get('pump_runtime_s'):.3f}", flush=True)
+    clear_cache = getattr(engine, "clear_schur_cache", None)
+    if callable(clear_cache):
+        clear_cache()
     logger.debug("run_cold_pass_inprocess_complete n_rows=%d", len(rows))
     return rows
 
@@ -1851,6 +2237,86 @@ def secant_guess(
         cur_prevprev, cur_prev, cur, beta, guess.shape,
     )
     return guess
+
+
+_COLUMN_TIER4_ANCHOR_OFFSETS_GHZ = (0.005, -0.005, 0.01, -0.01, 0.02, -0.02)
+
+
+def _merge_column_recovery_result(
+    failed_row: dict[str, Any],
+    recovered_row: dict[str, Any],
+    telemetry: dict[str, Any],
+    route: str,
+) -> dict[str, Any]:
+    """Keep failed-attempt telemetry while replacing it with a valid result."""
+    merged = {
+        **recovered_row,
+        **{key: value for key, value in failed_row.items() if key not in recovered_row},
+    }
+    merged.update(telemetry)
+    merged["column_recovery_route"] = route
+    return merged
+
+
+def _column_frequency_detour_guess(
+    engine: InProcessEngine,
+    point: GridPoint,
+    last_good_X: np.ndarray,
+    target_current: float,
+    *,
+    anchor_deadline_s: float,
+    substep_deadline_s: float,
+    min_step_ghz: float,
+) -> tuple[np.ndarray | None, dict[str, Any]]:
+    """Find a same-power nearby-frequency anchor and return a target guess."""
+    solver = exp08.HarmonicNewtonKrylovSolver(engine._settings())
+    started = time.perf_counter()
+    anchor: tuple[float, np.ndarray] | None = None
+    anchor_attempts: list[dict[str, Any]] = []
+    for offset in _COLUMN_TIER4_ANCHOR_OFFSETS_GHZ:
+        if time.perf_counter() - started > anchor_deadline_s:
+            break
+        anchor_freq = point.pump_freq_ghz + offset
+        problem, _basis, _omega = engine._build_problem(anchor_freq, target_current)
+        solve_problem = engine._make_solve_problem(problem, anchor_freq)
+        try:
+            candidate, report = solver.solve_one(solve_problem, last_good_X, 1.0)
+        except (FloatingPointError, RuntimeError, ValueError, OverflowError) as exc:
+            anchor_attempts.append({"offset_ghz": offset, "error": str(exc)})
+            continue
+        anchor_attempts.append(
+            {"offset_ghz": offset, "converged": bool(report.converged)}
+        )
+        if report.converged:
+            anchor = (anchor_freq, candidate)
+            break
+
+    telemetry: dict[str, Any] = {
+        "tier4_anchor_found": anchor is not None,
+        "tier4_anchor_attempts": anchor_attempts,
+        "tier4_anchor_runtime_s": time.perf_counter() - started,
+    }
+    if anchor is None:
+        return None, telemetry
+
+    anchor_freq, anchor_X = anchor
+    guess, info = engine.solve_frequency_substep(
+        anchor_freq,
+        point.pump_freq_ghz,
+        target_current,
+        anchor_X,
+        min_step_ghz=min_step_ghz,
+        deadline_s=substep_deadline_s,
+    )
+    telemetry.update(
+        {
+            "tier4_anchor_freq_ghz": anchor_freq,
+            "tier4_substeps": info.get("substeps"),
+            "tier4_terminal_reason": info.get("terminal_reason"),
+            "tier4_substep_runtime_s": info.get("runtime_s"),
+        }
+    )
+    return guess, telemetry
 
 
 SKIP_PAST_FOLD = "SKIP_PAST_FOLD"
@@ -1935,11 +2401,16 @@ def run_warm_pass_inprocess(
     total = len(points)
     done = 0
     predictor = getattr(engine.args, "inproc_fold_predictor", "none")
+    recovery_ladder = bool(getattr(engine.args, "column_recovery_ladder", False))
+    exhaustive_high_power = bool(
+        getattr(engine.args, "high_power_recovery", False)
+    )
     logger.debug(
         "run_warm_pass_inprocess_start n_points=%d columns=%d predictor=%s "
-        "fail_fast=%s patience=%d",
+        "fail_fast=%s patience=%d recovery_ladder=%s",
         len(points), len(by_col), predictor, fail_fast,
         int(getattr(engine.args, "fold_skip_patience", 0)),
+        recovery_ladder,
     )
     scale = engine.args.pump_current_jc_scale
     patience = int(getattr(engine.args, "fold_skip_patience", 0))
@@ -1958,14 +2429,15 @@ def run_warm_pass_inprocess(
         prevprev_X: np.ndarray | None = None
         prevprev_cur: float | None = None
         arclength_guesses: dict[int, list[np.ndarray]] = {}
+        candidate_boundary_dbm: float | None = None
         verified_fold = False
         consec_fail = 0  # consecutive non-converged points at increasing power
         if initial_seed and column:
             seed_path = Path(initial_seed)
             try:
-                loaded_X, _ = pump_basis.load_pump_basis_from_solution(seed_path)
-                prev_X = loaded_X
-                last_good_X = loaded_X
+                loaded_X, loaded_basis = pump_basis.load_pump_basis_from_solution(
+                    seed_path
+                )
                 seed_power = getattr(engine.args, "initial_pump_power_dbm", None)
                 if seed_power is None:
                     raise ValueError(
@@ -1980,9 +2452,51 @@ def run_warm_pass_inprocess(
                     z0_ohm=engine.args.z0_ohm,
                     convention=engine.args.power_convention,
                 ) * scale
+                seed_full, seed_basis, _seed_omega = engine._build_problem(
+                    column[0].pump_freq_ghz, last_good_cur
+                )
+                if loaded_basis.modes != seed_basis.modes:
+                    raise ValueError(
+                        "pump mode metadata does not match the current production basis: "
+                        f"checkpoint={loaded_basis.modes} current={seed_basis.modes}"
+                    )
+                seed_problem = engine._make_solve_problem(
+                    seed_full, column[0].pump_freq_ghz
+                )
+                expected_shape = seed_problem.zeros().shape
+                if loaded_X.shape == expected_shape:
+                    seed_state = loaded_X
+                elif (
+                    hasattr(seed_problem, "part")
+                    and loaded_X.shape == (seed_full.H, seed_full.n)
+                ):
+                    seed_state = restrict(loaded_X, seed_problem.part)
+                else:
+                    raise ValueError(
+                        "checkpoint state shape does not match the current full or "
+                        f"Schur pump problem: checkpoint={loaded_X.shape} "
+                        f"full={(seed_full.H, seed_full.n)} reduced={expected_shape}"
+                    )
+                seed_full_state = (
+                    seed_problem.reconstruct_full(seed_state)
+                    if hasattr(seed_problem, "reconstruct_full")
+                    else seed_state
+                )
+                seed_norms = seed_full.norms(seed_full_state, 1.0, True)
+                if (
+                    not np.isfinite(float(seed_norms["coeff_rel"]))
+                    or float(seed_norms["coeff_rel"]) > 1e-8
+                ):
+                    raise ValueError(
+                        "checkpoint fails the current production residual gate: "
+                        f"coeff_rel={seed_norms['coeff_rel']!r}"
+                    )
+                prev_X = seed_state
+                last_good_X = seed_state
                 print(
                     f"[warm] fp={column[0].pump_freq_ghz:.6g} GHz "
-                    f"initial seed={seed_path}",
+                    f"initial seed={seed_path} validated "
+                    f"coeff_rel={float(seed_norms['coeff_rel']):.3e}",
                     flush=True,
                 )
             except (FileNotFoundError, KeyError, ValueError) as exc:
@@ -2083,7 +2597,12 @@ def run_warm_pass_inprocess(
                 pred_tag = "secant_fallback"
 
             retried = False
-            if row["status"] != "PASS" and mode == "warm" and not fail_fast:
+            if (
+                row["status"] != "PASS"
+                and mode == "warm"
+                and not fail_fast
+                and not recovery_ladder
+            ):
                 logger.debug("warm_point_reseed_retry index=%d", point.index)
                 row, X = engine.solve_point(point, pass_dir, mode="seed", warm_X=None)
                 retried = row["status"] == "PASS"
@@ -2096,6 +2615,201 @@ def run_warm_pass_inprocess(
                 # this (same mechanism as the arclength recovery leak).
                 gc.collect()
 
+            if recovery_ladder and row["status"] != "PASS":
+                recovery_started = time.perf_counter()
+                # A failed Newton solve is never a physical boundary.  The
+                # ordinary recovery ladder keeps its historical bounded
+                # connected-branch diagnostic, while the explicit high-power
+                # mode exhausts every configured recovery tier at every point.
+                past_boundary = (
+                    not exhaustive_high_power
+                    and candidate_boundary_dbm is not None
+                    and point.power_dbm >= candidate_boundary_dbm
+                )
+                recovered = False
+                logger.info(
+                    "column_recovery_start index=%d power_dbm=%s last_good=%s "
+                    "past_boundary=%s",
+                    point.index, point.power_dbm, last_good_cur, past_boundary,
+                )
+
+                # Tier 2: adaptive fixed-frequency power continuation. This is
+                # deliberately attempted even above a previous failed target:
+                # it is the cheap diagnostic that distinguishes a missed branch
+                # from a branch that remains inaccessible at this frequency.
+                if last_good_X is not None and last_good_cur is not None and cur > last_good_cur:
+                    X_sub, sub_info = engine.solve_power_substep(
+                        point.pump_freq_ghz, last_good_X, last_good_cur, cur,
+                        init_db=engine.args.column_power_substep_init_db,
+                        min_db=engine.args.column_power_substep_min_db,
+                        deadline_s=engine.args.column_power_substep_deadline_s,
+                    )
+                    row["tier2_substeps"] = sub_info.get("substeps")
+                    row["tier2_terminal_reason"] = sub_info.get("terminal_reason")
+                    row["tier2_last_current"] = sub_info.get("last_current")
+                    logger.info(
+                        "column_recovery_tier2 index=%d substeps=%s reason=%s "
+                        "reached=%s",
+                        point.index, sub_info.get("substeps"),
+                        sub_info.get("terminal_reason"),
+                        sub_info.get("reached_target"),
+                    )
+                    if X_sub is not None:
+                        sub_row, sub_X = engine.solve_point(
+                            point, pass_dir, mode="warm", warm_X=X_sub
+                        )
+                        if sub_row["status"] == "PASS":
+                            row = _merge_column_recovery_result(
+                                row, sub_row,
+                                {"tier2_recovered": True},
+                                "POWER_SUBSTEP",
+                            )
+                            X = sub_X
+                            pred_tag = f"{pred_tag}->power_substep"
+                            recovered = True
+
+                # Tier 3: local pseudo-arclength continuation on the same
+                # frequency. Do not spend this budget after a previously
+                # confirmed connected-branch boundary.
+                if (
+                    not recovered
+                    and not past_boundary
+                    and last_good_X is not None
+                    and last_good_cur is not None
+                    and cur > last_good_cur
+                ):
+                    arc_X, arc_info = engine.solve_arclength_forward(
+                        point.pump_freq_ghz,
+                        last_good_X,
+                        last_good_cur,
+                        cur,
+                        ds=engine.args.column_recovery_tier3_ds,
+                        max_steps=engine.args.column_recovery_tier3_max_steps,
+                        deadline_s=engine.args.column_recovery_tier3_deadline_s,
+                    )
+                    row["tier3_steps"] = arc_info.get("steps")
+                    row["tier3_trace_points"] = arc_info.get("trace_points")
+                    row["tier3_fold_lambdas"] = arc_info.get("fold_lambdas")
+                    row["tier3_terminal_reason"] = arc_info.get("terminal_reason")
+                    logger.info(
+                        "column_recovery_tier3 index=%d steps=%s reason=%s "
+                        "reached=%s",
+                        point.index, arc_info.get("steps"),
+                        arc_info.get("terminal_reason"),
+                        arc_info.get("reached_target"),
+                    )
+                    if arc_X is not None:
+                        arc_row, arc_state = engine.solve_point(
+                            point, pass_dir, mode="warm", warm_X=arc_X
+                        )
+                        if arc_row["status"] == "PASS":
+                            row = _merge_column_recovery_result(
+                                row, arc_row,
+                                {"tier3_recovered": True},
+                                "ARCLENGTH_RECOVERY",
+                            )
+                            X = arc_state
+                            pred_tag = f"{pred_tag}->arclength"
+                            recovered = True
+
+                # Tier 3b: pseudo-transient continuation regularises the local
+                # HB root solve without adding physical damping.  It is useful
+                # when a valid target root exists but Newton's basin is too
+                # narrow for either natural continuation or PALC.
+                if (
+                    not recovered
+                    and not past_boundary
+                    and last_good_X is not None
+                    and last_good_cur is not None
+                    and cur > last_good_cur
+                    and exhaustive_high_power
+                ):
+                    ptc_X, ptc_info = engine.solve_pseudo_transient_recovery(
+                        point.pump_freq_ghz,
+                        cur,
+                        last_good_X,
+                        deadline_s=engine.args.column_recovery_ptc_deadline_s,
+                        max_iter=engine.args.column_recovery_ptc_max_iter,
+                    )
+                    row["tier3b_recovered"] = False
+                    row["tier3b_iterations"] = ptc_info.get("iterations")
+                    row["tier3b_terminal_reason"] = ptc_info.get("terminal_reason")
+                    row["tier3b_runtime_s"] = ptc_info.get("runtime_s")
+                    logger.info(
+                        "column_recovery_tier3b index=%d iterations=%s reason=%s "
+                        "reached=%s",
+                        point.index, ptc_info.get("iterations"),
+                        ptc_info.get("terminal_reason"),
+                        ptc_info.get("reached_target"),
+                    )
+                    if ptc_X is not None:
+                        ptc_row, ptc_state = engine.solve_point(
+                            point, pass_dir, mode="warm", warm_X=ptc_X
+                        )
+                        if ptc_row["status"] == "PASS":
+                            row = _merge_column_recovery_result(
+                                row,
+                                ptc_row,
+                                {"tier3b_recovered": True},
+                                "PSEUDO_TRANSIENT_RECOVERY",
+                            )
+                            X = ptc_state
+                            pred_tag = f"{pred_tag}->ptc"
+                            recovered = True
+
+                # Tier 4: solve at a nearby frequency at the same target power,
+                # then walk back in frequency. This is useful when the target
+                # column intersects a narrow continuation obstruction.
+                if (
+                    not recovered
+                    and not past_boundary
+                    and last_good_X is not None
+                    and last_good_cur is not None
+                    and cur > last_good_cur
+                ):
+                    detour_X, detour_info = _column_frequency_detour_guess(
+                        engine,
+                        point,
+                        last_good_X,
+                        cur,
+                        anchor_deadline_s=engine.args.column_recovery_tier4_anchor_deadline_s,
+                        substep_deadline_s=engine.args.column_recovery_tier4_substep_deadline_s,
+                        min_step_ghz=engine.args.column_recovery_tier4_min_step_ghz,
+                    )
+                    row.update(detour_info)
+                    logger.info(
+                        "column_recovery_tier4 index=%d anchor=%s reason=%s",
+                        point.index, detour_info.get("tier4_anchor_found"),
+                        detour_info.get("tier4_terminal_reason"),
+                    )
+                    if detour_X is not None:
+                        detour_row, detour_state = engine.solve_point(
+                            point, pass_dir, mode="warm", warm_X=detour_X
+                        )
+                        if detour_row["status"] == "PASS":
+                            row = _merge_column_recovery_result(
+                                row, detour_row,
+                                {"tier4_recovered": True},
+                                "FREQUENCY_RECOVERY",
+                            )
+                            X = detour_state
+                            pred_tag = f"{pred_tag}->frequency_detour"
+                            recovered = True
+
+                row["column_recovery_wall_s"] = time.perf_counter() - recovery_started
+                if not recovered:
+                    if past_boundary and not exhaustive_high_power:
+                        row["column_recovery_route"] = "PAST_CONNECTED_BRANCH_BOUNDARY"
+                    else:
+                        row["column_recovery_route"] = "FAILED_NUMERICAL"
+                        if not exhaustive_high_power:
+                            candidate_boundary_dbm = point.power_dbm
+                logger.info(
+                    "column_recovery_end index=%d route=%s recovered=%s wall_s=%.3f",
+                    point.index, row.get("column_recovery_route"), recovered,
+                    row["column_recovery_wall_s"],
+                )
+
             # Adaptive power-substep recovery: the coarse power step can miss a
             # gain-lobe crest that a finer natural continuation crosses (see
             # diagnostics/2c_measurement_comparison). Walk from the last
@@ -2106,6 +2820,7 @@ def run_warm_pass_inprocess(
             if (
                 row["status"] != "PASS"
                 and getattr(engine.args, "column_power_substep", False)
+                and not recovery_ladder
                 and not fail_fast
                 and last_good_X is not None
                 and last_good_cur is not None
@@ -2132,6 +2847,11 @@ def run_warm_pass_inprocess(
                     row["pump_power_substep_stall_dbm"] = point.power_dbm
                     verified_fold = True
 
+            if recovery_ladder and row["status"] == "PASS":
+                row.setdefault(
+                    "column_recovery_route",
+                    "ARCLENGTH_RECOVERY" if "arclength" in pred_tag else "DIRECT",
+                )
             row["warm_retry_reseed"] = retried
             row["pump_predictor"] = pred_tag
             verified_fold = verified_fold or continuation_failure_is_fold_evidence(row)
@@ -2150,9 +2870,20 @@ def run_warm_pass_inprocess(
                   f"newton={row.get('pump_newton_total')} "
                   f"pump_s={row.get('pump_runtime_s'):.3f}", flush=True)
             if row["status"] == "PASS":
+                # A validated high-power point may have been solved after
+                # harmonic enrichment.  The next map point is assembled on
+                # the base basis, so project the chained state explicitly
+                # before storing it as a warm start.
+                chained_X = (
+                    engine.project_to_base_pump_basis(
+                        point.pump_freq_ghz, X
+                    )
+                    if hasattr(engine, "project_to_base_pump_basis")
+                    else X
+                )
                 prevprev_X, prevprev_cur = last_good_X, last_good_cur
-                last_good_X, last_good_cur = X, cur
-                prev_X = X
+                last_good_X, last_good_cur = chained_X, cur
+                prev_X = chained_X
                 consec_fail = 0
             else:
                 prev_X = None  # non-fail-fast path re-seeds next point
@@ -2164,6 +2895,7 @@ def run_warm_pass_inprocess(
             # every remaining higher-power cell past-fold without solving.
             if (
                 patience > 0
+                and not recovery_ladder
                 and verified_fold
                 and consec_fail >= patience
                 and idx + 1 < len(column)
@@ -2177,6 +2909,12 @@ def run_warm_pass_inprocess(
                       f"fold short-circuit: skipped {len(skipped)} past-fold "
                       f"cells above P={point.power_dbm:.4g} dBm", flush=True)
                 break
+        # Each frequency column has an independent pump basis.  The chained
+        # state is stored as a small retained coefficient array, so cached
+        # partitions and their native factors are no longer needed here.
+        clear_cache = getattr(engine, "clear_schur_cache", None)
+        if callable(clear_cache):
+            clear_cache()
     rows.sort(key=lambda r: r["point_index"])
     logger.debug("run_warm_pass_inprocess_complete n_rows=%d", len(rows))
     return rows
@@ -2640,6 +3378,9 @@ def run_map_traversal(
                     skip.add((ii, j))
 
     rows.sort(key=lambda r: r["point_index"])
+    clear_cache = getattr(engine, "clear_schur_cache", None)
+    if callable(clear_cache):
+        clear_cache()
     return rows
 
 
@@ -2770,9 +3511,22 @@ def write_points_csv(path: Path, rows: list[dict[str, Any]]) -> None:
         "pump_preconditioner_assembly_runtime_s",
         "pump_preconditioner_numeric_factor_runtime_s", "pump_newton_total",
         "pump_gmres_total", "pump_coeff_rel", "pump_time_rel", "pump_branch_current_max",
+        "pump_branch_current_max_over_ic", "pump_strongest_branch_index",
+        "pump_branch_min_cos_phase", "pump_residual_max_omitted_mode_rel",
+        "pump_dominant_omitted_modes",
         "pump_continuation_method", "pump_continuation_steps",
         "pump_continuation_reached_target", "pump_continuation_fold_lambda",
         "pump_continuation_runtime_s",
+        "column_recovery_route", "column_recovery_wall_s",
+        "tier2_recovered", "tier2_substeps", "tier2_terminal_reason",
+        "tier2_last_current",
+        "tier3_recovered", "tier3_steps", "tier3_trace_points",
+        "tier3_fold_lambdas", "tier3_terminal_reason",
+        "tier3b_recovered", "tier3b_iterations", "tier3b_terminal_reason",
+        "tier3b_runtime_s",
+        "tier4_recovered", "tier4_anchor_found", "tier4_anchor_freq_ghz",
+        "tier4_anchor_attempts", "tier4_anchor_runtime_s", "tier4_substeps",
+        "tier4_terminal_reason", "tier4_substep_runtime_s",
         "pump_column_arclength_fold_lambda",
         "pump_column_arclength_terminal_reason",
         "pump_arclength_fold_current_a",
@@ -2909,6 +3663,24 @@ def write_summary(
         "signal_attenuation_db": args.signal_attenuation_db,
         "signal_attenuation_model": (
             "flat" if args.signal_attenuation_db is not None else "loss_B1 c + a*sqrt(f) + b*f"
+        ),
+        "column_recovery_ladder": bool(getattr(args, "column_recovery_ladder", False)),
+        "column_recovery_tier3_ds": getattr(args, "column_recovery_tier3_ds", None),
+        "column_recovery_tier3_max_steps": getattr(args, "column_recovery_tier3_max_steps", None),
+        "column_recovery_tier3_deadline_s": getattr(args, "column_recovery_tier3_deadline_s", None),
+        "column_recovery_tier4_anchor_deadline_s": getattr(args, "column_recovery_tier4_anchor_deadline_s", None),
+        "column_recovery_tier4_substep_deadline_s": getattr(args, "column_recovery_tier4_substep_deadline_s", None),
+        "column_recovery_tier4_min_step_ghz": getattr(args, "column_recovery_tier4_min_step_ghz", None),
+        "column_recovery_ptc_deadline_s": getattr(args, "column_recovery_ptc_deadline_s", None),
+        "column_recovery_ptc_max_iter": getattr(args, "column_recovery_ptc_max_iter", None),
+        "high_power_recovery": bool(getattr(args, "high_power_recovery", False)),
+        "high_power_max_newton": getattr(args, "high_power_max_newton", None),
+        "high_power_harmonic_max_mode": getattr(args, "high_power_harmonic_max_mode", None),
+        "high_power_min_alpha": getattr(args, "high_power_min_alpha", None),
+        "high_power_stall_patience": getattr(args, "high_power_stall_patience", None),
+        "pump_full_residual_gate": getattr(args, "pump_full_residual_gate", None),
+        "pump_record_residual_spectrum": bool(
+            getattr(args, "pump_record_residual_spectrum", False)
         ),
         "dc_current_a": args.dc_current_a,
         "dc_solution": str(args.dc_solution) if args.dc_solution is not None else None,
@@ -3050,6 +3822,70 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                    help="Max Newton iterations per in-process solve. A small cap (e.g. 10) "
                    "makes over-fold points fail fast; warm-start neighbours converge in few.")
     p.add_argument(
+        "--inproc-stall-patience",
+        type=int,
+        default=4,
+        help="Accepted Newton steps with weak contraction before a solve is marked stalled. "
+        "Use 0 only for an explicitly bounded high-power diagnostic campaign.",
+    )
+    p.add_argument(
+        "--inproc-stall-ratio",
+        type=float,
+        default=0.8,
+        help="Residual reduction ratio above which a Newton step counts as stalled.",
+    )
+    p.add_argument(
+        "--inproc-min-alpha",
+        type=float,
+        default=1.0 / 1024.0,
+        help="Smallest ordinary Newton line-search factor before failure.",
+    )
+    p.add_argument(
+        "--high-power-recovery",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "Run the exhaustive high-power recovery path. This enables the bounded "
+            "column ladder, disables its solver-stall shortcut, attempts pseudo-transient "
+            "recovery, and records full residual/Ic diagnostics. It does not change "
+            "the circuit, attenuation model, or declare a failed solve physical."
+        ),
+    )
+    p.add_argument(
+        "--high-power-max-newton",
+        type=int,
+        default=32,
+        help="Newton cap used by --high-power-recovery after explicit recovery steps.",
+    )
+    p.add_argument(
+        "--high-power-stall-patience",
+        type=int,
+        default=0,
+        help="Stall patience for --high-power-recovery; 0 disables the early stall exit.",
+    )
+    p.add_argument(
+        "--high-power-stall-ratio",
+        type=float,
+        default=0.95,
+        help="Stall ratio used by --high-power-recovery when stall detection is enabled.",
+    )
+    p.add_argument(
+        "--high-power-min-alpha",
+        type=float,
+        default=1.0 / 65536.0,
+        help="Minimum Newton line-search factor used by --high-power-recovery.",
+    )
+    p.add_argument(
+        "--high-power-harmonic-max-mode",
+        type=int,
+        default=35,
+        help=(
+            "Largest odd pump mode used by high-power harmonic enrichment. "
+            "The basis is promoted one odd mode at a time from the failed or "
+            "converged state; no mode is accepted without the full residual gate."
+        ),
+    )
+    p.add_argument(
         "--inproc-fallback-fixed-steps",
         type=int,
         default=20,
@@ -3139,6 +3975,80 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=120.0,
         help="Per-target wall-time budget for the --column-power-substep walk.",
     )
+    p.add_argument(
+        "--column-recovery-ladder",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "Enable the bounded high-power column recovery ladder: direct Newton, "
+            "adaptive power substeps, local pseudo-arclength, then a nearby-frequency "
+            "detour. The normal column map remains unchanged unless this is enabled."
+        ),
+    )
+    p.add_argument(
+        "--column-recovery-tier3-ds",
+        type=float,
+        default=0.01,
+        help="Initial pseudo-arclength step for the high-power recovery ladder.",
+    )
+    p.add_argument(
+        "--column-recovery-tier3-max-steps",
+        type=int,
+        default=150,
+        help="Maximum local pseudo-arclength steps for the recovery ladder.",
+    )
+    p.add_argument(
+        "--column-recovery-tier3-deadline-s",
+        type=float,
+        default=60.0,
+        help="Wall-time budget for the local pseudo-arclength recovery tier.",
+    )
+    p.add_argument(
+        "--column-recovery-tier4-anchor-deadline-s",
+        type=float,
+        default=20.0,
+        help="Per-frequency-anchor solve budget for the frequency-detour tier.",
+    )
+    p.add_argument(
+        "--column-recovery-tier4-substep-deadline-s",
+        type=float,
+        default=60.0,
+        help="Wall-time budget for the frequency-detour substep tier.",
+    )
+    p.add_argument(
+        "--column-recovery-tier4-min-step-ghz",
+        type=float,
+        default=0.0005,
+        help="Minimum frequency substep for the recovery ladder.",
+    )
+    p.add_argument(
+        "--column-recovery-ptc-deadline-s",
+        type=float,
+        default=90.0,
+        help="Wall-time budget for pseudo-transient recovery after PALC fails.",
+    )
+    p.add_argument(
+        "--column-recovery-ptc-max-iter",
+        type=int,
+        default=128,
+        help="Maximum pseudo-transient iterations in the high-power recovery tier.",
+    )
+    p.add_argument(
+        "--pump-full-residual-gate",
+        type=float,
+        default=None,
+        help=(
+            "Optional full reconstructed time-domain residual gate for every pump. "
+            "If omitted, coefficient convergence remains the legacy acceptance gate; "
+            "--high-power-recovery uses 1e-7 unless overridden."
+        ),
+    )
+    p.add_argument(
+        "--pump-record-residual-spectrum",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Persist compact retained/omitted residual-spectrum telemetry per pump point.",
+    )
     p.add_argument("--inproc-preconditioner",
                    choices=["mean_tangent", "real_coupled", "real_coupled_fast",
                             "spectral_coupled", "linear"],
@@ -3153,12 +4063,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                    "assembled sparse Schur complement (constant per frequency) and "
                    "solves the retained system -- 2.5-4.5x faster at the high-power "
                    "fold, gain identical. Pair with --inproc-preconditioner mean_tangent.")
-    p.add_argument("--inproc-schur-cache-size", type=int, default=2,
-                   help="Max per-frequency Schur partitions kept in memory (LRU). "
-                   "Each partition holds a large factorized block; the warm pass "
-                   "only needs the current frequency column's partition, so an "
-                   "unbounded cache over 50 frequencies OOMs (~16 GB). 2 keeps a "
-                   "small reuse window while bounding RAM regardless of map size.")
+    p.add_argument("--inproc-schur-cache-size", type=int, default=None,
+                   help="Max Schur partitions kept in memory (LRU). Default is 2 "
+                   "for standard runs and 1 for --high-power-recovery. Each "
+                   "partition owns large sparse factors; explicit cleanup is "
+                   "performed on eviction.")
     p.add_argument("--inproc-precond-reuse", type=int, default=1,
                    help="Reuse the preconditioner factor for up to N consecutive Newton "
                    "steps (modified-Newton). 1 (default) refactors every step. N>1 "
@@ -3461,7 +4370,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.set_defaults(
     )
 
-    return p.parse_args(argv)
+    args = p.parse_args(argv)
+    if args.high_power_recovery:
+        # The high-power profile is an explicit composite workflow.  Keep the
+        # lower-level flags visible in the parsed namespace and enable only the
+        # recovery ladder it is defined to extend.
+        args.column_recovery_ladder = True
+    if args.inproc_schur_cache_size is None:
+        args.inproc_schur_cache_size = 1 if args.high_power_recovery else 2
+    return args
 
 
 def build_points(args: argparse.Namespace) -> tuple[list[GridPoint], np.ndarray, np.ndarray]:

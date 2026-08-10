@@ -51,6 +51,82 @@ def test_adaptive_harmonics_can_be_disabled_for_diagnostics(monkeypatch) -> None
     assert args.adaptive_harmonics is False
 
 
+def test_high_power_recovery_enables_exhaustive_controls(monkeypatch) -> None:
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["run_gain_map.py", "--high-power-recovery"],
+    )
+
+    args = run_gain_map.parse_args()
+
+    assert args.high_power_recovery is True
+    assert args.column_recovery_ladder is True
+    assert args.high_power_max_newton == 32
+    assert args.high_power_harmonic_max_mode == 35
+    assert args.high_power_stall_patience == 0
+    assert math.isclose(args.high_power_min_alpha, 1.0 / 65536.0)
+    assert args.pump_full_residual_gate is None
+    assert args.inproc_schur_cache_size == 1
+
+
+def test_high_power_cache_size_can_be_overridden(monkeypatch) -> None:
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["run_gain_map.py", "--high-power-recovery", "--inproc-schur-cache-size", "2"],
+    )
+
+    args = run_gain_map.parse_args()
+
+    assert args.inproc_schur_cache_size == 2
+
+
+def test_engine_cache_clear_releases_all_cached_partitions() -> None:
+    class FakePartition:
+        def __init__(self) -> None:
+            self.released = 0
+
+        def release(self) -> None:
+            self.released += 1
+
+    engine = object.__new__(run_gain_map.InProcessEngine)
+    first = FakePartition()
+    second = FakePartition()
+    engine._schur_part_cache = {("a", (1,)): first, ("b", (1,)): second}
+
+    engine.clear_schur_cache()
+
+    assert engine._schur_part_cache == {}
+    assert first.released == 1
+    assert second.released == 1
+
+
+def test_enriched_warm_state_is_projected_back_to_base_basis() -> None:
+    from twpa_solver.pump.basis import PumpBasis
+
+    engine = object.__new__(run_gain_map.InProcessEngine)
+    engine.args = SimpleNamespace(
+        mixing_order=4,
+        pump_mode_policy="positive_odd_jc",
+        harmonics=3,
+        pump_mode_count=10,
+    )
+    engine.ipm08 = SimpleNamespace(summary={})
+    engine._last_pump_basis = PumpBasis(
+        modes=[1, 3, 5, 7, 9, 11, 13, 15, 17, 19, 21],
+        policy="positive_odd_jc",
+        omega_p=2.0 * math.pi * 7.6e9,
+    )
+    enriched = np.ones((11, 4), dtype=np.complex128)
+
+    projected = engine.project_to_base_pump_basis(7.6, enriched)
+
+    assert projected is not None
+    assert projected.shape == (10, 4)
+    np.testing.assert_array_equal(projected, enriched[:10])
+
+
 def test_inproc_fail_fast_flag_enables_fast_failure(monkeypatch) -> None:
     monkeypatch.setattr(sys, "argv", ["run_gain_map.py", "--inproc-fail-fast"])
 
@@ -168,6 +244,29 @@ def test_column_power_substep_is_opt_in_with_defaults(monkeypatch) -> None:
     args = run_gain_map.parse_args()
     assert args.column_power_substep is True
     assert args.column_power_substep_min_db == 0.01
+
+
+def test_column_recovery_ladder_is_opt_in_with_bounded_defaults(monkeypatch) -> None:
+    monkeypatch.setattr(sys, "argv", ["run_gain_map.py"])
+    args = run_gain_map.parse_args()
+    assert args.column_recovery_ladder is False
+    assert args.column_recovery_tier3_ds == 0.01
+    assert args.column_recovery_tier3_max_steps == 150
+    assert args.column_recovery_tier3_deadline_s == 60.0
+    assert args.column_recovery_tier4_anchor_deadline_s == 20.0
+    assert args.column_recovery_tier4_substep_deadline_s == 60.0
+    assert args.column_recovery_tier4_min_step_ghz == 0.0005
+
+    monkeypatch.setattr(
+        sys, "argv",
+        ["run_gain_map.py", "--column-recovery-ladder",
+         "--column-recovery-tier3-ds", "0.02",
+         "--column-recovery-tier3-max-steps", "40"],
+    )
+    args = run_gain_map.parse_args()
+    assert args.column_recovery_ladder is True
+    assert args.column_recovery_tier3_ds == 0.02
+    assert args.column_recovery_tier3_max_steps == 40
 
 
 def _fake_substep_engine(monkeypatch, converge_rule):
@@ -498,6 +597,66 @@ def test_fail_fast_does_not_retry_secant_fallback(tmp_path) -> None:
     assert [call[0] for call in engine.calls] == [0, 1, 2]
     assert rows[-1]["status"] == "ERROR"
     assert rows[-1]["pump_predictor"] == "secant"
+
+
+def test_column_recovery_ladder_recovers_with_power_substep(tmp_path) -> None:
+    class FakeEngine:
+        def __init__(self) -> None:
+            self.args = SimpleNamespace(
+                inproc_fold_predictor="none",
+                pump_current_jc_scale=1.0,
+                fold_skip_patience=0,
+                column_recovery_ladder=True,
+                column_power_substep_init_db=0.1,
+                column_power_substep_min_db=0.005,
+                column_power_substep_deadline_s=1.0,
+                column_recovery_tier3_ds=0.01,
+                column_recovery_tier3_max_steps=10,
+                column_recovery_tier3_deadline_s=1.0,
+                column_recovery_tier4_anchor_deadline_s=1.0,
+                column_recovery_tier4_substep_deadline_s=1.0,
+                column_recovery_tier4_min_step_ghz=0.0005,
+            )
+            self.calls: list[tuple[int, str]] = []
+
+        def solve_point(self, point, pass_dir, *, mode, warm_X):
+            self.calls.append((point.index, mode))
+            recovered = point.index == 1 and warm_X is not None and warm_X[0] >= 2.0
+            status = "PASS" if point.index == 0 or recovered else "ERROR"
+            row = {
+                "point_index": point.index,
+                "status": status,
+                "gain_db": 10.0 if status == "PASS" else None,
+                "pump_newton_total": 1,
+                "pump_runtime_s": 0.1,
+            }
+            return row, np.array([2.0 if recovered else float(point.index + 1)])
+
+        def solve_power_substep(self, *args, **kwargs):
+            return np.array([2.0]), {
+                "substeps": 3,
+                "terminal_reason": "reached",
+                "last_current": 2.0,
+            }
+
+        def solve_arclength_forward(self, *args, **kwargs):
+            raise AssertionError("tier 3 must not run after tier 2 recovery")
+
+    points = [
+        run_gain_map.GridPoint(0, 0, 0, -35.0, 7.5, 1.0),
+        run_gain_map.GridPoint(1, 1, 0, -34.0, 7.5, 2.0),
+    ]
+    engine = FakeEngine()
+
+    rows = run_gain_map.run_warm_pass_inprocess(
+        points, tmp_path, engine, fail_fast=True,
+    )
+
+    assert [row["status"] for row in rows] == ["PASS", "PASS"]
+    assert rows[0]["column_recovery_route"] == "DIRECT"
+    assert rows[1]["column_recovery_route"] == "POWER_SUBSTEP"
+    assert rows[1]["tier2_recovered"] is True
+    assert engine.calls == [(0, "seed"), (1, "warm"), (1, "warm")]
 
 
 def test_consecutive_failures_do_not_skip_without_verified_fold(tmp_path) -> None:

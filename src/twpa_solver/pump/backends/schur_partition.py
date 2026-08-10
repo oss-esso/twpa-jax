@@ -78,6 +78,28 @@ class SchurPartition:
     def retained_fraction(self) -> float:
         return self.m / max(self.n, 1)
 
+    def release(self) -> None:
+        """Release cached nonlinear and linear factorization resources.
+
+        The fast coupled preconditioner is attached dynamically by the pump
+        Schur operator.  Releasing it here ensures that cache eviction also
+        terminates any native PARDISO state before the remaining sparse Python
+        objects are discarded.
+        """
+        fast = getattr(self, "_fast_coupled", None)
+        if fast is not None:
+            fast.release()
+            self._fast_coupled = None
+
+        self.dee_factors.clear()
+        self.dnn.clear()
+        self.dne.clear()
+        self.den.clear()
+        self.schur = None
+        self.retained = np.empty(0, dtype=np.int64)
+        self.eliminated = np.empty(0, dtype=np.int64)
+        self.retained_pos = np.empty(0, dtype=np.int64)
+
 
 def build_partition(
     linear_blocks: list[sp.spmatrix],

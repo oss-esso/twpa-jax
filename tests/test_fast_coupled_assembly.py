@@ -13,6 +13,7 @@ import math
 
 import numpy as np
 import pytest
+import scipy.sparse as sp
 
 from twpa_solver.builders.jc_doc import build_jpa, build_jtwpa
 from twpa_solver.core import CircuitMatrices
@@ -209,3 +210,30 @@ def test_refactor_is_idempotent_across_repeated_tangents() -> None:
     fast.refactor(tangent)
 
     np.testing.assert_allclose(fast.M.data, first, rtol=0.0, atol=0.0)
+
+
+def test_release_terminates_pardiso_once_and_drops_large_buffers() -> None:
+    class FakePardiso:
+        def __init__(self) -> None:
+            self.calls: list[bool] = []
+
+        def free_memory(self, *, everything: bool) -> None:
+            self.calls.append(everything)
+
+    fast = FastCoupledPreconditioner.__new__(FastCoupledPreconditioner)
+    pardiso = FakePardiso()
+    fast._pardiso = pardiso
+    fast._released = False
+    fast.M = sp.eye(2, format="csr")
+    fast._lu = object()
+    fast._targets = np.ones((2, 2, 4, 1), dtype=np.int32)
+    fast.problem = object()
+
+    fast.release()
+    fast.release()
+
+    assert pardiso.calls == [True]
+    assert fast._pardiso is None
+    assert fast.M is None
+    assert fast._targets is None
+    assert fast.problem is None

@@ -162,6 +162,7 @@ class FastCoupledPreconditioner:
         self._build_scatter()
         self._pardiso = None
         self._lu = None
+        self._released = False
         self._analyzed = False
         self._singular_fallback = False
         self.last_assembly_runtime_s = 0.0
@@ -175,6 +176,55 @@ class FastCoupledPreconditioner:
                 "TWPA_REQUIRE_PARDISO=1, but pypardiso is not available "
                 "or this preconditioner was constructed with use_pardiso=False."
             )
+
+    def release(self) -> None:
+        """Release native and Python-side factorization storage.
+
+        ``gc.collect()`` only removes Python references.  PARDISO keeps its
+        factorization in native MKL storage until its termination phase is
+        called, so cache eviction must explicitly call
+        ``free_memory(everything=True)``.  This method is intentionally
+        idempotent and must only be called after the preconditioner is no
+        longer used by a Newton or Krylov solve.
+        """
+        if getattr(self, "_released", False):
+            return
+        self._released = True
+
+        pardiso = getattr(self, "_pardiso", None)
+        if pardiso is not None:
+            free_memory = getattr(pardiso, "free_memory", None)
+            if free_memory is None:
+                logger.warning(
+                    "fast_coupled_pardiso_release_unavailable type=%s",
+                    type(pardiso).__name__,
+                )
+            else:
+                try:
+                    free_memory(everything=True)
+                except Exception as exc:  # native cleanup must not mask eviction
+                    logger.warning(
+                        "fast_coupled_pardiso_release_failed error=%r", exc
+                    )
+
+        # Drop references to all large Python-side buffers as well.  These
+        # assignments also break the reference from the cached partition back
+        # to the full Schur problem and its circuit matrices.
+        self._pardiso = None
+        self._lu = None
+        self._band_lu = None
+        self._band_ipiv = None
+        self._band_buffer = None
+        self._band_flat = None
+        self._targets = None
+        self._phase_matrix = None
+        self._khat_map = None
+        self._Mconst = None
+        self._value_buffer = None
+        self._ell_diff = None
+        self._ell_sum = None
+        self.M = None
+        self.problem = None
 
     def _gamma_hat_array(self, gamma_t: np.ndarray) -> np.ndarray:
         return self._phase_matrix @ gamma_t
