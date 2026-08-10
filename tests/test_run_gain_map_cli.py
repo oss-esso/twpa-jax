@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import sys
 
 import numpy as np
+import pytest
 
 import scripts.run_gain_map as run_gain_map
 
@@ -14,6 +15,8 @@ def test_measurement_grid_loader_preserves_nonuniform_themis_axes() -> None:
     measurement_dir = Path(
         "docs/development/17.03.10_Themis_SetupAug25_noVTS_transmission_15mK"
     )
+    if not measurement_dir.exists():
+        pytest.skip("optional development-only Themis fixture is absent")
     powers, freqs = run_gain_map.load_measurement_grid(measurement_dir)
 
     assert powers.size == 31
