@@ -67,7 +67,11 @@ def main(argv: list[str] | None = None) -> None:
     with (outdir / "elements.csv").open("w", newline="", encoding="utf-8") as handle:
         writer = csv.writer(handle)
         writer.writerow(("idx", "name", "node1", "node2", "value", "kind", "role", "cell_index"))
-        for index, element in enumerate(design.elements):
+        # Keep the generated netlist index convention identical to the legacy
+        # IPM writer and the repository's byte-level 2c baseline: indices are
+        # one-based in the CSV, while element ordering remains zero-based in
+        # Python and in the compiled design object.
+        for index, element in enumerate(design.elements, 1):
             writer.writerow((index, element.name, element.n1, element.n2, element.value,
                              element.kind, element.role, element.cell_index))
     with (outdir / "ports.csv").open("w", newline="", encoding="utf-8") as handle:

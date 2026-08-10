@@ -1,6 +1,7 @@
 schema_version: 1
 name: ipm_2c
 technology: ipm_default
+coupler_mode: cached
 
 parameters:
   Lj: 123.9e-12
