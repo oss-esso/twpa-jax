@@ -9,6 +9,9 @@ pytest-of-*/
 /outputs/
 /outputs/**
 .hybrid_outputs/
+/.claude/
+/research_runtime/
+/designs/ipm_2c_fixed/
 /.pytest*/
 /pytest-of-*/
 /g1_current_*/
