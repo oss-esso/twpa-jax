@@ -47,6 +47,7 @@ from twpa_solver.core import load_circuit  # noqa: E402
 import twpa_solver.signal as exp09  # noqa: E402
 from twpa_solver.signal.stability import (  # noqa: E402
     NON_ANALYTIC_LOSS_MODELS,
+    classify_floquet_resonance,
     local_minima,
     refine_resonances,
     sweep_sigma_min,
@@ -90,6 +91,18 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                         "Refuses to run against NON_ANALYTIC_LOSS_MODELS.")
     p.add_argument("--refine-max-iters", type=int, default=30)
     p.add_argument("--refine-tol", type=float, default=1e-9)
+    p.add_argument(
+        "--refine-bifurcations",
+        action="store_true",
+        help="Also refine explicit Floquet-zone candidates and classify their "
+        "multipliers. Fractions are relative to the pump frequency.",
+    )
+    p.add_argument(
+        "--bifurcation-fractions",
+        default="0.0,0.5",
+        help="Comma-separated Floquet-zone frequency guesses; default checks "
+        "+1 and -1 multiplier candidates.",
+    )
     p.add_argument("--out", required=True)
     return p.parse_args(argv)
 
@@ -152,6 +165,28 @@ def _run_sweep(circuit, pump_dir: Path, fallback_freq_ghz: float, args: argparse
         "runtime_s": runtime_s,
     }
 
+    def serialize_resonance(seed: float, resonance: Any) -> dict[str, Any]:
+        floquet = classify_floquet_resonance(resonance, pump.omega_p)
+        return {
+            "seed_signal_ghz": seed,
+            "signal_ghz_real": resonance.signal_ghz.real,
+            "signal_ghz_imag": resonance.signal_ghz.imag,
+            "growth_rate_per_s": resonance.growth_rate_per_s,
+            "unstable": resonance.growth_rate_per_s > 0.0,
+            "converged": resonance.converged,
+            "iterations": resonance.iterations,
+            "residual": resonance.residual,
+            "floquet": {
+                "multiplier_real": floquet.multiplier.real,
+                "multiplier_imag": floquet.multiplier.imag,
+                "magnitude": floquet.magnitude,
+                "phase_rad": floquet.phase_rad,
+                "zone_frequency_ghz": floquet.zone_frequency_ghz,
+                "kind": floquet.kind,
+                "near_unit_circle": floquet.near_unit_circle,
+            },
+        }
+
     if args.refine_complex and resonances:
         t1 = time.perf_counter()
         candidates = [r["signal_ghz"] for r in resonances]
@@ -161,19 +196,39 @@ def _run_sweep(circuit, pump_dir: Path, fallback_freq_ghz: float, args: argparse
             max_iters=args.refine_max_iters, tol=args.refine_tol,
         )
         result["complex_resonances"] = [
-            {
-                "seed_signal_ghz": seed,
-                "signal_ghz_real": r.signal_ghz.real,
-                "signal_ghz_imag": r.signal_ghz.imag,
-                "growth_rate_per_s": r.growth_rate_per_s,
-                "unstable": r.growth_rate_per_s > 0.0,
-                "converged": r.converged,
-                "iterations": r.iterations,
-                "residual": r.residual,
-            }
-            for seed, r in zip(candidates, refined)
+            serialize_resonance(seed, resonance)
+            for seed, resonance in zip(candidates, refined)
         ]
         result["refine_runtime_s"] = time.perf_counter() - t1
+
+    if args.refine_bifurcations:
+        try:
+            fractions = [
+                float(token.strip())
+                for token in args.bifurcation_fractions.split(",")
+                if token.strip()
+            ]
+        except ValueError as exc:
+            raise ValueError("invalid --bifurcation-fractions") from exc
+        if not fractions or any(fraction < 0.0 or fraction >= 1.0 for fraction in fractions):
+            raise ValueError("bifurcation fractions must lie in [0, 1)")
+        candidates = [fraction * pump_freq_ghz for fraction in fractions]
+        t2 = time.perf_counter()
+        refined = refine_resonances(
+            circuit=circuit,
+            khat=khat,
+            omega_p=pump.omega_p,
+            ms=ms,
+            candidates_ghz=candidates,
+            loss_model=args.loss_model,
+            max_iters=args.refine_max_iters,
+            tol=args.refine_tol,
+        )
+        result["bifurcation_resonances"] = [
+            serialize_resonance(seed, resonance)
+            for seed, resonance in zip(candidates, refined)
+        ]
+        result["bifurcation_refine_runtime_s"] = time.perf_counter() - t2
 
     return result
 
@@ -183,7 +238,7 @@ def main(argv: list[str] | None = None) -> int:
     circuit = load_circuit(args.circuit_dir)
 
     if args.loss_model in NON_ANALYTIC_LOSS_MODELS:
-        if args.refine_complex:
+        if args.refine_complex or args.refine_bifurcations:
             raise SystemExit(
                 f"--refine-complex requires an analytic D(omega); "
                 f"loss_model={args.loss_model!r} is in NON_ANALYTIC_LOSS_MODELS. "
@@ -198,10 +253,14 @@ def main(argv: list[str] | None = None) -> int:
         for cr in sweep.get("complex_resonances", []):
             verdict = "UNSTABLE (growing)" if cr["unstable"] else "stable (decaying)"
             conv = "converged" if cr["converged"] else "NOT converged"
+            floquet = cr.get("floquet", {})
             print(f"  [{label}] seed={cr['seed_signal_ghz']:.6f} GHz -> "
                   f"omega/(2pi*1e9)={cr['signal_ghz_real']:.6f}"
                   f"{cr['signal_ghz_imag']:+.6f}j GHz "
                   f"growth_rate_per_s={cr['growth_rate_per_s']:.4e} "
+                  f"multiplier={floquet.get('magnitude', float('nan')):.6f}"
+                  f"∠{floquet.get('phase_rad', float('nan')):.4f} "
+                  f"kind={floquet.get('kind', 'UNKNOWN')} "
                   f"{verdict} ({conv}, {cr['iterations']} iters, "
                   f"residual={cr['residual']:.2e})")
 
@@ -212,6 +271,13 @@ def main(argv: list[str] | None = None) -> int:
         print(f"  candidate resonance: signal_ghz={r['signal_ghz']:.6f} "
               f"sigma_min={r['sigma_min']:.6e} conv_ratio={r['convergence_ratio']:.4f}")
     _print_complex_resonances("target", target)
+    for resonance in target.get("bifurcation_resonances", []):
+        print(
+            f"  [target bifurcation] seed={resonance['seed_signal_ghz']:.6f} "
+            f"GHz kind={resonance['floquet']['kind']} "
+            f"multiplier_mag={resonance['floquet']['magnitude']:.6f} "
+            f"phase={resonance['floquet']['phase_rad']:.4f}"
+        )
 
     baseline = None
     if args.baseline_pump_dir:
@@ -222,6 +288,13 @@ def main(argv: list[str] | None = None) -> int:
             print(f"  candidate resonance: signal_ghz={r['signal_ghz']:.6f} "
                   f"sigma_min={r['sigma_min']:.6e} conv_ratio={r['convergence_ratio']:.4f}")
         _print_complex_resonances("baseline", baseline)
+        for resonance in baseline.get("bifurcation_resonances", []):
+            print(
+                f"  [baseline bifurcation] seed={resonance['seed_signal_ghz']:.6f} "
+                f"GHz kind={resonance['floquet']['kind']} "
+                f"multiplier_mag={resonance['floquet']['magnitude']:.6f} "
+                f"phase={resonance['floquet']['phase_rad']:.4f}"
+            )
         # Compare genuine (interior, bracketed) local minima only -- the raw
         # array min can sit on an edge point (e.g. near omega=0), which is not
         # a resonance and is excluded from `resonances` for that reason.
@@ -245,6 +318,8 @@ def main(argv: list[str] | None = None) -> int:
             "iters": args.iters,
             "seed": args.seed,
             "non_analytic_loss_model_warning": args.loss_model in NON_ANALYTIC_LOSS_MODELS,
+            "refine_bifurcations": args.refine_bifurcations,
+            "bifurcation_fractions": args.bifurcation_fractions,
         },
         "target": target,
         "baseline": baseline,

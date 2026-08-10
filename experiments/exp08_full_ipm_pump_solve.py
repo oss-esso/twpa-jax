@@ -54,6 +54,8 @@ import numpy as np
 import scipy.sparse as sp
 import scipy.sparse.linalg as spla
 
+from twpa_solver.pump.problem import pin_imaginary_dc_coordinates
+
 import sys as _sys
 
 _sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -616,6 +618,7 @@ class FullIPMPumpProblem:
         top = sp.bmat([[sp.bmat(jrr), sp.bmat(jri)]])
         bot = sp.bmat([[sp.bmat(jir), sp.bmat(jii)]])
         full = sp.bmat([[top], [bot]], format="csc")
+        full = pin_imaginary_dc_coordinates(full, modes_int, self.n).tocsc()
         return full
 
     def real_coupled_jacobian(self, spectral: SpectralTangentState) -> sp.csc_matrix:
@@ -1488,6 +1491,13 @@ def parse_args() -> argparse.Namespace:
         help="Explicit comma-separated positive modes, e.g. '1,3,5,7'.",
     )
     p.add_argument(
+        "--dynamic-dc", action=argparse.BooleanOptionalAction, default=False,
+        help=(
+            "Include an explicit k=0 pump coefficient. This changes only the "
+            "HB representation and does not add a physical DC source."
+        ),
+    )
+    p.add_argument(
         "--promote-from-pump-dir",
         type=str,
         default=None,
@@ -1584,6 +1594,8 @@ def main() -> None:
         print(f"dc_solution={args.dc_solution}")
         print(f"dc_branch_flux_max_abs={float(np.max(np.abs(dc_branch_flux))):.12e}")
         print(f"dc_branch_flux_over_phi0_max_abs={float(np.max(np.abs(dc_branch_flux / ipm.phi0))):.12e}")
+
+    if dc_branch_flux is not None or args.dynamic_dc:
         basis = with_dynamic_dc(basis)
         print(f"pump_modes_with_dynamic_dc={basis.modes}")
 

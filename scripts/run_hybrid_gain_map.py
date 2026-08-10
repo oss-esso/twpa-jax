@@ -1,10 +1,9 @@
 """Run a compact pump/gain map with bounded HB -> TD recovery.
 
-This is the map-level client for the validated hybrid column controller.  A TD
-PERIOD_1 waveform is allowed to contribute a gain-map point through its exact
-Fourier projection when production HB Newton cannot recover the root.  Such a
-point is marked ``pump_status=TD_PERIOD1`` and is never presented as an HB
-convergence.
+This is the map-level client for the validated hybrid column controller.  TD
+is used to classify branch transfers and to continue physical non-periodic
+trajectories, but a TD projection is not counted as gain-valid until it has
+been polished into an authoritative production HB root.
 """
 
 from __future__ import annotations
@@ -41,7 +40,6 @@ def build_args(ns: argparse.Namespace) -> argparse.Namespace:
         "--pump-power-max-dbm", str(ns.power_max_dbm),
         "--pump-freq-min-ghz", str(ns.freq_min_ghz),
         "--pump-freq-max-ghz", str(ns.freq_max_ghz),
-        "--attenuation-db", str(ns.attenuation_db),
         "--pump-mode-count", str(ns.pump_mode_count), "--nt", str(ns.nt),
         "--pump-mode-policy", ns.pump_mode_policy,
         "--mixing-order", str(ns.mixing_order), "--harmonics", str(ns.harmonics),
@@ -56,6 +54,10 @@ def build_args(ns: argparse.Namespace) -> argparse.Namespace:
         "--inproc-max-newton", str(ns.inproc_max_newton),
         "--inproc-fail-fast", "--overwrite", "--log-level", "WARNING",
     ]
+    if getattr(ns, "pump_dynamic_dc", False):
+        argv.append("--pump-dynamic-dc")
+    if ns.attenuation_db is not None:
+        argv.extend(["--attenuation-db", str(ns.attenuation_db)])
     for flag, value in (("--pump-port", ns.pump_port),
                         ("--source-port", ns.source_port),
                         ("--out-port", ns.out_port)):
@@ -103,6 +105,34 @@ def _td_skip_row(point: Any, status: str) -> dict[str, Any]:
     }
 
 
+def _write_hybrid_config(args: argparse.Namespace) -> None:
+    """Persist the numerical/physical policy used by this hybrid map."""
+    (args.outdir / "hybrid_run_config.json").write_text(
+        json.dumps({
+            "circuit_dir": str(args.circuit_dir),
+            "attenuation_db_override": args.attenuation_db,
+            "attenuation_model": (
+                "flat" if args.attenuation_db is not None
+                else "loss_A10 c + a*sqrt(f) + b*f"
+            ),
+            "td_ramp_periods": args.td_ramp_periods,
+            "td_hold_periods": args.td_hold_periods,
+            "td_checkpoint_periods": args.td_checkpoint_periods,
+            "td_min_step_theta": args.td_min_step_theta,
+            "td_max_newton": args.td_max_newton,
+            "td_settle_extensions": args.td_settle_extensions,
+            "td_continue_nonperiodic": args.td_continue_nonperiodic,
+            "td_junction_break_threshold": args.td_junction_break_threshold,
+            "max_td_bridges": args.max_td_bridges,
+            "pump_backend": args.inproc_pump_backend,
+            "preconditioner": args.inproc_preconditioner,
+            "pump_mode_count": args.pump_mode_count,
+            "pump_dynamic_dc": bool(getattr(args, "pump_dynamic_dc", False)),
+            "harmonics": args.harmonics,
+        }, indent=2), encoding="utf-8",
+    )
+
+
 def _rows_for_column(
     points: list[Any], result: Any, backend: hybrid.ProductionPeriodicBackend,
 ) -> list[dict[str, Any]]:
@@ -146,6 +176,13 @@ def _rows_for_column(
             row["status"] = record.state.value
             row["pump_status"] = record.state.value
             row["gain_status"] = "NOT_RUN"
+        elif record.state.value == "TD_CONTINUE":
+            # A continued TD trajectory is useful physical evidence, but it
+            # is not a periodic HB root and cannot be passed to the gain
+            # linearization as if it were one.
+            row["status"] = "TD_CONTINUE"
+            row["pump_status"] = "TD_CONTINUE"
+            row["gain_status"] = "NOT_RUN"
         rows.append(row)
         if outside_seen:
             break
@@ -185,7 +222,7 @@ def _read_csv_rows(path: Path) -> list[dict[str, Any]]:
 
 
 def _child_arguments(ns: argparse.Namespace, frequency: float, outdir: Path) -> list[str]:
-    return [
+    argv = [
         "--circuit-dir", str(ns.circuit_dir), "--outdir", str(outdir),
         "--n-power", str(ns.n_power), "--n-frequency", "1",
         "--power-min-dbm", str(ns.power_min_dbm),
@@ -203,9 +240,22 @@ def _child_arguments(ns: argparse.Namespace, frequency: float, outdir: Path) -> 
         "--td-ramp-periods", str(ns.td_ramp_periods),
         "--td-hold-periods", str(ns.td_hold_periods),
         "--td-checkpoint-periods", str(ns.td_checkpoint_periods),
+        "--td-min-step-theta", str(ns.td_min_step_theta),
+        "--td-max-newton", str(ns.td_max_newton),
         "--max-td-bridges", str(ns.max_td_bridges),
+        "--td-settle-extensions", str(ns.td_settle_extensions),
+        "--td-junction-break-threshold", str(ns.td_junction_break_threshold),
         "--_single-column",
     ]
+    if getattr(ns, "pump_dynamic_dc", False):
+        argv.append("--pump-dynamic-dc")
+    if ns.attenuation_db is not None:
+        # An explicit override remains available for controlled experiments;
+        # the default path intentionally omits this flag and uses loss_A10.
+        argv.extend(["--attenuation-db", str(ns.attenuation_db)])
+    if ns.td_continue_nonperiodic:
+        argv.append("--td-continue-nonperiodic")
+    return argv
 
 
 def run_isolated_columns(args: argparse.Namespace) -> int:
@@ -332,6 +382,7 @@ def run_isolated_columns(args: argparse.Namespace) -> int:
         args.outdir, gain_args, [], all_rows, gate,
         child_elapsed_total or (time.perf_counter() - started),
     )
+    _write_hybrid_config(args)
     (args.outdir / "hybrid_columns.json").write_text(
         json.dumps(summaries, indent=2), encoding="utf-8"
     )
@@ -357,8 +408,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--power-max-dbm", type=float, default=-16.0)
     parser.add_argument("--freq-min-ghz", type=float, default=7.6)
     parser.add_argument("--freq-max-ghz", type=float, default=7.85)
-    parser.add_argument("--attenuation-db", type=float, default=0.0)
+    parser.add_argument(
+        "--attenuation-db", type=float, default=None,
+        help="Optional flat pump attenuation override; omitted uses measured loss_A10.",
+    )
     parser.add_argument("--pump-mode-count", type=int, default=10)
+    parser.add_argument(
+        "--pump-dynamic-dc", action=argparse.BooleanOptionalAction, default=False,
+        help="Explicitly include the dynamic k=0 pump coefficient in HB.",
+    )
     parser.add_argument("--pump-mode-policy", default="positive_odd_jc")
     parser.add_argument("--mixing-order", choices=("auto", "3", "4"), default="auto")
     parser.add_argument("--harmonics", type=int, default=3)
@@ -371,14 +429,29 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--signal-detuning-mhz", type=float, default=500.0)
     parser.add_argument("--signal-offset-count-per-side", type=int, default=5)
     parser.add_argument("--signal-offset-step-mhz", type=float, default=500.0)
-    parser.add_argument("--inproc-pump-backend", choices=["full", "schur_cpu_mt"], default="full")
-    parser.add_argument("--inproc-preconditioner", default="real_coupled")
+    parser.add_argument(
+        "--inproc-pump-backend", choices=["full", "schur_cpu_mt"],
+        default="schur_cpu_mt",
+        help="HB backend; Schur is the bounded-memory production default.",
+    )
+    parser.add_argument(
+        "--inproc-preconditioner", default="real_coupled_fast",
+        help="HB preconditioner; real_coupled_fast matches the Schur production path.",
+    )
     parser.add_argument("--inproc-solve-deadline-s", type=float, default=14.0)
     parser.add_argument("--inproc-max-newton", type=int, default=16)
     parser.add_argument("--td-ramp-periods", type=int, default=10)
     parser.add_argument("--td-hold-periods", type=int, default=40)
     parser.add_argument("--td-checkpoint-periods", type=int, default=10)
+    parser.add_argument("--td-min-step-theta", type=float, default=1.0 / 32.0)
+    parser.add_argument("--td-max-newton", type=int, default=20)
     parser.add_argument("--max-td-bridges", type=int, default=2)
+    parser.add_argument("--td-settle-extensions", type=int, default=0)
+    parser.add_argument("--td-junction-break-threshold", type=float, default=1.0 - 1e-6)
+    parser.add_argument(
+        "--td-continue-nonperiodic", action="store_true",
+        help="Continue explicit TD ramps through non-periodic states without gain-validating them.",
+    )
     parser.add_argument(
         "--frequency-workers", type=int, default=1,
         help="Independent frequency-column child processes (slow mode).",
@@ -399,6 +472,7 @@ def main(argv: list[str] | None = None) -> int:
     # failure.
     gain_args.pump_solution_dtype = "float64"
     gain_args.hybrid_compact_storage = True
+    gain_args.inproc_schur_cache_size = 1
     points, powers, freqs = run_gain_map.build_points(gain_args)
     by_freq: dict[int, list[Any]] = {}
     for point in points:
@@ -410,13 +484,23 @@ def main(argv: list[str] | None = None) -> int:
     for j in sorted(by_freq):
         column_points = sorted(by_freq[j], key=lambda point: point.power_dbm)
         freq = float(column_points[0].pump_freq_ghz)
-        column_dir = args.outdir / "columns" / f"f_{j:03d}_{freq:.6f}ghz"
+        # Isolated workers receive one frequency and must write their map
+        # products directly into the worker directory expected by the parent.
+        # The multi-frequency in-process mode retains the explicit columns/
+        # hierarchy for the top-level map.
+        column_dir = (
+            args.outdir
+            if args._single_column
+            else args.outdir / "columns" / f"f_{j:03d}_{freq:.6f}ghz"
+        )
         column_dir.mkdir(parents=True, exist_ok=True)
         backend = hybrid.ProductionPeriodicBackend(
             gain_args, points, column_dir
         )
         h1_args = hybrid.h1.parse_args([])
         h1_args.pump_port = int(gain_args.pump_port)
+        h1_args.min_step_theta = float(args.td_min_step_theta)
+        h1_args.max_newton = int(args.td_max_newton)
         h1_args.dc_flux_over_phi0 = float(
             gain_args.dc_branch_flux_over_phi0
             if gain_args.dc_branch_flux_over_phi0 is not None else 0.0
@@ -429,7 +513,11 @@ def main(argv: list[str] | None = None) -> int:
         )
         result = ColumnController(
             backend, dynamic, column_dir,
-            ColumnBudget(max_td_bridges=args.max_td_bridges),
+            ColumnBudget(
+                max_td_bridges=args.max_td_bridges,
+                continue_nonperiodic=args.td_continue_nonperiodic,
+                junction_break_threshold=args.td_junction_break_threshold,
+            ),
         ).run(column_points)
         rows = _rows_for_column(column_points, result, backend)
         all_rows.extend(rows)
@@ -484,6 +572,7 @@ def main(argv: list[str] | None = None) -> int:
         args.outdir, gain_args, [], all_rows, gate,
         time.perf_counter() - total_started,
     )
+    _write_hybrid_config(args)
     (args.outdir / "hybrid_columns.json").write_text(
         json.dumps(column_summaries, indent=2), encoding="utf-8"
     )

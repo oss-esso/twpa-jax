@@ -27,6 +27,12 @@ from twpa_solver.pump.problem import (
     JosephsonBranchArray as ProductionJosephsonBranchArray,
     pack_complex as production_pack_complex,
 )
+from twpa_solver.pump.backends.schur_operators import (
+    build_schur_problem as build_production_schur_problem,
+)
+from twpa_solver.pump.backends.fast_coupled import (
+    FastCoupledPreconditioner as ProductionFastCoupledPreconditioner,
+)
 
 EXP = Path(__file__).resolve().parents[1] / "experiments"
 if str(EXP) not in sys.path:
@@ -123,6 +129,10 @@ def test_production_real_coupled_jacobian_matches_aft_with_dynamic_dc() -> None:
     rng = np.random.default_rng(7)
     X = rng.standard_normal((3, 2)) + 1j * rng.standard_normal((3, 2))
     V = rng.standard_normal((3, 2)) + 1j * rng.standard_normal((3, 2))
+    # Im(X_0) is a compatibility coordinate, not a physical waveform
+    # perturbation.  The pinned real-coupled representation is expected to
+    # agree with the AFT JVP on the physical subspace.
+    V[0] = V[0].real
     tangent = problem.tangent_state(X)
     spectral = problem.spectral_tangent_state(tangent)
 
@@ -130,6 +140,40 @@ def test_production_real_coupled_jacobian_matches_aft_with_dynamic_dc() -> None:
     actual = problem.real_coupled_jacobian(spectral) @ production_pack_complex(V)
 
     np.testing.assert_allclose(actual, expected, rtol=1e-12, atol=1e-12)
+
+
+def test_production_schur_accepts_dynamic_dc_basis() -> None:
+    full = _production_zero_mode_problem([0, 1, 2])
+    reduced = build_production_schur_problem(full, [0])
+    X = np.zeros((3, reduced.n), dtype=np.complex128)
+
+    residual = reduced.residual_coeffs(X, source_scale=0.25)
+    tangent = reduced.tangent_state(X)
+    jvp = reduced.jvp_coeffs_with_tangent(X, tangent)
+
+    assert reduced.mode_keys == [0, 1, 2]
+    assert residual.shape == X.shape
+    assert jvp.shape == X.shape
+    assert np.all(np.isfinite(residual))
+    assert np.all(np.isfinite(jvp))
+
+
+def test_production_fast_coupled_matches_dynamic_dc_reference() -> None:
+    full = _production_zero_mode_problem([0, 1, 2])
+    schur = build_production_schur_problem(full, [0])
+    X = np.zeros((3, schur.n), dtype=np.complex128)
+    tangent = schur.tangent_state(X)
+    spectral = schur.spectral_tangent_state(tangent)
+    reference = schur.assemble_real_coupled_preconditioner(spectral)
+
+    fast = ProductionFastCoupledPreconditioner(schur, use_pardiso=False)
+    fast.refactor(tangent)
+    rhs = np.random.default_rng(12).standard_normal(fast.M.shape[0])
+
+    np.testing.assert_allclose(
+        fast.solve(rhs), reference.solve(rhs), rtol=1e-10, atol=1e-10
+    )
+    fast.release()
 
 
 def test_production_residual_spectrum_includes_omitted_modes() -> None:

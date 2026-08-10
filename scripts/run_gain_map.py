@@ -443,6 +443,24 @@ def pump_flags_warm_seed(args: argparse.Namespace) -> list[str]:
     ]
 
 
+def _pump_dynamic_dc_enabled(args: argparse.Namespace) -> bool:
+    """Return whether the pump basis must contain the dynamic DC mode.
+
+    The option is explicit because a zero-frequency pump coefficient changes
+    the HB unknown space.  It is not inferred from ``mixing_order``: a biased
+    2c study and a 3WM study use the same mathematical representation rule,
+    but must remain independently reproducible.
+    """
+    return bool(getattr(args, "pump_dynamic_dc", False))
+
+
+def _pump_basis_requires_dynamic_dc(args: argparse.Namespace) -> bool:
+    """Return whether the selected production basis needs mode zero."""
+    return _pump_dynamic_dc_enabled(args) or int(
+        getattr(args, "mixing_order", 0)
+    ) == 3
+
+
 def run_point(
     point: GridPoint,
     pass_dir: Path,
@@ -485,6 +503,12 @@ def run_point(
         pump_cmd.extend(["--pump-mode-count", str(args.pump_mode_count)])
     else:
         pump_cmd.extend(["--harmonics", str(args.harmonics)])
+    # Keep the subprocess and in-process paths on the same representation:
+    # auto-resolved 3WM receives the DC coefficient, while an unbiased 4WM
+    # circuit retains the odd positive-frequency basis.  The explicit flag
+    # remains an opt-in diagnostic for either order.
+    if _pump_basis_requires_dynamic_dc(args):
+        pump_cmd.append("--dynamic-dc")
     if promote_from is not None:
         pump_cmd.extend(["--promote-from-pump-dir", str(promote_from)])
 
@@ -786,9 +810,28 @@ class InProcessEngine:
         self._schur_part_cache.clear()
         for part in cached:
             self._release_cached_partition(part)
+        clear_signal = getattr(self, "clear_signal_schur_cache", None)
+        if callable(clear_signal):
+            clear_signal(collect=False)
         gc.collect()
         logger.debug(
-            "engine_schur_cache_cleared released_partitions=%d", len(cached)
+            "engine_schur_cache_cleared released_pump_partitions=%d", len(cached)
+        )
+
+    def clear_signal_schur_cache(self, *, collect: bool = True) -> None:
+        """Release signal-side Schur partitions and native sparse factors."""
+        cache = getattr(self, "_signal_schur_part_cache", None)
+        if cache is None:
+            return
+        cached = list(cache.values())
+        cache.clear()
+        for part in cached:
+            self._release_cached_partition(part)
+        if collect:
+            gc.collect()
+        logger.debug(
+            "engine_signal_schur_cache_cleared released_partitions=%d",
+            len(cached),
         )
 
     def _settings(self) -> exp08.NewtonKrylovSettings:
@@ -870,7 +913,7 @@ class InProcessEngine:
             ),
             explicit_modes=None, design_meta=self.ipm08.summary,
         )
-        if self.args.mixing_order == 3 and 0 not in basis.modes:
+        if _pump_basis_requires_dynamic_dc(self.args) and 0 not in basis.modes:
             # A flux-biased Josephson law generates a pump-induced DC component.
             # Keep it in the production HB unknown set; omitting it can make the
             # retained-mode residual appear converged while the full DAE is not.
@@ -923,7 +966,7 @@ class InProcessEngine:
             explicit_modes=None,
             design_meta=self.ipm08.summary,
         )
-        if self.args.mixing_order == 3 and 0 not in destination.modes:
+        if _pump_basis_requires_dynamic_dc(self.args) and 0 not in destination.modes:
             destination = pump_basis.with_dynamic_dc(destination)
         if source.modes == destination.modes:
             return X
@@ -1187,7 +1230,10 @@ class InProcessEngine:
                 source_basis = getattr(self, "_last_pump_basis", None)
                 if (
                     source_basis is None
-                    and int(getattr(a, "mixing_order", 0)) == 3
+                    and (
+                        _pump_dynamic_dc_enabled(a)
+                        or int(getattr(a, "mixing_order", 0)) == 3
+                    )
                     and warm_X.ndim == 2
                     and warm_X.shape[0] >= 2
                 ):
@@ -1539,6 +1585,11 @@ class InProcessEngine:
             "pump_power_dbm_requested": point.power_dbm,
             "pump_power_convention": getattr(a, "power_convention", None),
             "attenuation_db": attenuation_db_for(point.pump_freq_ghz, a),
+            "attenuation_override_db": getattr(a, "attenuation_db", None),
+            "attenuation_model": (
+                "flat" if getattr(a, "attenuation_db", None) is not None
+                else "loss_A10 c + a*sqrt(f) + b*f"
+            ),
             "dc_branch_flux": dc_flux.tolist(),
             "dc_branch_flux_wb": float(dc_flux[0]) if dc_flux.size else 0.0,
             "pump_port": int(getattr(a, "pump_port", 0)),
@@ -1693,6 +1744,11 @@ class InProcessEngine:
             "engine_solve_point_end point=%s status=%s pump_status=%s gain_status=%s elapsed_s=%.6f",
             point.index, row["status"], row["pump_status"], row["gain_status"], row["elapsed_s"],
         )
+        # Signal factors are not pump continuation state.  Release their
+        # native sparse allocations before the next high-power point.
+        clear_signal = getattr(self, "clear_signal_schur_cache", None)
+        if callable(clear_signal):
+            clear_signal()
         # In force_gain mode return the last-iterate X regardless of convergence
         # so the caller can keep warm-starting up the column past the wall.
         return row, (X if (pump_valid or force_gain) else None)
@@ -2162,7 +2218,8 @@ class InProcessEngine:
                 self._signal_schur_part_cache[key] = schur_part
                 if len(self._signal_schur_part_cache) > self._signal_schur_cache_max:
                     evicted = next(iter(self._signal_schur_part_cache))
-                    self._signal_schur_part_cache.pop(evicted)
+                    evicted_part = self._signal_schur_part_cache.pop(evicted)
+                    self._release_cached_partition(evicted_part)
                     logger.debug("signal_schur_cache_evict key=%r", evicted)
         common = dict(
             circuit=self.ipm09, khat=khat, khat_off_0=khat_off_0,
@@ -2518,6 +2575,7 @@ def run_warm_pass_inprocess(
                 predictor == "secant" and base_X is not None
                 and prevprev_X is not None and prevprev_cur is not None
                 and last_good_cur is not None and prevprev_X.shape == base_X.shape
+                and abs(last_good_cur - prevprev_cur) > 1e-30
             )
             guess = (secant_guess(prevprev_X, base_X, prevprev_cur, last_good_cur, cur)
                      if use_secant else base_X)
@@ -3682,6 +3740,7 @@ def write_summary(
         "pump_record_residual_spectrum": bool(
             getattr(args, "pump_record_residual_spectrum", False)
         ),
+        "pump_dynamic_dc": _pump_dynamic_dc_enabled(args),
         "dc_current_a": args.dc_current_a,
         "dc_solution": str(args.dc_solution) if args.dc_solution is not None else None,
         "signal_convention": ("fixed" if args.signal_ghz is not None
@@ -4051,7 +4110,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     p.add_argument("--inproc-preconditioner",
                    choices=["mean_tangent", "real_coupled", "real_coupled_fast",
-                            "spectral_coupled", "linear"],
+                            "spectral_coupled", "spectral_banded",
+                            "spectral_banded_wide", "linear"],
                    default="real_coupled_fast",
                    help="Preconditioner for the in-process pump solve. mean_tangent "
                    "(default) is cheapest for small warm-start steps; real_coupled "
@@ -4288,6 +4348,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     p.add_argument("--pump-mode-count", type=int, default=10,
                    help="K for positive_odd_jc -> modes [1,3,...,2K-1]. Set with the basis policy.")
+    p.add_argument(
+        "--pump-dynamic-dc", action=argparse.BooleanOptionalAction, default=False,
+        help=(
+            "Explicitly include mode k=0 in the pump HB unknowns. This is a "
+            "representation-only option; it does not add DC bias, damping, or "
+            "any other physical element."
+        ),
+    )
     p.add_argument("--harmonics", type=int, default=3,
                    help="Dense [1..H] harmonics; only used when --pump-mode-count is unset.")
     p.add_argument("--nt", type=int, default=40)

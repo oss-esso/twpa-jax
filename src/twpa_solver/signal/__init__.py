@@ -33,9 +33,15 @@ from twpa_solver.signal.quantum_efficiency import (
     calc_qe,
     calc_qe_ideal,
 )
+from twpa_solver.signal.period_doubled import (
+    period_doubled_idler_sideband,
+    solve_period_doubled_gain,
+)
 from twpa_solver.signal.stability import (
+    FloquetClassification,
     NON_ANALYTIC_LOSS_MODELS,
     ComplexResonance,
+    classify_floquet_resonance,
     SigmaMinEstimate,
     estimate_sigma_min,
     local_minima,
@@ -72,11 +78,15 @@ __all__ = [
     "voltage_from_flux",
     "calc_qe",
     "calc_qe_ideal",
+    "period_doubled_idler_sideband",
+    "solve_period_doubled_gain",
     "NON_ANALYTIC_LOSS_MODELS",
     "ComplexResonance",
+    "FloquetClassification",
     "SigmaMinEstimate",
     "estimate_sigma_min",
     "local_minima",
+    "classify_floquet_resonance",
     "refine_complex_resonance",
     "refine_resonances",
     "refine_singular_omega",

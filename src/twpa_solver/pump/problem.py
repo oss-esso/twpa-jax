@@ -98,6 +98,80 @@ def unpack_complex(v: np.ndarray, shape: tuple[int, int]) -> np.ndarray:
     return (v[:size] + 1j * v[size:2 * size]).reshape(shape)
 
 
+def pin_imaginary_dc_coordinates(
+    matrix: sp.spmatrix,
+    modes: list[int] | np.ndarray,
+    n: int,
+) -> sp.spmatrix:
+    """Pin the non-physical imaginary part of a dynamic DC coefficient.
+
+    ``pack_complex`` keeps a uniform real/imaginary layout for compatibility,
+    but the waveform synthesis is
+
+        x(t) = Re(X_0) + 2 Re(sum_{k>0} X_k exp(i k omega t)).
+
+    Consequently ``Im(X_0)`` is not a circuit degree of freedom.  Leaving it
+    in a sparse Jacobian creates empty rows/columns whenever the DC linear
+    block is singular or only weakly connected.  This helper keeps the
+    compatibility coordinates but replaces their rows and columns by identity
+    constraints.  It changes only the coordinate representation, not the
+    circuit equations or physical parameters.
+
+    The returned matrix has the input sparse format and is safe to use for
+    both the reference and cached real-coupled preconditioners.
+    """
+    raw_modes = list(np.asarray(modes, dtype=object).reshape(-1))
+    # Multitone problems use structured ToneIndex keys rather than scalar
+    # harmonic indices.  Their mode-zero semantics are different and this
+    # pump-specific compatibility constraint must not be applied to them.
+    try:
+        mode_list = [int(round(k)) for k in raw_modes]
+    except (TypeError, ValueError):
+        return matrix
+    if 0 not in mode_list:
+        return matrix
+
+    H = len(mode_list)
+    m = int(n)
+    first = H * m + mode_list.index(0) * m
+    last = first + m
+    size = 2 * H * m
+    if matrix.shape != (size, size):
+        raise ValueError(
+            f"real-coupled matrix shape {matrix.shape} != {(size, size)}"
+        )
+
+    original_format = matrix.format
+    M = matrix.tocsr(copy=True)
+    # Ensure every constrained diagonal is present before zeroing its row and
+    # column.  The addition is performed once during reference assembly or
+    # scatter-pattern construction; subsequent fast refactors only edit data.
+    diag = sp.coo_matrix(
+        (np.ones(m, dtype=M.dtype),
+         (np.arange(first, last), np.arange(first, last))),
+        shape=M.shape,
+    ).tocsr()
+    M = M + diag
+    M.sum_duplicates()
+    M.sort_indices()
+
+    row_of = np.repeat(np.arange(size), np.diff(M.indptr))
+    constrained = (
+        ((row_of >= first) & (row_of < last))
+        | ((M.indices >= first) & (M.indices < last))
+    )
+    M.data[constrained] = 0.0
+    keys = np.arange(first, last, dtype=np.int64) * size + np.arange(first, last)
+    matrix_keys = row_of.astype(np.int64) * size + M.indices.astype(np.int64)
+    diag_pos = np.searchsorted(matrix_keys, keys)
+    if np.any(diag_pos >= M.data.size) or not np.all(matrix_keys[diag_pos] == keys):
+        raise RuntimeError("failed to locate pinned imaginary-DC diagonal")
+    M.data[diag_pos] = 1.0
+    M.eliminate_zeros()
+    M.sort_indices()
+    return M.asformat(original_format)
+
+
 @dataclass
 class TangentState:
     gamma_t: np.ndarray
@@ -451,7 +525,7 @@ class FullPumpProblem:
             "time_rel": time_rel,
         }
 
-    def build_preconditioner_factors(self, X: np.ndarray, mode: str, tangent: TangentState | None = None) -> list[spla.SuperLU] | None:
+    def build_preconditioner_factors(self, X: np.ndarray, mode: str, tangent: TangentState | None = None) -> list[spla.SuperLU | None] | None:
         logger.debug("build_preconditioner_factors mode=%s H=%s", mode, self.H)
         if mode == "none":
             return None
@@ -461,7 +535,7 @@ class FullPumpProblem:
             logger.debug("preconditioner_factors_built mode=linear n_factors=%s", len(factors))
             return factors
 
-        if mode != "mean_tangent":
+        if mode not in ("mean_tangent", "mean_tangent_dc_safe"):
             raise ValueError(f"unknown preconditioner mode {mode!r}")
 
         if tangent is None:
@@ -477,7 +551,20 @@ class FullPumpProblem:
         factors = []
         for h in range(self.H):
             Pk = (self._linear_blocks[h] + Ktan).tocsc()
-            factors.append(spla.splu(Pk))
+            try:
+                factors.append(spla.splu(Pk))
+            except RuntimeError:
+                if mode == "mean_tangent_dc_safe" and int(self.grid.modes[h]) == 0:
+                    # A lossless DC block can retain a gauge nullspace.  The
+                    # preconditioner is only a Krylov accelerator; leave this
+                    # block unpreconditioned rather than adding a physical
+                    # Gmin/capacitance or shifting the true Newton operator.
+                    logger.warning(
+                        "mean_tangent_dc_safe identity block mode=%s", self.grid.modes[h]
+                    )
+                    factors.append(None)
+                else:
+                    raise
 
         logger.debug("preconditioner_factors_built mode=mean_tangent n_factors=%s", len(factors))
         return factors
@@ -507,6 +594,38 @@ class FullPumpProblem:
             rows.append(row)
         full = sp.bmat(rows, format="csc")
         logger.debug("coupled_preconditioner_assembled size=%s (spectral_coupled)", full.shape)
+        return spla.splu(full)
+
+    def assemble_banded_coupled_preconditioner(
+        self, spectral: SpectralTangentState, mode_bandwidth: int = 2,
+    ) -> spla.SuperLU:
+        """Factor a sparse mode-banded complex preconditioner.
+
+        This retains the nearest DC/pump and harmonic couplings while avoiding
+        the quadratic mode-block fill of the full coupled factorization.  The
+        exact AFT JVP remains the Newton operator.
+        """
+        if mode_bandwidth < 1:
+            raise ValueError("mode_bandwidth must be >= 1")
+        modes_int = [int(round(k)) for k in self.grid.k]
+        zero = sp.csr_matrix((self.n, self.n), dtype=np.complex128)
+        rows: list[list[sp.csr_matrix]] = []
+        for ki, k in enumerate(modes_int):
+            row: list[sp.csr_matrix] = []
+            for qi, q in enumerate(modes_int):
+                if abs(k - q) > mode_bandwidth:
+                    row.append(zero)
+                    continue
+                block = spectral.khat.get(k - q, zero)
+                if ki == qi:
+                    block = block + self._linear_blocks[ki]
+                row.append(block.tocsr())
+            rows.append(row)
+        full = sp.bmat(rows, format="csc")
+        logger.debug(
+            "banded_coupled_preconditioner_assembled size=%s bandwidth=%s nnz=%s",
+            full.shape, mode_bandwidth, full.nnz,
+        )
         return spla.splu(full)
 
     def assemble_real_coupled_preconditioner(
@@ -571,6 +690,7 @@ class FullPumpProblem:
         top = sp.bmat([[sp.bmat(jrr), sp.bmat(jri)]])
         bot = sp.bmat([[sp.bmat(jir), sp.bmat(jii)]])
         full = sp.bmat([[top], [bot]], format="csc")
+        full = pin_imaginary_dc_coordinates(full, modes_int, self.n).tocsc()
         logger.debug(
             "real_coupled_matrix_built size=%s (2*H*n, conjugate k+q term included)",
             full.shape,

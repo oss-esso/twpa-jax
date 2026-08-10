@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import shutil
+import os
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -28,7 +29,14 @@ def apply_thesis_style() -> None:
         "axes.titlesize": 16,
         "axes.labelsize": 14,
     }
-    if shutil.which("latex"):
+    # Some Windows installations expose a ``latex`` executable while the
+    # user-level MiKTeX cache is not writable or not initialized.  Allow
+    # headless plotting jobs to request the guaranteed mathtext path without
+    # changing the default thesis style on systems with a working TeX setup.
+    tex_disabled = os.environ.get("TWPA_PLOTTING_NO_TEX", "").lower() in {
+        "1", "true", "yes", "on",
+    }
+    if shutil.which("latex") and not tex_disabled:
         rc["text.usetex"] = True
         rc["text.latex.preamble"] = r"\usepackage{amsmath}"
     plt.rcParams.update(rc)

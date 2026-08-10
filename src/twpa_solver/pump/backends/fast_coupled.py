@@ -34,6 +34,8 @@ import scipy.sparse as sp
 import scipy.sparse.linalg as spla
 from scipy.linalg.lapack import get_lapack_funcs
 
+from ..problem import pin_imaginary_dc_coordinates
+
 # A band this wide is not worth storing densely; refuse rather than allocate.
 _BAND_BYTES_LIMIT = 4 * 1024**3
 # Nonzeros per slice when building the band index, chosen so the working set
@@ -261,15 +263,31 @@ class FastCoupledPreconditioner:
                 L = khat_ref.get(k - q, zero)
                 if ki == qi:
                     L = L + Sc[ki]
-                P = khat_ref.get(k + q, zero)
-                Lr, Li, Pr, Pi = L.real, L.imag, P.real, P.imag
-                rrr.append((Lr + Pr).tocsr()); rri.append((Pi - Li).tocsr())
-                rir.append((Li + Pi).tocsr()); rii.append((Lr - Pr).tocsr())
+                if q == 0:
+                    # Mode 0 is a real waveform coefficient.  Its column is
+                    # therefore not the positive-frequency phasor block used
+                    # by the usual conjugate-coupled formula.  Match
+                    # SchurReducedProblem.assemble_real_coupled_preconditioner:
+                    # A = Khat[k] (+ S_k on the diagonal), B = i*S_k on the
+                    # diagonal only.
+                    A = L
+                    B = (1j * Sc[ki]) if ki == qi else zero
+                    rrr.append(A.real.tocsr()); rri.append(B.real.tocsr())
+                    rir.append(A.imag.tocsr()); rii.append(B.imag.tocsr())
+                else:
+                    P = khat_ref.get(k + q, zero)
+                    Lr, Li, Pr, Pi = L.real, L.imag, P.real, P.imag
+                    rrr.append((Lr + Pr).tocsr()); rri.append((Pi - Li).tocsr())
+                    rir.append((Li + Pi).tocsr()); rii.append((Lr - Pr).tocsr())
             jrr.append(rrr); jri.append(rri); jir.append(rir); jii.append(rii)
         top = sp.bmat([[sp.bmat(jrr), sp.bmat(jri)]])
         bot = sp.bmat([[sp.bmat(jir), sp.bmat(jii)]])
         M = sp.bmat([[top], [bot]], format="csr")
         M.sum_duplicates(); M.sort_indices()
+        # Keep the compatibility packing, but remove the nonexistent Im(X_0)
+        # degree of freedom when dynamic DC is present.  Add the identity
+        # pattern now so later refactors can pin by editing M.data only.
+        M = pin_imaginary_dc_coordinates(M, modes, m).tocsr()
         self.M = M
         self.M.data = M.data.astype(np.float64)
         # Global sorted keys row*N + col for vectorized M.data index lookup.
@@ -348,21 +366,38 @@ class FastCoupledPreconditioner:
         for ki in range(H):
             S = Sc[ki].tocoo()
             sr, sc = S.row, S.col
-            t_rr = self._block_target(M, ki, ki, sr, sc)
-            t_ri = self._block_target(M, ki, ki + H, sr, sc)
-            t_ir = self._block_target(M, ki + H, ki, sr, sc)
-            t_ii = self._block_target(M, ki + H, ki + H, sr, sc)
-            np.add.at(Mconst, t_rr, S.data.real); np.add.at(Mconst, t_ii, S.data.real)
-            np.add.at(Mconst, t_ri, -S.data.imag); np.add.at(Mconst, t_ir, S.data.imag)
+            qi = ki
+            if self.modes[qi] == 0:
+                t_rr = self._block_target(M, ki, qi, sr, sc)
+                t_ri = self._block_target(M, ki, qi + H, sr, sc)
+                t_ir = self._block_target(M, ki + H, qi, sr, sc)
+                t_ii = self._block_target(M, ki + H, qi + H, sr, sc)
+                np.add.at(Mconst, t_rr, S.data.real)
+                np.add.at(Mconst, t_ri, -S.data.imag)
+                np.add.at(Mconst, t_ir, S.data.imag)
+                np.add.at(Mconst, t_ii, S.data.real)
+            else:
+                t_rr = self._block_target(M, ki, qi, sr, sc)
+                t_ri = self._block_target(M, ki, qi + H, sr, sc)
+                t_ir = self._block_target(M, ki + H, qi, sr, sc)
+                t_ii = self._block_target(M, ki + H, qi + H, sr, sc)
+                np.add.at(Mconst, t_rr, S.data.real)
+                np.add.at(Mconst, t_ii, S.data.real)
+                np.add.at(Mconst, t_ri, -S.data.imag)
+                np.add.at(Mconst, t_ir, S.data.imag)
         self._Mconst = Mconst
         return None
 
     # -------------------------------------------------------------- refactor
-    def refactor(self, tangent) -> None:
-        """Rebuild M.data from the current tangent gamma(t) and factor it.
+    def assemble_matrix(self, tangent) -> sp.csr_matrix:
+        """Rebuild and return ``M`` for ``tangent`` without factoring it.
 
         khat_ell.data is recomputed from gamma_hat_ell via the precomputed linear
         map -- guaranteeing the same pattern/order the scatter indices assume.
+
+        This separate assembly hook is intentional: sparse-factor failures must
+        be diagnosable from the assembled matrix before a backend such as
+        PARDISO is called.  It does not alter the production matrix or packing.
         """
         t0 = time.perf_counter()
         gh = self._gamma_hat_array(tangent.gamma_t)
@@ -383,18 +418,50 @@ class FastCoupledPreconditioner:
         for ki in range(len(self.modes)):
             for qi in range(len(self.modes)):
                 ed = self._ell_diff[ki, qi]
-                es = self._ell_sum[ki, qi]
-                # L = khat[k-q], P = khat[k+q]; the real packing sends
-                # rr <- Lr + Pr, ri <- Pi - Li, ir <- Li + Pi, ii <- Lr - Pr.
                 lr, li = real[ed], imag[ed]
-                pr, pi = real[es], imag[es]
-                np.add(lr, pr, out=buf[q0])
-                np.subtract(pi, li, out=buf[q1])
-                np.add(li, pi, out=buf[q2])
-                np.subtract(lr, pr, out=buf[q3])
+                if self.modes[qi] == 0:
+                    # Real DC column: nonlinear A contributes only to rr/ir.
+                    # The diagonal linear B=i*S contribution is constant and
+                    # is already stored in Mconst.
+                    np.copyto(buf[q0], lr)
+                    buf[q1].fill(0.0)
+                    np.copyto(buf[q2], li)
+                    buf[q3].fill(0.0)
+                else:
+                    es = self._ell_sum[ki, qi]
+                    pr, pi = real[es], imag[es]
+                    # L = khat[k-q], P = khat[k+q]; the real packing sends
+                    # rr <- Lr + Pr, ri <- Pi - Li, ir <- Li + Pi, ii <- Lr - Pr.
+                    np.add(lr, pr, out=buf[q0])
+                    np.subtract(pi, li, out=buf[q1])
+                    np.add(li, pi, out=buf[q2])
+                    np.subtract(lr, pr, out=buf[q3])
                 data[targets[ki, qi].ravel()] += buf
         self.M.data = data
+        if 0 in self.modes:
+            # The scatter assembly contains the physical nonlinear Jacobian,
+            # while the pinned compatibility coordinates must remain identity
+            # rows/columns at every Newton state.
+            first = self.H * self.m + self.modes.index(0) * self.m
+            last = first + self.m
+            row_of = np.repeat(np.arange(self.M.shape[0]), np.diff(self.M.indptr))
+            constrained = (
+                ((row_of >= first) & (row_of < last))
+                | ((self.M.indices >= first) & (self.M.indices < last))
+            )
+            self.M.data[constrained] = 0.0
+            keys = np.arange(first, last, dtype=np.int64) * self._N + np.arange(first, last)
+            diag_pos = np.searchsorted(self._M_keys, keys)
+            if np.any(diag_pos >= self.M.data.size) or not np.all(self._M_keys[diag_pos] == keys):
+                raise RuntimeError("failed to locate pinned imaginary-DC diagonal")
+            self.M.data[diag_pos] = 1.0
         self.last_assembly_runtime_s = time.perf_counter() - t0
+
+        return self.M
+
+    def refactor(self, tangent) -> None:
+        """Rebuild M.data from the current tangent gamma(t) and factor it."""
+        self.assemble_matrix(tangent)
         self._factor()
 
     # ------------------------------------------------------------------ band

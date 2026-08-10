@@ -32,6 +32,7 @@ import scipy.sparse as sp
 import scipy.sparse.linalg as spla
 
 from .. import hb
+from ..problem import pin_imaginary_dc_coordinates
 
 from .schur_partition import (
     SchurPartition,
@@ -277,16 +278,10 @@ class SchurReducedProblem:
         one iteration). Requires pypardiso for the full speedup; falls back to
         SuperLU otherwise (still benefits from assembly reuse).
 
-        The cached scatter implementation historically assumed every mode was a
-        positive phasor.  Use the explicit assembly path when dynamic DC is
-        present until the cached pattern has a dedicated real-only DC block.
-        This preserves the exact operator and avoids silently preconditioning
-        the wrong Newton system.
+        The cached scatter implementation includes a dedicated real-only DC
+        column when mode zero is present, so the same assembly-reuse path is
+        valid for dynamic-DC bases as for positive-frequency bases.
         """
-        if 0 in self.mode_keys:
-            return self.assemble_real_coupled_preconditioner(
-                self.spectral_tangent_state(tangent)
-            )
         from .fast_coupled import FastCoupledPreconditioner
 
         fc = getattr(self.part, "_fast_coupled", None)
@@ -357,7 +352,9 @@ class SchurReducedProblem:
             jii.append(rii)
         top = sp.bmat([[sp.bmat(jrr), sp.bmat(jri)]])
         bot = sp.bmat([[sp.bmat(jir), sp.bmat(jii)]])
-        return spla.splu(sp.bmat([[top], [bot]], format="csc"))
+        matrix = sp.bmat([[top], [bot]], format="csc")
+        matrix = pin_imaginary_dc_coordinates(matrix, modes_int, self.n).tocsc()
+        return spla.splu(matrix)
 
 
 def build_schur_problem(

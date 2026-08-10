@@ -17,6 +17,7 @@ import argparse
 import csv
 import json
 import math
+from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -490,16 +491,48 @@ def decay_aware_stroboscopic_classification(strobe: dict[str, Any]) -> dict[str,
     return {"class": cls, "trend_b": b, "tau_periods": tau, "window_slopes": slopes}
 
 
+def classify_td_result(result: dict[str, Any]) -> str:
+    """Map H1 diagnostics to a conservative hybrid-column classification.
+
+    A broadband-looking finite hold is not evidence of a physical transition
+    when the decay-aware test still sees relaxation.  Keep that distinction at
+    the adapter boundary so the column policy cannot accidentally promote a
+    slow transient to a physical boundary.
+    """
+    raw = str(result.get("classification", ""))
+    decay_class = str((result.get("decay_aware") or {}).get("class", ""))
+    if raw in {"QUASIPERIODIC_OR_PERIOD_N", "BROADBAND_OR_CHAOTIC"}:
+        if decay_class in {"UNRESOLVED_SLOW_RELAXATION", "RELAXING_TO_PERIOD1"}:
+            return "UNRESOLVED_SLOW_RELAXATION"
+    return raw
+
+
 def project_periodic_state(
     system: TransientSystem, dense_state: Any, final_theta: float,
-    modes: np.ndarray, current: float,
+    modes: np.ndarray, current: float, *,
+    projection_periods: int = 5,
+    samples_per_period: int = 64,
+    solve_hb: bool = True,
+    preconditioner: str = "real_coupled",
 ) -> dict[str, Any]:
-    """Project one settled pump period and attempt a fixed-drive HB solve."""
-    grid = HarmonicGrid(modes=modes, nt=40, omega=system.omega)
+    """Project several settled periods and diagnose a fixed-drive HB solve.
+
+    Averaging the Fourier coefficients over several periods suppresses TD
+    integration noise without storing the full transient.  The projection
+    sampling is independent of the transient output sampling and is enlarged
+    automatically to resolve the highest retained mode.
+    """
+    if projection_periods < 1 or samples_per_period < 2:
+        raise ValueError("projection periods and samples must be positive")
+    nt = max(int(samples_per_period), 2 * int(np.max(modes)) + 4)
+    grid = HarmonicGrid(modes=modes, nt=nt, omega=system.omega)
     projected: list[np.ndarray] = []
     waveforms: list[np.ndarray] = []
-    for period in range(5):
-        theta = final_theta - (period + 1) * 2.0 * math.pi + 2.0 * math.pi * np.arange(40) / 40.0
+    for period in range(projection_periods):
+        theta = (
+            final_theta - (period + 1) * 2.0 * math.pi
+            + 2.0 * math.pi * np.arange(nt) / nt
+        )
         states = dense_state(theta)
         x_t = np.asarray([
             system.phi0 * system.unpack(states[:, i])[0]
@@ -508,28 +541,44 @@ def project_periodic_state(
         waveforms.append(x_t)
         projected.append(grid.project_positive(x_t))
     X_seed = np.mean(projected, axis=0)
-    x_t = waveforms[-1]
     x_reprojected = grid.synthesize(X_seed)
-    projection_error = float(
-        np.linalg.norm(x_reprojected - x_t) / max(np.linalg.norm(x_t), 1e-300)
-    )
+    projection_error = float(np.mean([
+        np.linalg.norm(x_reprojected - waveform)
+        / max(np.linalg.norm(waveform), 1e-300)
+        for waveform in waveforms
+    ]))
+    x_t = waveforms[-1]
     problem = FullPumpProblem(
         system.circuit.C, system.circuit.G, system.circuit.K,
         system.circuit.Bphi, system.branch, grid, system.pump_node, current,
     )
+    projected_norms = problem.norms(X_seed, 1.0, True)
+    if not solve_hb:
+        return {
+            "projection_error_rms": projection_error,
+            "projection_periods": int(projection_periods),
+            "projection_samples_per_period": int(nt),
+            "projected_hb_coeff_rel": float(projected_norms["coeff_rel"]),
+            "projected_hb_time_rel": float(projected_norms["time_rel"]),
+            "hb_converged": False,
+            "hb_skipped": True,
+            "hb_state": X_seed,
+            "hb_state_is_td_projection": True,
+        }
     solver = HarmonicNewtonKrylovSolver(NewtonKrylovSettings(
         newton_tol=1e-9, max_newton=12, gmres_rtol=1e-7, gmres_atol=0.0,
         gmres_restart=60, gmres_maxiter=80, min_alpha=1.0 / 1024.0,
-        preconditioner="real_coupled", compute_time_residual=True,
+        preconditioner=preconditioner, compute_time_residual=True,
         verbose=False, continuation_predictor="none", jvp_mode="aft",
         stall_ratio=0.8, stall_patience=4, solve_deadline_s=180.0,
     ))
     X_hb, report = solver.solve_one(problem, X_seed, 1.0)
-    projected_norms = problem.norms(X_seed, 1.0, True)
     transient_phi = system.circuit.Bphi.T @ x_t.T
     hb_phi = problem.branch_flux_time(X_hb).T
     return {
         "projection_error_rms": projection_error,
+        "projection_periods": int(projection_periods),
+        "projection_samples_per_period": int(nt),
         "projected_hb_coeff_rel": float(projected_norms["coeff_rel"]),
         "projected_hb_time_rel": float(projected_norms["time_rel"]),
         "hb_converged": bool(report.converged),
@@ -540,7 +589,11 @@ def project_periodic_state(
         "transient_rj": float(np.max(np.abs(np.sin(transient_phi / system.phi0)))),
         "hb_rj": float(np.max(np.abs(np.sin(hb_phi / system.phi0)))),
         "hb_solution_summary": summarize_solution(problem, X_hb),
-        "hb_state": X_hb,
+        # The TD projection is the authoritative handoff seed.  The failed
+        # Newton iterate above is diagnostic only; returning it here can move
+        # the later residual homotopy away from the physical TD orbit.
+        "hb_state": X_seed,
+        "hb_state_is_td_projection": True,
     }
 
 
@@ -624,8 +677,20 @@ def implicit_trapezoid_ramp(
     step_theta: float, newton_tol: float = 1e-6, max_newton: int = 10,
     checkpoint_dir: Path | None = None, checkpoint_periods: int = 10,
     initial_theta: float = 0.0,
+    min_step_theta: float = 1.0 / 32.0,
 ) -> tuple[np.ndarray, np.ndarray, dict[str, Any]]:
-    """Integrate the full index-one DAE with sparse implicit trapezoid steps."""
+    """Integrate the full index-one DAE with adaptive trapezoid steps.
+
+    The physical DAE is unchanged.  If Newton cannot correct one step, the
+    step is retried from the last accepted state at half the step size.  This
+    is essential near a junction tangent singularity, where a fixed large
+    step can fail even though the trajectory remains finite and below
+    ``|I_J| = I_c``.
+    """
+    if step_theta <= 0.0 or min_step_theta <= 0.0:
+        raise ValueError("step sizes must be positive")
+    if min_step_theta > step_theta:
+        min_step_theta = step_theta
     q, p = system.unpack(y0)
     if system.algebraic.size and not system.full_state:
         p[system.algebraic] = system.algebraic_velocity(
@@ -640,53 +705,73 @@ def implicit_trapezoid_ramp(
     state_values = [system.pack(q, p)]
     theta = initial_theta
     newton_total = 0
+    step_reductions = 0
+    min_step_used = step_theta
+    next_step_theta = step_theta
     next_checkpoint = (initial_theta + float(checkpoint_periods) * 2.0 * math.pi
                        if checkpoint_dir else math.inf)
     while theta < total_theta - 1e-12:
-        h = min(step_theta, total_theta - theta)
         q_old, p_old = q.copy(), p.copy()
-        q_trial, p_trial = q_old + h * p_old, p_old.copy()
-        source_mid = system.source(theta + 0.5 * h, start_current, target_current, ramp_theta)
-        converged = False
-        for _ in range(max_newton):
-            flux = system.phi0 * (system.circuit.Bphi.T @ q_trial)
-            current_new = np.asarray(system.branch.current(flux[None, :]))[0]
-            flux_old = system.phi0 * (system.circuit.Bphi.T @ q_old)
-            current_old = np.asarray(system.branch.current(flux_old[None, :]))[0]
-            dynamic = system.circuit.C @ (system.omega**2 * (p_trial - p_old) / h)
-            dynamic = dynamic + system.circuit.G @ (system.omega * (p_trial + p_old) / 2.0)
-            dynamic = dynamic + system.circuit.K @ ((q_trial + q_old) / 2.0)
-            dynamic = dynamic + system.circuit.Bphi @ (current_new + current_old) / (2.0 * system.phi0)
-            dynamic = dynamic - source_mid / system.phi0
-            kinematic = q_trial - q_old - h * (p_trial + p_old) / 2.0
-            scale_dynamic = max(abs(target_current / system.phi0), 1.0)
-            norm = max(
-                float(np.linalg.norm(dynamic) / math.sqrt(n) / scale_dynamic),
-                float(np.linalg.norm(kinematic) / math.sqrt(n)),
-            )
-            if norm < newton_tol:
-                converged = True
+        h = min(next_step_theta, total_theta - theta)
+        while True:
+            q_trial, p_trial = q_old + h * p_old, p_old.copy()
+            source_mid = system.source(theta + 0.5 * h, start_current, target_current, ramp_theta)
+            converged = False
+            for _ in range(max_newton):
+                flux = system.phi0 * (system.circuit.Bphi.T @ q_trial)
+                current_new = np.asarray(system.branch.current(flux[None, :]))[0]
+                flux_old = system.phi0 * (system.circuit.Bphi.T @ q_old)
+                current_old = np.asarray(system.branch.current(flux_old[None, :]))[0]
+                dynamic = system.circuit.C @ (system.omega**2 * (p_trial - p_old) / h)
+                dynamic = dynamic + system.circuit.G @ (system.omega * (p_trial + p_old) / 2.0)
+                dynamic = dynamic + system.circuit.K @ ((q_trial + q_old) / 2.0)
+                dynamic = dynamic + system.circuit.Bphi @ (current_new + current_old) / (2.0 * system.phi0)
+                dynamic = dynamic - source_mid / system.phi0
+                kinematic = q_trial - q_old - h * (p_trial + p_old) / 2.0
+                scale_dynamic = max(abs(target_current / system.phi0), 1.0)
+                norm = max(
+                    float(np.linalg.norm(dynamic) / math.sqrt(n) / scale_dynamic),
+                    float(np.linalg.norm(kinematic) / math.sqrt(n)),
+                )
+                if norm < newton_tol:
+                    converged = True
+                    break
+                tangent = np.asarray(system.branch.tangent(flux[None, :]))[0]
+                dynamic_q = (
+                    system.circuit.K / 2.0
+                    + system.circuit.Bphi @ sp.diags(tangent) @ system.circuit.Bphi.T / 2.0
+                )
+                dynamic_p = system.circuit.C * (system.omega**2 / h) + system.circuit.G * (system.omega / 2.0)
+                jac = sp.bmat(
+                    [[dynamic_q, dynamic_p], [sp.eye(n, format="csr"), -h * sp.eye(n, format="csr") / 2.0]],
+                    format="csc",
+                )
+                delta = spla.spsolve(jac, -np.concatenate((dynamic, kinematic)))
+                q_trial += delta[:n]
+                p_trial += delta[n:]
+                newton_total += 1
+            if converged:
+                # Retain a reduced step after entering the stiff near-Ic
+                # regime instead of retrying the original large step at every
+                # subsequent interval.
+                next_step_theta = h
                 break
-            tangent = np.asarray(system.branch.tangent(flux[None, :]))[0]
-            dynamic_q = (
-                system.circuit.K / 2.0
-                + system.circuit.Bphi @ sp.diags(tangent) @ system.circuit.Bphi.T / 2.0
-            )
-            dynamic_p = system.circuit.C * (system.omega**2 / h) + system.circuit.G * (system.omega / 2.0)
-            zero = sp.csr_matrix((n, n))
-            jac = sp.bmat(
-                [[dynamic_q, dynamic_p], [sp.eye(n, format="csr"), -h * sp.eye(n, format="csr") / 2.0]],
-                format="csc",
-            )
-            delta = spla.spsolve(jac, -np.concatenate((dynamic, kinematic)))
-            q_trial += delta[:n]
-            p_trial += delta[n:]
-            newton_total += 1
-        if not converged:
-            return np.asarray(theta_values), np.asarray(state_values).T, {
-                "success": False, "message": f"implicit trapezoid Newton failed at theta={theta:.6g}",
-                "steps": len(theta_values) - 1, "newton_iterations": newton_total,
-            }
+            if h <= min_step_theta * (1.0 + 1e-12):
+                return np.asarray(theta_values), np.asarray(state_values).T, {
+                    "success": False,
+                    "message": (
+                        f"implicit trapezoid Newton failed at theta={theta:.6g} "
+                        f"at minimum step h={h:.6g}"
+                    ),
+                    "steps": len(theta_values) - 1,
+                    "newton_iterations": newton_total,
+                    "step_reductions": step_reductions,
+                    "min_step_used": min_step_used,
+                }
+            h = max(min_step_theta, 0.5 * h)
+            next_step_theta = h
+            step_reductions += 1
+            min_step_used = min(min_step_used, h)
         q, p = q_trial, p_trial
         if system.full_state:
             system.project_algebraic_state(q, p, system.source(theta + h, start_current, target_current, ramp_theta))
@@ -699,7 +784,7 @@ def implicit_trapezoid_ramp(
                 checkpoint_dir / "transient_restart.npz",
                 theta=np.asarray(theta), y=state_values[-1],
                 start_current=np.asarray(start_current), target_current=np.asarray(target_current),
-                ramp_theta=np.asarray(ramp_theta), step_theta=np.asarray(step_theta),
+                ramp_theta=np.asarray(ramp_theta), step_theta=np.asarray(next_step_theta),
             )
             (checkpoint_dir / "transient_restart.json").write_text(json.dumps({
                 "theta": theta, "period": theta / (2.0 * math.pi),
@@ -708,8 +793,262 @@ def implicit_trapezoid_ramp(
             next_checkpoint += float(checkpoint_periods) * 2.0 * math.pi
     return np.asarray(theta_values), np.asarray(state_values).T, {
         "success": True, "message": "success", "steps": len(theta_values) - 1,
-        "newton_iterations": newton_total,
+        "newton_iterations": newton_total, "step_reductions": step_reductions,
+        "min_step_used": min_step_used,
     }
+
+
+def implicit_trapezoid_ramp_bounded(
+    system: TransientSystem, y0: np.ndarray, start_current: float,
+    target_current: float, total_theta: float, ramp_theta: float,
+    step_theta: float, newton_tol: float = 1e-6, max_newton: int = 10,
+    checkpoint_dir: Path | None = None, checkpoint_periods: int = 10,
+    initial_theta: float = 0.0, min_step_theta: float = 1.0 / 32.0,
+    sample_count: int = 256, history_states: int = 1024,
+) -> tuple[np.ndarray, np.ndarray, dict[str, Any]]:
+    """Memory-bounded implicit trapezoid integration for long compact holds.
+
+    The legacy integrator stores every full state.  For this circuit that is
+    approximately 100 kB per accepted step, so a several-hundred-period hold
+    consumes gigabytes before post-processing starts.  This path stores only:
+
+    * uniformly sampled states for compact observables;
+    * three stroboscopic states for d1/d2/d3;
+    * a bounded final state ring for projection and phase diagnostics; and
+    * scalar pump-flux history for the late spectrum.
+
+    The physical equations, Newton solve, step control, and restart format are
+    identical to ``implicit_trapezoid_ramp``.
+    """
+    if step_theta <= 0.0 or min_step_theta <= 0.0:
+        raise ValueError("step sizes must be positive")
+    if min_step_theta > step_theta:
+        min_step_theta = step_theta
+    if sample_count < 2 or history_states < 8:
+        raise ValueError("bounded storage limits are too small")
+
+    q, p = system.unpack(y0)
+    if system.algebraic.size and not system.full_state:
+        p[system.algebraic] = system.algebraic_velocity(
+            q, p[system.differential],
+            system.source(0.0, start_current, target_current, ramp_theta),
+        )
+    elif system.full_state:
+        system.project_algebraic_state(
+            q, p, system.source(0.0, start_current, target_current, ramp_theta)
+        )
+
+    initial_state = system.pack(q, p)
+    sample_targets = np.linspace(
+        initial_theta, total_theta, int(sample_count) + 1
+    )
+    sampled_theta = [float(initial_theta)]
+    sampled_states = [np.array(initial_state, copy=True)]
+    next_sample = 1
+    # Fixed phase grids avoid allocating a full state on every accepted
+    # Newton step.  The state ring spans the final 20 pump periods and is
+    # sufficient for late-time phase diagnostics and HB projection.
+    history_step = 2.0 * math.pi / 32.0
+    history_start = max(float(initial_theta), total_theta - 20.0 * 2.0 * math.pi)
+    history = deque(maxlen=int(history_states))
+    next_history = history_start
+    if next_history <= initial_theta + 1e-12:
+        history.append((float(initial_theta), np.array(initial_state, copy=True)))
+        next_history += history_step
+    scalar_step = 2.0 * math.pi / 128.0
+    scalar_start = max(float(initial_theta), total_theta - 20.0 * 2.0 * math.pi)
+    scalar_history = deque(maxlen=max(2048, int(sample_count) * 8))
+    next_scalar = scalar_start
+    if next_scalar <= initial_theta + 1e-12:
+        scalar_history.append((
+            float(initial_theta), float(system.phi0 * q[system.pump_node])
+        ))
+        next_scalar += scalar_step
+
+    strobe_theta: list[float] = []
+    strobe_values: dict[str, list[float]] = {"d1": [], "d2": [], "d3": []}
+    strobe_history: deque[np.ndarray] = deque(maxlen=3)
+    next_strobe = max(float(ramp_theta), float(initial_theta))
+    if next_strobe <= initial_theta + 1e-12:
+        strobe_theta.append(float(initial_theta))
+        strobe_history.append(np.array(initial_state, copy=True))
+        next_strobe += 2.0 * math.pi
+
+    def payload() -> dict[str, Any]:
+        d = {key: np.asarray(value, dtype=float) for key, value in strobe_values.items()}
+        d1 = d["d1"]
+        tail = d1[max(0, d1.size // 2):]
+        return {
+            "_bounded_sample_theta": np.asarray(sampled_theta, dtype=float),
+            "_bounded_sample_states": np.asarray(sampled_states, dtype=float).T,
+            "_bounded_strobe_theta": np.asarray(strobe_theta, dtype=float),
+            "_bounded_strobe": {
+                "periods": np.arange(len(strobe_theta), dtype=float).tolist(),
+                "d1": d["d1"].tolist(), "d2": d["d2"].tolist(),
+                "d3": d["d3"].tolist(),
+                "tail_median": float(np.median(tail)) if tail.size else float("inf"),
+                "tail_max": float(np.max(tail)) if tail.size else float("inf"),
+                "tail_d2_max": float(np.max(d["d2"])) if d["d2"].size else None,
+                "tail_d3_max": float(np.max(d["d3"])) if d["d3"].size else None,
+            },
+            "_bounded_history_theta": np.asarray([x[0] for x in history], dtype=float),
+            "_bounded_history_states": np.column_stack([x[1] for x in history]),
+            "_bounded_scalar_theta": np.asarray([x[0] for x in scalar_history], dtype=float),
+            "_bounded_scalar_pump_flux": np.asarray([x[1] for x in scalar_history], dtype=float),
+        }
+
+    def finish(success: bool, message: str, steps: int) -> tuple[np.ndarray, np.ndarray, dict[str, Any]]:
+        result: dict[str, Any] = {
+            "success": success, "message": message, "steps": steps,
+            "newton_iterations": newton_total, "step_reductions": step_reductions,
+            "min_step_used": min_step_used,
+        }
+        result.update(payload())
+        return (
+            result["_bounded_sample_theta"],
+            result["_bounded_sample_states"],
+            result,
+        )
+
+    n = system.n
+    theta = float(initial_theta)
+    steps = 0
+    newton_total = 0
+    step_reductions = 0
+    min_step_used = step_theta
+    next_step_theta = step_theta
+    next_checkpoint = (
+        initial_theta + float(checkpoint_periods) * 2.0 * math.pi
+        if checkpoint_dir else math.inf
+    )
+
+    while theta < total_theta - 1e-12:
+        q_old, p_old = q.copy(), p.copy()
+        previous_theta = theta
+        previous_state = system.pack(q_old, p_old)
+        h = min(next_step_theta, total_theta - theta)
+        while True:
+            q_trial, p_trial = q_old + h * p_old, p_old.copy()
+            source_mid = system.source(
+                theta + 0.5 * h, start_current, target_current, ramp_theta
+            )
+            converged = False
+            for _ in range(max_newton):
+                flux = system.phi0 * (system.circuit.Bphi.T @ q_trial)
+                current_new = np.asarray(system.branch.current(flux[None, :]))[0]
+                flux_old = system.phi0 * (system.circuit.Bphi.T @ q_old)
+                current_old = np.asarray(system.branch.current(flux_old[None, :]))[0]
+                dynamic = system.circuit.C @ (system.omega**2 * (p_trial - p_old) / h)
+                dynamic = dynamic + system.circuit.G @ (system.omega * (p_trial + p_old) / 2.0)
+                dynamic = dynamic + system.circuit.K @ ((q_trial + q_old) / 2.0)
+                dynamic = dynamic + system.circuit.Bphi @ (current_new + current_old) / (2.0 * system.phi0)
+                dynamic = dynamic - source_mid / system.phi0
+                kinematic = q_trial - q_old - h * (p_trial + p_old) / 2.0
+                scale_dynamic = max(abs(target_current / system.phi0), 1.0)
+                norm = max(
+                    float(np.linalg.norm(dynamic) / math.sqrt(n) / scale_dynamic),
+                    float(np.linalg.norm(kinematic) / math.sqrt(n)),
+                )
+                if norm < newton_tol:
+                    converged = True
+                    break
+                tangent = np.asarray(system.branch.tangent(flux[None, :]))[0]
+                dynamic_q = (
+                    system.circuit.K / 2.0
+                    + system.circuit.Bphi @ sp.diags(tangent) @ system.circuit.Bphi.T / 2.0
+                )
+                dynamic_p = system.circuit.C * (system.omega**2 / h) + system.circuit.G * (system.omega / 2.0)
+                jac = sp.bmat(
+                    [[dynamic_q, dynamic_p],
+                     [sp.eye(n, format="csr"), -h * sp.eye(n, format="csr") / 2.0]],
+                    format="csc",
+                )
+                delta = spla.spsolve(jac, -np.concatenate((dynamic, kinematic)))
+                q_trial += delta[:n]
+                p_trial += delta[n:]
+                newton_total += 1
+            if converged:
+                next_step_theta = h
+                break
+            if h <= min_step_theta * (1.0 + 1e-12):
+                return finish(
+                    False,
+                    f"implicit trapezoid Newton failed at theta={theta:.6g} "
+                    f"at minimum step h={h:.6g}",
+                    steps,
+                )
+            h = max(min_step_theta, 0.5 * h)
+            next_step_theta = h
+            step_reductions += 1
+            min_step_used = min(min_step_used, h)
+
+        q, p = q_trial, p_trial
+        if system.full_state:
+            system.project_algebraic_state(
+                q, p, system.source(theta + h, start_current, target_current, ramp_theta)
+            )
+        theta += h
+        steps += 1
+        current_state = system.pack(q, p)
+        while next_sample < sample_targets.size and sample_targets[next_sample] <= theta + 1e-12:
+            target_theta = float(sample_targets[next_sample])
+            alpha = (target_theta - previous_theta) / max(theta - previous_theta, 1e-300)
+            sampled_theta.append(target_theta)
+            sampled_states.append(np.asarray(
+                previous_state + alpha * (current_state - previous_state), dtype=float
+            ))
+            next_sample += 1
+
+        while next_history <= theta + 1e-12:
+            alpha = (next_history - previous_theta) / max(theta - previous_theta, 1e-300)
+            sampled = np.asarray(
+                previous_state + alpha * (current_state - previous_state), dtype=float
+            )
+            history.append((float(next_history), sampled))
+            next_history += history_step
+
+        while next_scalar <= theta + 1e-12:
+            alpha = (next_scalar - previous_theta) / max(theta - previous_theta, 1e-300)
+            sampled = np.asarray(
+                previous_state + alpha * (current_state - previous_state), dtype=float
+            )
+            sampled_q, _ = system.unpack(sampled)
+            scalar_history.append((
+                float(next_scalar), float(system.phi0 * sampled_q[system.pump_node])
+            ))
+            next_scalar += scalar_step
+
+        while next_strobe <= theta + 1e-12 and next_strobe <= total_theta + 1e-12:
+            alpha = (next_strobe - previous_theta) / max(theta - previous_theta, 1e-300)
+            sampled = np.asarray(
+                previous_state + alpha * (current_state - previous_state), dtype=float
+            )
+            strobe_theta.append(float(next_strobe))
+            for multiple, key in ((1, "d1"), (2, "d2"), (3, "d3")):
+                if len(strobe_history) >= multiple:
+                    reference = strobe_history[-multiple]
+                    scale = max(float(np.linalg.norm(reference)), 1.0)
+                    strobe_values[key].append(
+                        float(np.linalg.norm(sampled - reference) / scale)
+                    )
+            strobe_history.append(np.array(sampled, copy=True))
+            next_strobe += 2.0 * math.pi
+
+        if checkpoint_dir is not None and theta + 1e-10 >= next_checkpoint:
+            checkpoint_dir.mkdir(parents=True, exist_ok=True)
+            np.savez_compressed(
+                checkpoint_dir / "transient_restart.npz",
+                theta=np.asarray(theta), y=current_state,
+                start_current=np.asarray(start_current), target_current=np.asarray(target_current),
+                ramp_theta=np.asarray(ramp_theta), step_theta=np.asarray(next_step_theta),
+            )
+            (checkpoint_dir / "transient_restart.json").write_text(json.dumps({
+                "theta": theta, "period": theta / (2.0 * math.pi),
+                "steps": steps, "checkpoint_periods": checkpoint_periods,
+            }, indent=2), encoding="utf-8")
+            next_checkpoint += float(checkpoint_periods) * 2.0 * math.pi
+
+    return finish(True, "success", steps)
 
 
 def plot_results(outdir: Path, data: dict[str, np.ndarray], spectrum: dict[str, np.ndarray]) -> None:
@@ -817,6 +1156,7 @@ def run_experiment(args: argparse.Namespace) -> dict[str, Any]:
         y0 = system.pack(q0, p0)
     ramp_theta = 2.0 * math.pi * args.ramp_periods
     total_theta = 2.0 * math.pi * (args.ramp_periods + args.hold_periods)
+    compact_output = bool(getattr(args, "compact_output", False))
     if args.method == "implicit_euler":
         sample_theta, states, integrator = implicit_euler_ramp(
             system, y0, start_current, args.target_current_a, total_theta,
@@ -824,13 +1164,37 @@ def run_experiment(args: argparse.Namespace) -> dict[str, Any]:
         )
         dense_state = lambda query: np.vstack([np.interp(query, sample_theta, row) for row in states])
     elif args.method == "implicit_trapezoid":
-        sample_theta, states, integrator = implicit_trapezoid_ramp(
-            system, y0, start_current, args.target_current_a, total_theta,
-            ramp_theta, args.max_step, args.atol, args.max_newton,
-            checkpoint_dir=outdir / "restart_checkpoints",
-            checkpoint_periods=args.checkpoint_periods,
-        )
-        dense_state = lambda query: np.vstack([np.interp(query, sample_theta, row) for row in states])
+        if compact_output:
+            sample_theta, states, integrator = implicit_trapezoid_ramp_bounded(
+                system, y0, start_current, args.target_current_a, total_theta,
+                ramp_theta, args.max_step, args.atol, args.max_newton,
+                checkpoint_dir=outdir / "restart_checkpoints",
+                checkpoint_periods=args.checkpoint_periods,
+                min_step_theta=getattr(args, "min_step_theta", 1.0 / 32.0),
+                sample_count=int(getattr(args, "compact_sample_count", 256)),
+                history_states=int(getattr(args, "compact_history_states", 1024)),
+            )
+            integrator.pop("_bounded_sample_theta")
+            integrator.pop("_bounded_sample_states")
+            bounded_strobe = integrator.pop("_bounded_strobe")
+            bounded_strobe_theta = integrator.pop("_bounded_strobe_theta")
+            bounded_history_theta = integrator.pop("_bounded_history_theta")
+            bounded_history_states = integrator.pop("_bounded_history_states")
+            bounded_scalar_theta = integrator.pop("_bounded_scalar_theta")
+            bounded_scalar_pump_flux = integrator.pop("_bounded_scalar_pump_flux")
+            dense_state = lambda query: np.vstack([
+                np.interp(query, bounded_history_theta, row)
+                for row in bounded_history_states
+            ])
+        else:
+            sample_theta, states, integrator = implicit_trapezoid_ramp(
+                system, y0, start_current, args.target_current_a, total_theta,
+                ramp_theta, args.max_step, args.atol, args.max_newton,
+                checkpoint_dir=outdir / "restart_checkpoints",
+                checkpoint_periods=args.checkpoint_periods,
+                min_step_theta=getattr(args, "min_step_theta", 1.0 / 32.0),
+            )
+            dense_state = lambda query: np.vstack([np.interp(query, sample_theta, row) for row in states])
     else:
         solve_options: dict[str, Any] = {
             "method": args.method, "rtol": args.rtol, "atol": args.atol,
@@ -851,7 +1215,6 @@ def run_experiment(args: argparse.Namespace) -> dict[str, Any]:
     data["mu"] = np.asarray([system.source(x, start_current, args.target_current_a, ramp_theta)[system.pump_node] for x in sample_theta])
     data["source_current_a"] = np.array(data["mu"], copy=True)
     data["time_s"] = sample_theta / system.omega
-    compact_output = bool(getattr(args, "compact_output", False))
     if compact_output:
         stride = max(1, sample_theta.size // 256)
         np.savez_compressed(
@@ -868,37 +1231,73 @@ def run_experiment(args: argparse.Namespace) -> dict[str, Any]:
             writer = csv.writer(handle); writer.writerow(data.keys())
             writer.writerows(zip(*data.values()))
     hold_start = 2.0 * math.pi * args.ramp_periods
-    strobe_theta = np.arange(hold_start, total_theta + 0.1, 2.0 * math.pi)
-    strobe_states = dense_state(strobe_theta)
-    strobe = stroboscopic_diagnostics(system, strobe_theta, strobe_states, args.hold_periods)
+    if compact_output and args.method == "implicit_trapezoid":
+        strobe_theta = bounded_strobe_theta
+        strobe = bounded_strobe
+    else:
+        strobe_theta = np.arange(hold_start, total_theta + 0.1, 2.0 * math.pi)
+        strobe_states = dense_state(strobe_theta)
+        strobe = stroboscopic_diagnostics(system, strobe_theta, strobe_states, args.hold_periods)
     last_theta = np.linspace(total_theta - 2.0 * math.pi * min(args.hold_periods, 20), total_theta, 2048)
-    last_states = dense_state(last_theta)
-    pump_flux = np.asarray([system.phi0 * system.unpack(last_states[:, i])[0][system.pump_node] for i in range(last_states.shape[1])])
+    if compact_output and args.method == "implicit_trapezoid":
+        pump_flux = np.interp(last_theta, bounded_scalar_theta, bounded_scalar_pump_flux)
+        phase_theta = bounded_history_theta
+        phase_states = bounded_history_states
+    else:
+        last_states = dense_state(last_theta)
+        pump_flux = np.asarray([
+            system.phi0 * system.unpack(last_states[:, i])[0][system.pump_node]
+            for i in range(last_states.shape[1])
+        ])
+        phase_theta = last_theta
+        phase_states = last_states
     centered = pump_flux - np.mean(pump_flux)
     fft = np.fft.rfft(centered) / centered.size
     freq = np.fft.rfftfreq(centered.size, d=(last_theta[1] - last_theta[0]) / system.omega) / 1e9
     spectrum = {"frequency_ghz": freq, "amplitude": np.abs(fft)}
     np.savez_compressed(outdir / "late_time_spectrum.npz", **spectrum)
     phase_series = np.asarray([
-        system.circuit.Bphi.T @ system.unpack(last_states[:, i])[0]
-        for i in range(last_states.shape[1])
+        system.circuit.Bphi.T @ system.unpack(phase_states[:, i])[0]
+        for i in range(phase_states.shape[1])
     ])
     unwrapped_phase = np.unwrap(phase_series, axis=0)
-    phase_velocity = np.diff(unwrapped_phase, axis=0) / np.diff(last_theta)[:, None] * system.omega
+    phase_velocity = np.diff(unwrapped_phase, axis=0) / np.diff(phase_theta)[:, None] * system.omega
     mean_phase_velocity = float(np.mean(phase_velocity))
     phase_winding = float(np.mean(unwrapped_phase[-1] - unwrapped_phase[0]) / (2.0 * math.pi))
     if not compact_output:
         np.savez_compressed(outdir / "late_time_phase.npz", theta=last_theta, phase=phase_series, unwrapped_phase=unwrapped_phase)
-    classification = classify_state(
+    raw_classification = classify_state(
         strobe, mean_phase_velocity, bool(integrator["success"]), phase_winding
     )
     decay = decay_aware_stroboscopic_classification(strobe)
+    classification = classify_td_result({
+        "classification": raw_classification,
+        "decay_aware": decay,
+    })
     branch_transfer = None
-    if classification == "PERIOD_1":
+    projection_forced = bool(getattr(args, "force_periodic_projection", False))
+    if classification == "PERIOD_1" or projection_forced:
+        checkpoint_mode_array = np.asarray(
+            hb_report["metadata"]["pump_modes"], dtype=int
+        )
+        if getattr(args, "projection_all_modes", False):
+            projection_modes = np.arange(
+                0, int(np.max(checkpoint_mode_array)) + 1, dtype=int
+            )
+        elif getattr(args, "projection_dynamic_dc", False):
+            projection_modes = np.asarray(
+                [0, *[int(mode) for mode in checkpoint_mode_array]], dtype=int
+            )
+        else:
+            projection_modes = checkpoint_mode_array
         branch_transfer = project_periodic_state(
             system, dense_state, float(sample_theta[-1]),
-            np.asarray(hb_report["metadata"]["pump_modes"], dtype=int),
+            projection_modes,
             args.target_current_a,
+            projection_periods=getattr(args, "projection_periods", 5),
+            samples_per_period=getattr(args, "projection_samples_per_period", 64),
+            solve_hb=not bool(getattr(args, "projection_only", False)),
+            preconditioner=getattr(args, "projection_preconditioner", "real_coupled"),
         )
         if branch_transfer is not None and "hb_state" in branch_transfer:
             projected_state = np.asarray(branch_transfer.pop("hb_state"))
@@ -906,21 +1305,35 @@ def run_experiment(args: argparse.Namespace) -> dict[str, Any]:
                 outdir / "td_projected_state.npz",
                 X_real=projected_state.real,
                 X_imag=projected_state.imag,
-                modes=checkpoint_modes,
+                modes=projection_modes,
                 pump_current_a=args.target_current_a,
             )
             branch_transfer["projected_state_path"] = str(
                 outdir / "td_projected_state.npz"
             )
+        if branch_transfer is not None:
+            branch_transfer["projection_modes"] = projection_modes.tolist()
+            branch_transfer["projection_only"] = bool(
+                getattr(args, "projection_only", False)
+            )
+            branch_transfer["projection_forced"] = (
+                projection_forced and classification != "PERIOD_1"
+            )
     if not integrator["success"]:
         final_status = "TRANSIENT_NUMERICAL_BLOCKER"
         blocker_reason = integrator["message"]
     elif branch_transfer is not None and branch_transfer["hb_converged"]:
-        final_status = "HIGH_DRIVE_HB_BRANCH_FOUND"
+        if branch_transfer.get("projection_forced", False):
+            final_status = "FORCED_PROJECTED_HB_ROOT"
+        else:
+            final_status = "HIGH_DRIVE_HB_BRANCH_FOUND"
         blocker_reason = None
     elif classification in {"PERIOD_2", "PERIOD_3", "QUASIPERIODIC_OR_PERIOD_N", "RUNNING_PHASE", "BROADBAND_OR_CHAOTIC"}:
         final_status = "REPRODUCIBLE_PHYSICAL_TRANSITION"
         blocker_reason = None
+    elif classification == "UNRESOLVED_SLOW_RELAXATION":
+        final_status = "UNRESOLVED_SLOW_RELAXATION"
+        blocker_reason = "finite hold remains decay-inconclusive"
     else:
         final_status = "TRANSIENT_NUMERICAL_BLOCKER"
         blocker_reason = "period-1 transient did not seed a converged fixed-drive HB root"
@@ -968,12 +1381,77 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--rtol", type=float, default=2e-5)
     parser.add_argument("--atol", type=float, default=1e-3)
     parser.add_argument("--max-step", type=float, default=0.5)
+    parser.add_argument(
+        "--min-step-theta", type=float, default=1.0 / 32.0,
+        help="Minimum implicit-trapezoid step used after adaptive Newton retries.",
+    )
     parser.add_argument("--method", choices=("RK45", "RK23", "BDF", "Radau", "implicit_euler", "implicit_trapezoid"), default="implicit_trapezoid")
     parser.add_argument("--max-newton", type=int, default=12)
     parser.add_argument("--checkpoint-periods", type=int, default=10)
     parser.add_argument(
+        "--projection-periods", type=int, default=5,
+        help="Number of final pump periods averaged for HB projection.",
+    )
+    parser.add_argument(
+        "--projection-samples-per-period", type=int, default=64,
+        help="Independent Fourier projection samples per pump period.",
+    )
+    parser.add_argument(
         "--transient-restart", type=Path, default=None,
         help="resume a local TD bridge from a transient_restart.npz checkpoint",
+    )
+    parser.add_argument(
+        "--compact-output", action="store_true",
+        help=(
+            "store only decimated observables and restart checkpoints; useful "
+            "for long fixed-drive continuation holds"
+        ),
+    )
+    parser.add_argument(
+        "--compact-sample-count", type=int, default=256,
+        help="maximum number of uniformly sampled compact TD states",
+    )
+    parser.add_argument(
+        "--compact-history-states", type=int, default=1024,
+        help="maximum number of late-time full TD states retained for diagnostics",
+    )
+    parser.add_argument(
+        "--force-periodic-projection", action="store_true",
+        help=(
+            "diagnostic only: project an unresolved TD endpoint into PERIOD1 HB "
+            "and report the result without treating it as a physical handoff"
+        ),
+    )
+    parser.add_argument(
+        "--projection-all-modes", action="store_true",
+        help=(
+            "diagnostic only: include mode 0 and all positive modes through "
+            "the checkpoint maximum in the forced HB projection"
+        ),
+    )
+    parser.add_argument(
+        "--projection-dynamic-dc", action="store_true",
+        help=(
+            "diagnostic only: prepend a dynamic mode-0 coefficient to the "
+            "checkpoint harmonic basis"
+        ),
+    )
+    parser.add_argument(
+        "--projection-only", action="store_true",
+        help=(
+            "diagnostic only: compute the requested TD-to-HB projection and "
+            "skip the HB Newton/Krylov correction"
+        ),
+    )
+    parser.add_argument(
+        "--projection-preconditioner",
+        choices=(
+            "real_coupled", "spectral_coupled", "spectral_banded",
+            "spectral_banded_wide",
+            "mean_tangent", "mean_tangent_dc_safe", "linear",
+        ),
+        default="real_coupled",
+        help="preconditioner for the optional diagnostic HB projection",
     )
     parser.add_argument("--audit-only", action="store_true")
     return parser.parse_args(argv)

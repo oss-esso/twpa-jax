@@ -41,6 +41,23 @@ def test_solution_can_preserve_float64_for_restart(tmp_path: Path) -> None:
         assert z["X_imag"].dtype == np.float64
 
 
+def test_validation_status_overrides_newton_status_in_report(tmp_path: Path) -> None:
+    modes = np.array([1], dtype=np.int64)
+    X = np.zeros((1, 2), dtype=np.complex128)
+    write_results(
+        tmp_path,
+        X,
+        reports=[],
+        solution_summary={},
+        metadata={
+            "pump_modes": modes.tolist(),
+            "pump_validation_status": "FAIL_FULL_HARMONIC_RESIDUAL",
+        },
+    )
+    report = (tmp_path / "pump_report.json").read_text(encoding="utf-8")
+    assert '"final_status": "FAIL_FULL_HARMONIC_RESIDUAL"' in report
+
+
 def test_solution_is_compressed(tmp_path: Path) -> None:
     sol_path, _, _ = _write(tmp_path)
     with zipfile.ZipFile(sol_path) as zf:

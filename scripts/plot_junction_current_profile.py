@@ -114,6 +114,15 @@ def main(argv: list[str] | None = None) -> int:
         dc_branch_flux=dc_flux,
     )
     profile = branch_current_profile(problem, X)
+    # Reconstruct phase from the same HB waveform and persisted DC branch
+    # flux.  Omitting the DC term would report the dynamic phase only and can
+    # materially under-report the biased junction phase.
+    dynamic_flux = np.asarray(problem.branch_flux_time(X), dtype=np.float64)
+    dc_flux = np.asarray(problem.dc_branch_flux, dtype=np.float64).reshape(1, -1)
+    phase_rad = (dynamic_flux + dc_flux) / float(problem.branch.phi0)
+    peak_abs_phase_rad = np.max(np.abs(phase_rad), axis=0)
+    rms_phase_rad = np.sqrt(np.mean(phase_rad**2, axis=0))
+    mean_phase_rad = np.mean(phase_rad, axis=0)
     labels = _element_labels(circuit_dir, circuit.branch_count)
     outdir = args.outdir or pump_dir / "junction_current_profile"
     outdir.mkdir(parents=True, exist_ok=True)
@@ -124,6 +133,7 @@ def main(argv: list[str] | None = None) -> int:
             "junction_index", "element_name", "node1", "node2",
             "peak_abs_current_a", "rms_current_a", "mean_current_a",
             "critical_current_a", "peak_ratio_ic", "peak_time_index",
+            "peak_abs_phase_rad", "rms_phase_rad", "mean_phase_rad",
         ]
         writer = csv.DictWriter(f, fieldnames=fields)
         writer.writeheader()
@@ -138,13 +148,17 @@ def main(argv: list[str] | None = None) -> int:
                     "critical_current_a", "peak_ratio_ic",
                 )},
                 "peak_time_index": int(profile["peak_time_index"][i]),
+                "peak_abs_phase_rad": float(peak_abs_phase_rad[i]),
+                "rms_phase_rad": float(rms_phase_rad[i]),
+                "mean_phase_rad": float(mean_phase_rad[i]),
             })
 
     ratio = profile["peak_ratio_ic"]
     current_ua = profile["peak_abs_current_a"] * 1e6
     x = np.arange(circuit.branch_count)
     strongest = int(np.nanargmax(ratio))
-    fig, axes = plt.subplots(2, 1, figsize=(14, 8), sharex=True, constrained_layout=True)
+    phase_strongest = int(np.nanargmax(peak_abs_phase_rad))
+    fig, axes = plt.subplots(3, 1, figsize=(14, 11), sharex=True, constrained_layout=True)
     axes[0].plot(x, current_ua, linewidth=0.65, color="tab:blue")
     axes[0].scatter([strongest], [current_ua[strongest]], color="tab:red", zorder=3)
     axes[0].set_ylabel("Peak |junction current| (µA)")
@@ -156,10 +170,28 @@ def main(argv: list[str] | None = None) -> int:
     axes[1].set_ylabel("Peak |I| / Ic")
     axes[1].grid(True, alpha=0.25)
     axes[1].legend(loc="upper right")
+    axes[2].plot(
+        x, peak_abs_phase_rad, linewidth=0.65, color="tab:green",
+        label="peak |phase|",
+    )
+    axes[2].plot(
+        x, rms_phase_rad, linewidth=0.55, color="tab:orange",
+        alpha=0.85, label="RMS phase",
+    )
+    axes[2].scatter(
+        [phase_strongest], [peak_abs_phase_rad[phase_strongest]],
+        color="tab:red", zorder=3,
+    )
+    axes[2].set_xlabel("Josephson junction index along stored branch order")
+    axes[2].set_ylabel("Junction phase (rad)")
+    axes[2].grid(True, alpha=0.25)
+    axes[2].legend(loc="upper right")
     fig.suptitle(
-        f"2c pump junction-current profile: {frequency_ghz:.6g} GHz, "
+        f"2c pump junction current and phase profile: {frequency_ghz:.6g} GHz, "
         f"{metadata.get('pump_power_dbm_requested', '?')} dBm; "
-        f"max branch {strongest}, max ratio {ratio[strongest]:.6g}"
+        f"max I/Ic branch {strongest} ({ratio[strongest]:.6g}), "
+        f"max |phase| branch {phase_strongest} "
+        f"({peak_abs_phase_rad[phase_strongest]:.6g} rad)"
     )
     plot_path = outdir / "junction_current_profile.png"
     fig.savefig(plot_path, dpi=180)
@@ -175,6 +207,9 @@ def main(argv: list[str] | None = None) -> int:
         "strongest_junction_name": labels[strongest]["name"],
         "max_peak_current_a": float(np.max(profile["peak_abs_current_a"])),
         "max_peak_ratio_ic": float(ratio[strongest]),
+        "max_peak_abs_phase_rad": float(peak_abs_phase_rad[phase_strongest]),
+        "max_rms_phase_rad": float(np.max(rms_phase_rad)),
+        "phase_definition": "(dynamic branch flux + persisted dc branch flux) / phi0",
         "csv": str(csv_path),
         "plot": str(plot_path),
     }

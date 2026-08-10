@@ -17,7 +17,7 @@ def coverage_summary(rows: Iterable[dict[str, Any]]) -> dict[str, Any]:
     }
     unresolved = {
         "UNRESOLVED", "TD_UNRESOLVED", "COLUMN_UNRESOLVED_BUDGET",
-        "SKIP_AFTER_COLUMN_FAILURE",
+        "SKIP_AFTER_COLUMN_FAILURE", "TD_CONTINUE",
     }
     counts = Counter(str(row.get("status", "UNKNOWN")) for row in items)
     physical_boundary_rows = sum(counts[name] for name in above)

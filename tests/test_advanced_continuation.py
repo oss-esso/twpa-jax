@@ -93,6 +93,39 @@ def test_pseudo_transient_converges_from_zero() -> None:
     assert problem.norms(X, 1.0, False)["coeff_rel"] < 1e-7
 
 
+def test_residual_homotopy_polishes_a_periodic_seed_to_the_physical_root() -> None:
+    """The final homotopy problem must be the unchanged production HB problem."""
+    problem = _build_problem(pump_current=0.6)
+    solver = _solver()
+    seed, seed_report = solver.solve_one(problem, problem.zeros(), 0.3 / 0.6)
+    assert seed_report.converged
+    assert problem.norms(seed, 1.0, False)["coeff_rel"] > 1e-4
+
+    X, reports, trace = solver.solve_residual_homotopy(
+        problem,
+        seed,
+        initial_step=0.2,
+        min_step=1.0 / 64.0,
+        max_step=0.25,
+        max_steps=32,
+    )
+
+    assert trace.reached_target
+    assert trace.final_eta == 1.0
+    assert reports
+    assert reports[-1].converged
+    assert problem.norms(X, 1.0, False)["coeff_rel"] < 1e-8
+
+
+def test_residual_homotopy_rejects_nonfinite_seed() -> None:
+    problem = _build_problem(pump_current=0.6)
+    solver = _solver()
+    seed = problem.zeros()
+    seed[0, 0] = np.nan
+    with np.testing.assert_raises(ValueError):
+        solver.solve_residual_homotopy(problem, seed)
+
+
 def test_arclength_reaches_target_lambda() -> None:
     problem = _build_problem(pump_current=0.6)
     solver = _solver()

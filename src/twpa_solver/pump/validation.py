@@ -45,6 +45,8 @@ def validate_production_hb_state(
     full_residual_threshold: float | None = None,
     metadata: dict[str, Any] | None = None,
     dc_branch_flux: np.ndarray | None = None,
+    source_mode: int = 1,
+    loss_model: str | None = None,
 ) -> dict[str, Any]:
     """Validate a state using the actual production pump residual.
 
@@ -63,6 +65,7 @@ def validate_production_hb_state(
         "pump_frequency_hz": float(frequency_hz),
         "pump_current_a": float(pump_current_a),
         "pump_port": int(pump_port),
+        "source_mode": int(source_mode),
         "harmonic_modes": modes.tolist(),
         "nt": int(nt),
         "state_shape": list(state.shape),
@@ -72,7 +75,7 @@ def validate_production_hb_state(
         "circuit_nodes": int(circuit.node_count),
         "circuit_junctions": int(circuit.branch_count),
         "checkpoint_validated": False,
-        "loss_model": default_loss_model_for(circuit),
+        "loss_model": loss_model or default_loss_model_for(circuit),
     }
     if metadata:
         result["metadata_match_context"] = metadata
@@ -86,7 +89,8 @@ def validate_production_hb_state(
         circuit.C, circuit.G, circuit.K, circuit.Bphi, branch, grid,
         circuit.port_to_index[int(pump_port)], float(pump_current_a),
         dc_branch_flux=dc_branch_flux,
-        loss_model=default_loss_model_for(circuit),
+        source_mode=int(source_mode),
+        loss_model=loss_model or default_loss_model_for(circuit),
     )
     norms = problem.norms(state, 1.0, True)
     spectrum = problem.residual_spectrum(state, 1.0)

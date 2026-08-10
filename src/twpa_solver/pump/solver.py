@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import dataclasses
 import logging
 import math
 import time
 from dataclasses import dataclass
-from typing import Callable
+from typing import Any, Callable
 
 import numpy as np
 import scipy.sparse.linalg as spla
@@ -250,6 +251,24 @@ class ContinuationTrace:
     failure_reason: str
 
 
+@dataclass
+class ResidualHomotopyTrace:
+    """Telemetry for a TD-seeded residual homotopy.
+
+    ``eta=0`` solves a translated residual with the supplied TD projection as
+    an exact starting root.  ``eta=1`` is the unchanged production HB
+    residual.  The trace is intentionally small so it can be persisted with a
+    pump report without retaining Newton iterates or transient trajectories.
+    """
+
+    attempted_eta: list[float]
+    accepted_eta: list[float]
+    failed_attempts: int
+    final_eta: float
+    reached_target: bool
+    failure_reason: str
+
+
 def empty_continuation_trace(mode: str) -> ContinuationTrace:
     return ContinuationTrace(
         mode=mode,
@@ -260,6 +279,54 @@ def empty_continuation_trace(mode: str) -> ContinuationTrace:
         fallback_used=False,
         failure_reason="",
     )
+
+
+class _ResidualOffsetProblem:
+    """View of a pump problem with a fixed coefficient-residual offset.
+
+    The offset is used only by residual homotopy.  All circuit operators,
+    Jacobian-vector products, sparse preconditioners, and reconstruction
+    methods remain delegated to the authoritative production problem.
+    """
+
+    def __init__(self, base: Any, residual_offset: np.ndarray) -> None:
+        self._base = base
+        self._residual_offset = np.asarray(
+            residual_offset, dtype=np.complex128
+        )
+
+    def residual_coeffs(
+        self, X: np.ndarray, source_scale: float
+    ) -> np.ndarray:
+        return self._base.residual_coeffs(X, source_scale) - self._residual_offset
+
+    def norms(
+        self, X: np.ndarray, source_scale: float, compute_time_residual: bool
+    ) -> dict[str, float | None]:
+        residual = self.residual_coeffs(X, source_scale)
+        residual_flat = pack_complex(residual)
+        coeff_abs = float(
+            np.linalg.norm(residual_flat) / max(math.sqrt(residual_flat.size), 1.0)
+        )
+        source_flat = pack_complex(self._base.source_coeffs(source_scale))
+        source_abs = float(
+            np.linalg.norm(source_flat) / max(math.sqrt(source_flat.size), 1.0)
+        )
+        time_rel: float | None = None
+        if compute_time_residual:
+            # The time residual cannot be represented by a coefficient offset
+            # without changing the production DAE.  Keep it as an observable
+            # of the underlying physical state, never as the homotopy gate.
+            time_rel = self._base.norms(X, source_scale, True).get("time_rel")
+        return {
+            "coeff_abs": coeff_abs,
+            "coeff_rel": coeff_abs / max(source_abs, 1e-30),
+            "time_abs": None,
+            "time_rel": time_rel,
+        }
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._base, name)
 
 
 class HarmonicNewtonKrylovSolver:
@@ -326,7 +393,7 @@ class HarmonicNewtonKrylovSolver:
         # Cached preconditioner factor (modified-Newton reuse, see settings).
         cached_real: spla.SuperLU | None = None
         cached_coupled: spla.SuperLU | None = None
-        cached_factors: list[spla.SuperLU] | None = None
+        cached_factors: list[spla.SuperLU | None] | None = None
         steps_since_factor = 0
         last_gmres = 0
 
@@ -389,7 +456,10 @@ class HarmonicNewtonKrylovSolver:
 
             spectral_tangent = None
             if refresh and (s.jvp_mode == "spectral"
-                            or s.preconditioner in ("spectral_coupled", "real_coupled")):
+                            or s.preconditioner in (
+                                "spectral_coupled", "spectral_banded",
+                                "spectral_banded_wide", "real_coupled",
+                            )):
                 spectral_tangent = problem.spectral_tangent_state(tangent)
             elif s.jvp_mode == "spectral":
                 spectral_tangent = problem.spectral_tangent_state(tangent)
@@ -420,6 +490,16 @@ class HarmonicNewtonKrylovSolver:
                     cached_coupled = cached_factors = None
                 elif s.preconditioner == "spectral_coupled":
                     cached_coupled = problem.assemble_coupled_preconditioner(spectral_tangent)
+                    cached_real = cached_factors = None
+                elif s.preconditioner == "spectral_banded":
+                    cached_coupled = problem.assemble_banded_coupled_preconditioner(
+                        spectral_tangent, mode_bandwidth=2
+                    )
+                    cached_real = cached_factors = None
+                elif s.preconditioner == "spectral_banded_wide":
+                    cached_coupled = problem.assemble_banded_coupled_preconditioner(
+                        spectral_tangent, mode_bandwidth=4
+                    )
                     cached_real = cached_factors = None
                 else:
                     cached_factors = problem.build_preconditioner_factors(
@@ -487,7 +567,8 @@ class HarmonicNewtonKrylovSolver:
                     V = unpack_complex(v_real, shape)
                     Z = np.empty_like(V)
                     for h in range(problem.H):
-                        Z[h] = factors[h].solve(V[h])
+                        factor = factors[h]
+                        Z[h] = V[h] if factor is None else factor.solve(V[h])
                     return pack_complex(Z)
 
                 Mop = spla.LinearOperator(
@@ -690,6 +771,114 @@ class HarmonicNewtonKrylovSolver:
             f"reason={report.failure_reason}"
         )
         return X_new, [report]
+
+    def solve_residual_homotopy(
+        self,
+        problem: FullPumpProblem,
+        X_seed: np.ndarray,
+        source_scale: float = 1.0,
+        *,
+        initial_step: float = 0.1,
+        min_step: float = 1.0 / 128.0,
+        max_step: float = 0.25,
+        growth: float = 1.5,
+        shrink: float = 0.5,
+        max_steps: int = 64,
+        max_wall_s: float = 0.0,
+    ) -> tuple[np.ndarray, list[StepReport], ResidualHomotopyTrace]:
+        """Polish a TD periodic projection into a production HB root.
+
+        Let ``F(X)`` be the production coefficient residual and let ``X_td``
+        be a Fourier projection of a settled TD orbit.  The continuation
+        solves
+
+        ``F(X) - (1 - eta) F(X_td) = 0``
+
+        from ``eta=0`` to ``eta=1``.  The initial translated problem has
+        ``X_td`` as an exact root, while the final problem is exactly the
+        physical HB equation.  This changes only the numerical path; no
+        damping, resistance, source, or circuit parameter is introduced.
+
+        Failed trial steps are retried with a smaller ``eta`` increment.  A
+        failed final trial is never returned as a valid pump state.  The
+        method is intended for bounded TD branch transfers, not routine map
+        evaluation.
+        """
+        if not _finite_state(X_seed):
+            raise ValueError("residual homotopy seed contains non-finite values")
+        if initial_step <= 0.0 or min_step <= 0.0 or max_step <= 0.0:
+            raise ValueError("homotopy steps must be positive")
+        if min_step > max_step:
+            raise ValueError("homotopy min_step cannot exceed max_step")
+        if growth <= 1.0 or not 0.0 < shrink < 1.0:
+            raise ValueError("invalid homotopy growth or shrink factor")
+
+        t0 = time.perf_counter()
+        X = np.array(X_seed, dtype=np.complex128, copy=True)
+        seed_offset = problem.residual_coeffs(X, source_scale)
+        if not _finite_state(seed_offset):
+            raise ValueError("residual homotopy seed residual is non-finite")
+
+        eta = 0.0
+        step = min(float(initial_step), float(max_step))
+        reports: list[StepReport] = []
+        attempted: list[float] = []
+        accepted: list[float] = []
+        failed_attempts = 0
+        failure_reason = ""
+
+        while eta < 1.0 - 1e-14 and len(attempted) < max_steps:
+            if max_wall_s > 0.0 and time.perf_counter() - t0 > max_wall_s:
+                failure_reason = f"homotopy exceeded {max_wall_s:.1f}s budget"
+                break
+            target_eta = min(1.0, eta + step)
+            attempted.append(float(target_eta))
+            offset = (1.0 - target_eta) * seed_offset
+            translated = _ResidualOffsetProblem(problem, offset)
+            remaining = 0.0
+            if max_wall_s > 0.0:
+                remaining = max(0.0, max_wall_s - (time.perf_counter() - t0))
+            local_settings = self.settings
+            if remaining > 0.0:
+                local_settings = dataclasses.replace(
+                    self.settings, solve_deadline_s=remaining
+                )
+            local_solver = (
+                self
+                if local_settings is self.settings
+                else HarmonicNewtonKrylovSolver(local_settings)
+            )
+            X_trial, report = local_solver.solve_one(
+                translated, X, source_scale
+            )
+            reports.append(report)
+            if report.converged:
+                X = X_trial
+                eta = target_eta
+                accepted.append(float(eta))
+                step = min(float(max_step), step * growth)
+                continue
+
+            failed_attempts += 1
+            failure_reason = report.failure_reason or (
+                f"homotopy corrector failed at eta={target_eta:.6g}"
+            )
+            step *= shrink
+            if step < min_step - 1e-15:
+                break
+
+        reached_target = bool(eta >= 1.0 - 1e-14)
+        if not reached_target and not failure_reason:
+            failure_reason = "homotopy maximum trial count reached"
+        trace = ResidualHomotopyTrace(
+            attempted_eta=attempted,
+            accepted_eta=accepted,
+            failed_attempts=failed_attempts,
+            final_eta=float(eta),
+            reached_target=reached_target,
+            failure_reason="" if reached_target else failure_reason,
+        )
+        return X, reports, trace
 
     def solve_continuation(
         self,

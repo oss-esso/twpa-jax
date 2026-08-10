@@ -19,6 +19,8 @@ pytest-of-*/
 /h2_*/
 /h3_*/
 /tmptw*/
+# Root-level transient experiment directories are disposable runtime artifacts.
+/run_tmp*/
 industrial_completion_outputs/
 references/**/__pycache__/
 

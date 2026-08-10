@@ -257,6 +257,26 @@ confident `STABLE`.
 Always quote an exponent against `omega_p`. The same numerical value can be
 real damping on one device and numerically marginal on another.
 
+### Pump-orbit bifurcation diagnostics
+
+`signal/stability.py::classify_floquet_resonance` converts a refined Hill root
+`omega` into the one-pump-period multiplier
+`mu = exp(+i*omega*2*pi/omega_p)`. It labels roots near `+1` as fold
+candidates, roots near `-1` as period-doubling candidates, and other
+near-unit-circle roots as Neimark--Sacker candidates. These labels are
+diagnostic only: the Hill truncation and nonlinear branch must be validated
+independently.
+
+The explicit CLI path is
+`scripts/floquet_stability_sweep.py --refine-bifurcations`, which checks the
+requested fractions of the pump frequency (default `0.0,0.5`). A confirmed
+`-1` candidate can be represented with
+`pump/floquet.py::period_doubled_basis`: the fundamental becomes
+`omega_p/2`, the physical pump is mode two, and odd half-pump modes are
+retained. `build_period_doubled_seed` maps the refined Hill eigenvector into
+that basis. The seed is never accepted directly; it must converge under the
+production HB residual and full-residual/provenance gates.
+
 ---
 
 ## Where to make a change

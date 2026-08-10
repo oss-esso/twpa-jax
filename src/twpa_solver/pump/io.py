@@ -59,13 +59,21 @@ def write_results(
         pump_modes=pump_modes,
     )
 
+    metadata_status = metadata.get("pump_validation_status")
+    final_status = (
+        str(metadata_status)
+        if metadata_status is not None
+        else "VALID_CONVERGED"
+        if reports
+        and reports[-1].converged
+        and abs(reports[-1].source_scale - 1.0) < 1e-12
+        else "FAIL"
+    )
     report_json = {
         "metadata": metadata,
         "solution_summary": solution_summary,
         "reports": [asdict(r) for r in reports],
-        "final_status": "VALID_CONVERGED"
-        if reports and reports[-1].converged and abs(reports[-1].source_scale - 1.0) < 1e-12
-        else "FAIL",
+        "final_status": final_status,
     }
 
     with open(d / "pump_report.json", "w", encoding="utf-8") as f:

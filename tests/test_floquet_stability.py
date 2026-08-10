@@ -11,6 +11,8 @@ import pytest
 import scipy.sparse as sp
 
 from twpa_solver.signal.stability import (
+    ComplexResonance,
+    classify_floquet_resonance,
     estimate_sigma_min,
     local_minima,
     refine_complex_resonance,
@@ -106,3 +108,22 @@ def test_refine_complex_resonance_rejects_non_analytic_loss_model() -> None:
             signal_ghz_guess=1.0,
             loss_model="conductance_abs_omega",
         )
+
+
+def test_floquet_classification_identifies_period_doubling_multiplier() -> None:
+    omega_p = 2.0 * np.pi * 10.0e9
+    resonance = ComplexResonance(
+        omega=0.5 * omega_p - 1.0j,
+        signal_ghz=5.0 - 1.0j / (2.0 * np.pi * 1.0e9),
+        eig_min=0.0j,
+        growth_rate_per_s=1.0,
+        converged=True,
+        iterations=1,
+        residual=0.0,
+    )
+
+    result = classify_floquet_resonance(resonance, omega_p)
+
+    assert result.kind == "PERIOD_DOUBLING_CANDIDATE"
+    assert result.multiplier.real == pytest.approx(-1.0, abs=1.0e-6)
+    assert result.magnitude == pytest.approx(1.0, rel=1.0e-7)

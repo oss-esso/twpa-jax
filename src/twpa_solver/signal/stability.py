@@ -162,6 +162,73 @@ class ComplexResonance:
     converged: bool
     iterations: int
     residual: float
+    mode_vector: np.ndarray | None = None
+
+
+@dataclass(frozen=True)
+class FloquetClassification:
+    """Interpret one refined Hill root in terms of its Floquet multiplier.
+
+    The codebase uses ``exp(+i*omega*t)``.  Consequently a root has multiplier
+    ``exp(+i*omega*T)`` over one pump period and growth rate ``-Im(omega)``.
+    The classification is a bifurcation *candidate*: a finite Hill truncation
+    and one root do not prove that the nonlinear branch has undergone the
+    corresponding bifurcation.
+    """
+
+    multiplier: complex
+    phase_rad: float
+    magnitude: float
+    zone_frequency_ghz: float
+    kind: str
+    near_unit_circle: bool
+
+
+def _wrapped_phase(phase: float) -> float:
+    return float((phase + math.pi) % (2.0 * math.pi) - math.pi)
+
+
+def classify_floquet_resonance(
+    resonance: ComplexResonance,
+    omega_p: float,
+    *,
+    phase_tolerance_rad: float = 0.15,
+    unit_circle_tolerance: float = 0.05,
+) -> FloquetClassification:
+    """Classify a refined Hill root by its one-period Floquet multiplier.
+
+    ``PERIOD_DOUBLING_CANDIDATE`` means the multiplier is close to ``-1``;
+    ``FOLD_CANDIDATE`` means it is close to ``+1``.  Other unit-circle phases
+    are reported as ``NEIMARK_SACKER_CANDIDATE``.  Roots well away from the
+    unit circle are retained as ``OTHER_FLOQUET_MODE`` because they are not a
+    local bifurcation signature.
+    """
+    if omega_p <= 0.0:
+        raise ValueError("omega_p must be positive")
+    period = 2.0 * math.pi / omega_p
+    multiplier = complex(np.exp(1j * resonance.omega * period))
+    phase = _wrapped_phase(float(np.angle(multiplier)))
+    magnitude = float(abs(multiplier))
+    zone = float(
+        ((resonance.omega.real + 0.5 * omega_p) % omega_p) - 0.5 * omega_p
+    )
+    near_unit = abs(magnitude - 1.0) <= unit_circle_tolerance
+    if near_unit and abs(phase) <= phase_tolerance_rad:
+        kind = "FOLD_CANDIDATE"
+    elif near_unit and abs(abs(phase) - math.pi) <= phase_tolerance_rad:
+        kind = "PERIOD_DOUBLING_CANDIDATE"
+    elif near_unit:
+        kind = "NEIMARK_SACKER_CANDIDATE"
+    else:
+        kind = "OTHER_FLOQUET_MODE"
+    return FloquetClassification(
+        multiplier=multiplier,
+        phase_rad=phase,
+        magnitude=magnitude,
+        zone_frequency_ghz=zone / (2.0 * math.pi * 1e9),
+        kind=kind,
+        near_unit_circle=near_unit,
+    )
 
 
 def _nearest_zero_eigenpair(
@@ -234,6 +301,7 @@ def refine_singular_omega(
         converged=converged,
         iterations=iterations,
         residual=float(abs(f_curr)),
+        mode_vector=np.asarray(v_curr, dtype=np.complex128),
     )
 
 
@@ -269,6 +337,11 @@ def refine_complex_resonance(
         )
 
     omega0 = 2.0 * math.pi * complex(signal_ghz_guess) * 1e9
+    # A +1 bifurcation is located at the edge of the Floquet zone.  Starting
+    # exactly at zero would make the relative secant offset degenerate, so use
+    # a tiny physical-frequency seed while retaining the requested zone.
+    if abs(omega0) == 0.0:
+        omega0 = complex(omega_p * 1.0e-6)
     omega1 = omega0 * (1.0 + perturbation)
     return refine_singular_omega(assemble, omega0, omega1, max_iters=max_iters, tol=tol)
 

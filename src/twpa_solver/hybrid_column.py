@@ -34,6 +34,7 @@ class SolverRoute(str, Enum):
     PALC = "PALC"
     FREQUENCY_SUBSTEP = "FREQUENCY_SUBSTEP"
     TD_BRIDGE = "TD_BRIDGE"
+    TD_CONTINUE = "TD_CONTINUE"
     TD_TO_HB_RESTART = "TD_TO_HB_RESTART"
     TD_PERIOD1_GAIN = "TD_PERIOD1_GAIN"
     TD_PERIOD1_HB_RESTART_FAILED_FALLBACK_TD = (
@@ -102,6 +103,18 @@ class ColumnBudget:
     max_td_bridges: int = 2
     max_boundary_refinements: int = 3
     max_td_periods: int = 200
+    # Research-only policy.  Non-periodic TD states are never gain-valid, but
+    # an explicit single-column investigation may continue the physical ramp
+    # from their restart checkpoint instead of declaring a boundary.
+    continue_nonperiodic: bool = False
+    # Optional extra fixed-drive TD holds for decay telemetry that explicitly
+    # indicates relaxation toward PERIOD_1. These do not change the drive and
+    # do not make the resulting state gain-valid by themselves.
+    max_td_settle_extensions: int = 0
+    # A running-phase trajectory is promoted to a physical junction break only
+    # when its measured CPR utilization is effectively one.  This does not
+    # impose a universal subcritical utilization limit.
+    junction_break_threshold: float = 1.0 - 1e-6
 
 
 @dataclass
@@ -170,6 +183,7 @@ class ColumnController:
         restarts = 0
         td_anchor: TDResult | None = None
         td_restart_disabled = False
+        nonperiodic_continued = False
 
         def try_td_period1_gain(target: Any, td: TDResult) -> HBResult | None:
             evaluator = getattr(self.periodic, "evaluate_td_period1", None)
@@ -183,6 +197,41 @@ class ColumnController:
                 return HBResult(
                     False, reason=f"TD PERIOD_1 gain evaluation failed: {exc}"
                 )
+
+        def reaches_junction_break(td: TDResult) -> bool:
+            return (
+                td.classification == TDClass.RUNNING_PHASE
+                and td.r_j is not None
+                and td.r_j >= self.budget.junction_break_threshold
+            )
+
+        def extend_slow_relaxation(
+            td: TDResult, target: Any, bridge_index: int,
+        ) -> TDResult:
+            """Use bounded fixed-drive holds to resolve slow PERIOD_1 decay."""
+            nonlocal td_periods
+            extender = getattr(self.dynamic, "extend_from_td", None)
+            limit = max(0, int(self.budget.max_td_settle_extensions))
+            if extender is None or limit == 0:
+                return td
+            extensions = 0
+            while extensions < limit:
+                decay = td.metadata.get("decay_aware", {})
+                if (
+                    td.classification != TDClass.UNRESOLVED_SLOW_RELAXATION
+                    or decay.get("class") != "RELAXING_TO_PERIOD1"
+                    or reaches_junction_break(td)
+                ):
+                    break
+                extensions += 1
+                td = extender(
+                    td, target,
+                    self.output_dir
+                    / f"td_bridge_{bridge_index:02d}_settle_{extensions:02d}",
+                )
+                td_periods += td.periods
+                td.metadata["relaxation_extensions"] = extensions
+            return td
 
         for index, target in enumerate(targets):
             started = time.perf_counter()
@@ -207,6 +256,7 @@ class ColumnController:
                     td_anchor, target, self.output_dir / f"td_bridge_{td_bridges:02d}",
                 )
                 td_periods += td.periods
+                td = extend_slow_relaxation(td, target, td_bridges)
                 if td.classification == TDClass.PERIOD_1:
                     if not td_restart_disabled and td.restart_seed:
                         restarted = self.periodic.restart_from_td(target, td.restart_seed)
@@ -244,6 +294,38 @@ class ColumnController:
                     td_anchor = td
                     td_restart_disabled = True
                     continue
+                if td.classification in {
+                    TDClass.PERSISTENT_PERIOD_N,
+                    TDClass.PERSISTENT_NONPERIODIC,
+                    TDClass.RUNNING_PHASE,
+                    TDClass.UNRESOLVED_SLOW_RELAXATION,
+                }:
+                    if reaches_junction_break(td):
+                        record = self._td_record(
+                            target, td, ColumnState.PHYSICAL_BOUNDARY_FOUND, started,
+                        )
+                        record.metadata["junction_break_confirmed"] = True
+                        record.metadata["junction_break_threshold"] = (
+                            self.budget.junction_break_threshold
+                        )
+                        records.append(record)
+                        first_outside = record
+                        return self._result(
+                            ColumnState.PHYSICAL_BOUNDARY_FOUND, records,
+                            last_working, first_outside, td_bridges, td_periods, restarts,
+                        )
+                    if self.budget.continue_nonperiodic:
+                        record = self._td_record(
+                            target, td, ColumnState.TD_CONTINUE, started,
+                            SolverRoute.TD_CONTINUE,
+                        )
+                        record.metadata["physical_boundary_not_declared"] = True
+                        record.metadata["td_continuation_anchor"] = True
+                        records.append(record)
+                        td_anchor = td
+                        td_restart_disabled = True
+                        nonperiodic_continued = True
+                        continue
                 if td.classification in {
                     TDClass.PERSISTENT_PERIOD_N,
                     TDClass.PERSISTENT_NONPERIODIC,
@@ -315,6 +397,7 @@ class ColumnController:
                 previous, target, self.output_dir / f"td_bridge_{td_bridges:02d}",
             )
             td_periods += td.periods
+            td = extend_slow_relaxation(td, target, td_bridges)
             if td.classification == TDClass.PERIOD_1:
                 if td.restart_seed:
                     restarted = self.periodic.restart_from_td(target, td.restart_seed)
@@ -352,6 +435,38 @@ class ColumnController:
                 TDClass.PERSISTENT_PERIOD_N,
                 TDClass.PERSISTENT_NONPERIODIC,
                 TDClass.RUNNING_PHASE,
+                TDClass.UNRESOLVED_SLOW_RELAXATION,
+            }:
+                if reaches_junction_break(td):
+                    record = self._td_record(
+                        target, td, ColumnState.PHYSICAL_BOUNDARY_FOUND, started,
+                    )
+                    record.metadata["junction_break_confirmed"] = True
+                    record.metadata["junction_break_threshold"] = (
+                        self.budget.junction_break_threshold
+                    )
+                    records.append(record)
+                    first_outside = record
+                    return self._result(
+                        ColumnState.PHYSICAL_BOUNDARY_FOUND, records,
+                        last_working, first_outside, td_bridges, td_periods, restarts,
+                    )
+                if self.budget.continue_nonperiodic:
+                    record = self._td_record(
+                        target, td, ColumnState.TD_CONTINUE, started,
+                        SolverRoute.TD_CONTINUE,
+                    )
+                    record.metadata["physical_boundary_not_declared"] = True
+                    record.metadata["td_continuation_anchor"] = True
+                    records.append(record)
+                    td_anchor = td
+                    td_restart_disabled = True
+                    nonperiodic_continued = True
+                    continue
+            if td.classification in {
+                TDClass.PERSISTENT_PERIOD_N,
+                TDClass.PERSISTENT_NONPERIODIC,
+                TDClass.RUNNING_PHASE,
             }:
                 record = self._td_record(
                     target, td, ColumnState.PHYSICAL_BOUNDARY_FOUND, started,
@@ -376,7 +491,8 @@ class ColumnController:
             )
 
         return self._result(
-            ColumnState.COLUMN_COMPLETE_NO_BOUNDARY, records,
+            (ColumnState.COLUMN_UNRESOLVED_BUDGET
+             if nonperiodic_continued else ColumnState.COLUMN_COMPLETE_NO_BOUNDARY), records,
             last_working, first_outside, td_bridges, td_periods, restarts,
         )
 

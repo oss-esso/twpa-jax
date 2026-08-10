@@ -5,8 +5,10 @@ from pathlib import Path
 from scripts.h1_transient_branch_transfer import (
     audit_circuit,
     classify_state,
+    classify_td_result,
     load_hb_initial,
     build_system,
+    parse_args,
 )
 
 
@@ -38,10 +40,39 @@ def test_h1_classifier_recognizes_period_two_from_stroboscopic_distance() -> Non
     assert classify_state(period_two, 0.0, True) == "PERIOD_2"
 
 
+def test_decay_aware_adapter_does_not_promote_broadband_hold() -> None:
+    assert classify_td_result({
+        "classification": "BROADBAND_OR_CHAOTIC",
+        "decay_aware": {
+            "class": "UNRESOLVED_SLOW_RELAXATION",
+            "tau_periods": 1690.0,
+        },
+    }) == "UNRESOLVED_SLOW_RELAXATION"
+
+
+def test_decay_aware_adapter_preserves_persistent_broadband_transition() -> None:
+    assert classify_td_result({
+        "classification": "BROADBAND_OR_CHAOTIC",
+        "decay_aware": {"class": "PERSISTENT_NONPERIODIC"},
+    }) == "BROADBAND_OR_CHAOTIC"
+
+
+def test_h1_compact_storage_limits_are_explicit() -> None:
+    args = parse_args([
+        "--compact-output",
+        "--compact-sample-count", "64",
+        "--compact-history-states", "128",
+    ])
+
+    assert args.compact_output
+    assert args.compact_sample_count == 64
+    assert args.compact_history_states == 128
+
+
 def test_h1_hb_checkpoint_reconstructs_a_phase_zero_state() -> None:
     system = build_system(ROOT / "designs" / "ipm_2c_fixed", 7.9, 4)
     checkpoint = (
-        ROOT / "g1_current_79" / "pass" / "points"
+        ROOT / "outputs" / "g1_current_79" / "pass" / "points"
         / "point_0012_p_m19p6842dbm_fp_7p9ghz" / "pump"
     )
     x0, w0, current, report = load_hb_initial(
