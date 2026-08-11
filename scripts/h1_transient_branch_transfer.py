@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import gc
 import json
 import math
 from collections import deque
@@ -22,18 +23,69 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-import matplotlib.pyplot as plt
 import numpy as np
 import scipy.sparse as sp
 import scipy.sparse.linalg as spla
 from scipy.integrate import solve_ivp
 from scipy.optimize import brentq
 
+try:
+    import matplotlib.pyplot as plt
+except ImportError:  # compact numerical runs do not require plotting
+    plt = None
+
 ROOT = Path(__file__).resolve().parents[1]
 import sys
 
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "src"))
+
+STROBE_MULTIPLES = (1, 2, 3, 4, 5, 6, 8, 12, 16)
+
+
+def _finite_tail(values: Any, fraction: float = 0.5) -> np.ndarray:
+    """Return a finite late-time slice used by recurrence classification."""
+    array = np.asarray(values, dtype=float)
+    array = array[np.isfinite(array)]
+    if array.size == 0:
+        return array
+    start = max(0, array.size - max(6, int(math.ceil(array.size * fraction))))
+    return array[start:]
+
+
+def _strobe_summary(
+    periods: np.ndarray,
+    distances: dict[str, np.ndarray],
+    *,
+    max_period: float | None = None,
+) -> dict[str, Any]:
+    """Build aligned, late-window recurrence metrics for a stroboscopic run."""
+    if max_period is not None:
+        periods = periods[periods <= float(max_period) + 1e-12]
+    payload: dict[str, Any] = {
+        "periods": periods.tolist(),
+        "periods_by_n": {},
+    }
+    for key, values in distances.items():
+        n = int(key[1:])
+        count = max(0, periods.size - n)
+        values = np.asarray(values, dtype=float)[:count]
+        value_periods = periods[n:n + values.size]
+        payload[key] = values.tolist()
+        payload["periods_by_n"][key] = value_periods.tolist()
+        tail = _finite_tail(values)
+        payload.setdefault("tail_median_by_n", {})[key] = (
+            float(np.median(tail)) if tail.size else float("inf")
+        )
+        payload.setdefault("tail_max_by_n", {})[key] = (
+            float(np.max(tail)) if tail.size else float("inf")
+        )
+    d1_tail = _finite_tail(distances.get("d1", []))
+    payload["tail_median"] = float(np.median(d1_tail)) if d1_tail.size else float("inf")
+    payload["tail_max"] = float(np.max(d1_tail)) if d1_tail.size else float("inf")
+    payload["tail_d2_max"] = payload.get("tail_max_by_n", {}).get("d2")
+    payload["tail_d3_max"] = payload.get("tail_max_by_n", {}).get("d3")
+    return payload
 
 from twpa_solver.core import load_circuit  # noqa: E402
 from twpa_solver.core.constants import PHI0_REDUCED  # noqa: E402
@@ -423,27 +475,17 @@ def stroboscopic_diagnostics(system: TransientSystem, theta: np.ndarray, states:
     points = np.arange(0.0, float(periods) + 1.0)
     origin = float(theta[0]) if theta.size else 0.0
     selected = np.asarray([int(np.argmin(np.abs(theta - (origin + 2.0 * math.pi * x)))) for x in points])
-    scales = np.maximum(np.linalg.norm(states[:, selected[:-1]], axis=0), 1.0)
-    d1 = np.linalg.norm(np.diff(states[:, selected], axis=1), axis=0) / scales
-    if d1.size:
-        d1 = d1[:-1]
-    tail = d1[max(0, len(d1) // 2):]
-    distances: dict[str, list[float]] = {"d1": d1.tolist()}
-    for period_multiple in (2, 3):
+    distances: dict[str, np.ndarray] = {}
+    for period_multiple in STROBE_MULTIPLES:
         if selected.size > period_multiple:
-            pair_scales = np.maximum(
-                np.linalg.norm(states[:, selected[:-period_multiple]], axis=0), 1.0
+            reference = states[:, selected[:-period_multiple]]
+            pair_scales = np.maximum(np.linalg.norm(reference, axis=0), 1.0)
+            distances[f"d{period_multiple}"] = (
+                np.linalg.norm(
+                    states[:, selected[period_multiple:]] - reference, axis=0
+                ) / pair_scales
             )
-            distance = np.linalg.norm(
-                states[:, selected[period_multiple:]] - states[:, selected[:-period_multiple]], axis=0
-            ) / pair_scales
-            distances[f"d{period_multiple}"] = distance.tolist()
-    return {
-        "periods": points.tolist(), **distances,
-        "tail_median": float(np.median(tail)), "tail_max": float(np.max(tail)),
-        "tail_d2_max": float(np.max(distances.get("d2", [float("inf")]))) if distances.get("d2") else None,
-        "tail_d3_max": float(np.max(distances.get("d3", [float("inf")]))) if distances.get("d3") else None,
-    }
+    return _strobe_summary(points, distances)
 
 
 def classify_state(
@@ -468,27 +510,60 @@ def classify_state(
 
 
 def decay_aware_stroboscopic_classification(strobe: dict[str, Any]) -> dict[str, Any]:
-    """Estimate whether a non-periodic-looking hold is still relaxing."""
-    d1 = np.asarray(strobe.get("d1", []), dtype=float)
-    d1 = d1[np.isfinite(d1) & (d1 > 0.0)]
+    """Estimate whether a non-periodic-looking hold is still relaxing.
+
+    The decision uses late-window magnitude and trend for d1/d2/d3.  A finite
+    tail with a downward envelope is therefore not promoted to a physical
+    non-periodic state merely because its early transient was large.
+    """
+    series: dict[str, np.ndarray] = {}
+    for key in ("d1", "d2", "d3"):
+        values = np.asarray(strobe.get(key, []), dtype=float)
+        values = values[np.isfinite(values) & (values > 0.0)]
+        if values.size:
+            series[key] = values
+    d1 = series.get("d1", np.empty(0))
     if d1.size < 6:
         return {"class": "UNRESOLVED_SLOW_RELAXATION", "trend_b": None, "tau_periods": None}
-    n = np.arange(d1.size, dtype=float)
-    window = max(6, d1.size // 3)
-    slopes = [float(np.polyfit(n[i:i + window], np.log(d1[i:i + window]), 1)[0])
-              for i in range(0, d1.size - window + 1, max(1, window // 2))]
-    b = slopes[-1]
+
+    def fit_slopes(values: np.ndarray) -> list[float]:
+        window = max(6, values.size // 3)
+        if values.size < window:
+            return []
+        index = np.arange(values.size, dtype=float)
+        return [
+            float(np.polyfit(index[i:i + window], np.log(values[i:i + window]), 1)[0])
+            for i in range(0, values.size - window + 1, max(1, window // 2))
+        ]
+
+    slopes_by_key = {key: fit_slopes(values) for key, values in series.items()}
+    slopes = slopes_by_key["d1"]
+    b = slopes[-1] if slopes else 0.0
     tau = float(-1.0 / b) if b < 0.0 else None
-    tail = float(np.median(d1[-min(3, d1.size):]))
-    if tail < 1e-3:
+    tail_max_by_n = {
+        key: float(np.max(_finite_tail(values))) for key, values in series.items()
+    }
+    periodic_support = all(
+        tail_max_by_n.get(key, 0.0) < 5e-4 for key in ("d1", "d2", "d3")
+    )
+    if periodic_support:
         cls = "PERIOD_1"
-    elif b < -1e-3 and all(s < 0.0 for s in slopes[-2:]):
-        cls = "RELAXING_TO_PERIOD1"
-    elif abs(b) < 2e-4:
-        cls = "PERSISTENT_NONPERIODIC"
     else:
-        cls = "UNRESOLVED_SLOW_RELAXATION"
-    return {"class": cls, "trend_b": b, "tau_periods": tau, "window_slopes": slopes}
+        decaying = b < -1e-3 and len(slopes) >= 2 and all(s < 0.0 for s in slopes[-2:])
+        for key, key_slopes in slopes_by_key.items():
+            if key != "d1" and key_slopes and key_slopes[-1] > 2e-4:
+                decaying = False
+        cls = "RELAXING_TO_PERIOD1" if decaying else (
+            "PERSISTENT_NONPERIODIC" if abs(b) < 2e-4 else "UNRESOLVED_SLOW_RELAXATION"
+        )
+    return {
+        "class": cls,
+        "trend_b": b,
+        "tau_periods": tau,
+        "window_slopes": slopes,
+        "window_slopes_by_n": slopes_by_key,
+        "late_max_by_n": tail_max_by_n,
+    }
 
 
 def classify_td_result(result: dict[str, Any]) -> str:
@@ -505,6 +580,42 @@ def classify_td_result(result: dict[str, Any]) -> str:
         if decay_class in {"UNRESOLVED_SLOW_RELAXATION", "RELAXING_TO_PERIOD1"}:
             return "UNRESOLVED_SLOW_RELAXATION"
     return raw
+
+
+def checkpoint_stroboscopic_diagnostics(
+    strobe: dict[str, Any],
+    checkpoints: tuple[int, ...] = (40, 90, 140, 250, 440),
+) -> list[dict[str, Any]]:
+    """Evaluate recurrence and decay-aware classification at hold checkpoints."""
+    periods = np.asarray(strobe.get("periods", []), dtype=float)
+    distances = {
+        key: np.asarray(strobe.get(key, []), dtype=float)
+        for key in (f"d{n}" for n in STROBE_MULTIPLES)
+        if strobe.get(key)
+    }
+    observations: list[dict[str, Any]] = []
+    for checkpoint in checkpoints:
+        sliced = _strobe_summary(periods, distances, max_period=checkpoint)
+        raw = classify_state(sliced, 0.0, True)
+        decay = decay_aware_stroboscopic_classification(sliced)
+        observations.append({
+            "hold_periods": int(checkpoint),
+            "classification": raw,
+            "decay_aware": decay,
+            "stroboscopic": sliced,
+        })
+    return observations
+
+
+def phase_winding_series(system: TransientSystem, theta: np.ndarray, states: np.ndarray) -> np.ndarray:
+    """Return mean unwrapped junction-phase winding in pump cycles."""
+    if states.size == 0:
+        return np.empty(0, dtype=float)
+    phase = np.asarray([
+        system.circuit.Bphi.T @ system.unpack(states[:, i])[0]
+        for i in range(states.shape[1])
+    ])
+    return np.mean(np.unwrap(phase, axis=0) - np.unwrap(phase, axis=0)[0], axis=1) / (2.0 * math.pi)
 
 
 def project_periodic_state(
@@ -746,10 +857,16 @@ def implicit_trapezoid_ramp(
                     [[dynamic_q, dynamic_p], [sp.eye(n, format="csr"), -h * sp.eye(n, format="csr") / 2.0]],
                     format="csc",
                 )
-                delta = spla.spsolve(jac, -np.concatenate((dynamic, kinematic)))
+                factor = spla.splu(jac)
+                delta = factor.solve(-np.concatenate((dynamic, kinematic)))
                 q_trial += delta[:n]
                 p_trial += delta[n:]
                 newton_total += 1
+                # The long-hold path performs thousands of sparse factorizations.
+                # Release the temporary block matrix and solve buffers before
+                # the next accepted step; otherwise Python/SciPy allocator
+                # retention can make RSS grow across an otherwise bounded run.
+                del delta, factor, jac, dynamic_q, dynamic_p, tangent
             if converged:
                 # Retain a reduced step after entering the stiff near-Ic
                 # regime instead of retrying the original large step at every
@@ -813,7 +930,7 @@ def implicit_trapezoid_ramp_bounded(
     consumes gigabytes before post-processing starts.  This path stores only:
 
     * uniformly sampled states for compact observables;
-    * three stroboscopic states for d1/d2/d3;
+    * a bounded stroboscopic state ring for d1/d2/d3/.../d16;
     * a bounded final state ring for projection and phase diagnostics; and
     * scalar pump-flux history for the late spectrum.
 
@@ -866,8 +983,13 @@ def implicit_trapezoid_ramp_bounded(
         next_scalar += scalar_step
 
     strobe_theta: list[float] = []
-    strobe_values: dict[str, list[float]] = {"d1": [], "d2": [], "d3": []}
-    strobe_history: deque[np.ndarray] = deque(maxlen=3)
+    strobe_multiples = STROBE_MULTIPLES
+    strobe_values: dict[str, list[float]] = {
+        f"d{multiple}": [] for multiple in strobe_multiples
+    }
+    strobe_pump_flux: list[float] = []
+    strobe_state_norm: list[float] = []
+    strobe_history: deque[np.ndarray] = deque(maxlen=max(strobe_multiples))
     next_strobe = max(float(ramp_theta), float(initial_theta))
     if next_strobe <= initial_theta + 1e-12:
         strobe_theta.append(float(initial_theta))
@@ -876,20 +998,15 @@ def implicit_trapezoid_ramp_bounded(
 
     def payload() -> dict[str, Any]:
         d = {key: np.asarray(value, dtype=float) for key, value in strobe_values.items()}
-        d1 = d["d1"]
-        tail = d1[max(0, d1.size // 2):]
+        strobe = _strobe_summary(np.asarray(strobe_theta, dtype=float) / (2.0 * math.pi), d)
         return {
             "_bounded_sample_theta": np.asarray(sampled_theta, dtype=float),
             "_bounded_sample_states": np.asarray(sampled_states, dtype=float).T,
             "_bounded_strobe_theta": np.asarray(strobe_theta, dtype=float),
             "_bounded_strobe": {
-                "periods": np.arange(len(strobe_theta), dtype=float).tolist(),
-                "d1": d["d1"].tolist(), "d2": d["d2"].tolist(),
-                "d3": d["d3"].tolist(),
-                "tail_median": float(np.median(tail)) if tail.size else float("inf"),
-                "tail_max": float(np.max(tail)) if tail.size else float("inf"),
-                "tail_d2_max": float(np.max(d["d2"])) if d["d2"].size else None,
-                "tail_d3_max": float(np.max(d["d3"])) if d["d3"].size else None,
+                **strobe,
+                "pump_flux": strobe_pump_flux,
+                "state_norm": strobe_state_norm,
             },
             "_bounded_history_theta": np.asarray([x[0] for x in history], dtype=float),
             "_bounded_history_states": np.column_stack([x[1] for x in history]),
@@ -963,10 +1080,12 @@ def implicit_trapezoid_ramp_bounded(
                      [sp.eye(n, format="csr"), -h * sp.eye(n, format="csr") / 2.0]],
                     format="csc",
                 )
-                delta = spla.spsolve(jac, -np.concatenate((dynamic, kinematic)))
+                factor = spla.splu(jac)
+                delta = factor.solve(-np.concatenate((dynamic, kinematic)))
                 q_trial += delta[:n]
                 p_trial += delta[n:]
                 newton_total += 1
+                del delta, factor, jac, dynamic_q, dynamic_p, tangent
             if converged:
                 next_step_theta = h
                 break
@@ -989,6 +1108,8 @@ def implicit_trapezoid_ramp_bounded(
             )
         theta += h
         steps += 1
+        if steps % 32 == 0:
+            gc.collect()
         current_state = system.pack(q, p)
         while next_sample < sample_targets.size and sample_targets[next_sample] <= theta + 1e-12:
             target_theta = float(sample_targets[next_sample])
@@ -1024,7 +1145,11 @@ def implicit_trapezoid_ramp_bounded(
                 previous_state + alpha * (current_state - previous_state), dtype=float
             )
             strobe_theta.append(float(next_strobe))
-            for multiple, key in ((1, "d1"), (2, "d2"), (3, "d3")):
+            sampled_q, _ = system.unpack(sampled)
+            strobe_pump_flux.append(float(system.phi0 * sampled_q[system.pump_node]))
+            strobe_state_norm.append(float(np.linalg.norm(sampled_q) / math.sqrt(n)))
+            for multiple in strobe_multiples:
+                key = f"d{multiple}"
                 if len(strobe_history) >= multiple:
                     reference = strobe_history[-multiple]
                     scale = max(float(np.linalg.norm(reference)), 1.0)
@@ -1052,6 +1177,8 @@ def implicit_trapezoid_ramp_bounded(
 
 
 def plot_results(outdir: Path, data: dict[str, np.ndarray], spectrum: dict[str, np.ndarray]) -> None:
+    if plt is None:
+        raise RuntimeError("matplotlib is required only for non-compact plotting output")
     theta = data["theta"]
     time_ns = theta / (2.0 * math.pi * 7.9e9) * 1e9
     fig, ax = plt.subplots(figsize=(8, 4))
@@ -1112,7 +1239,7 @@ def run_experiment(args: argparse.Namespace) -> dict[str, Any]:
         raise RuntimeError(
             "RF-SQUID lossless algebraic constraints require implicit_trapezoid"
         )
-    X0, w0, start_current, hb_report = load_hb_initial(
+    X0, w0, checkpoint_current, hb_report = load_hb_initial(
         args.checkpoint, system.circuit, system.omega
     )
     checkpoint_data = np.load(args.checkpoint / "pump_solution.npz")
@@ -1123,7 +1250,7 @@ def run_experiment(args: argparse.Namespace) -> dict[str, Any]:
     checkpoint_dc = checkpoint_dc_flux(hb_report, system.circuit, dc_flux)
     validation = validate_production_hb_state(
         system.circuit, make_branch_law(system.circuit), frequency_hz=args.freq_ghz * 1e9,
-        pump_port=args.pump_port, pump_current_a=start_current,
+        pump_port=args.pump_port, pump_current_a=checkpoint_current,
         modes=checkpoint_modes, state=checkpoint_X,
         nt=max(2 * int(checkpoint_modes.max()) + 1, 40),
         metadata=hb_report.get("metadata", {}),
@@ -1139,7 +1266,10 @@ def run_experiment(args: argparse.Namespace) -> dict[str, Any]:
         }
         (outdir / "summary.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
         return result
+    initialization_mode = getattr(args, "initialization_mode", "hb_periodic")
     restart_path = getattr(args, "transient_restart", None)
+    if restart_path is not None and initialization_mode != "hb_periodic":
+        raise ValueError("--transient-restart cannot be combined with zero-pump initialization")
     if restart_path is not None:
         restart_data = np.load(restart_path)
         y0 = np.asarray(restart_data["y"], dtype=float)
@@ -1147,13 +1277,25 @@ def run_experiment(args: argparse.Namespace) -> dict[str, Any]:
         # continuation ramp is local to this call, so its phase coordinate is
         # intentionally reset to zero.
         start_current = float(restart_data["target_current"])
-    else:
+    elif initialization_mode == "zero_pump_equilibrium":
+        # The unbiased 2c circuit has zero DC branch flux.  Start from the
+        # actual zero-pump equilibrium and project only the algebraic rows.
+        # No state from another target is allowed in this mode.
+        start_current = 0.0
+        q0 = np.zeros(system.n, dtype=float)
+        p0 = np.zeros(system.n, dtype=float)
+        system.project_algebraic_state(q0, p0, system.source(0.0, 0.0, 0.0, 0.0))
+        y0 = system.pack(q0, p0)
+    elif initialization_mode == "hb_periodic":
         q0 = X0 / system.phi0; p0 = w0 / system.phi0
         if system.g_alg_factor is None:
             system.project_algebraic_state(
                 q0, p0, system.source(0.0, start_current, args.target_current_a, 0.0)
             )
         y0 = system.pack(q0, p0)
+        start_current = checkpoint_current
+    else:
+        raise ValueError(f"unknown initialization mode: {initialization_mode}")
     ramp_theta = 2.0 * math.pi * args.ramp_periods
     total_theta = 2.0 * math.pi * (args.ramp_periods + args.hold_periods)
     compact_output = bool(getattr(args, "compact_output", False))
@@ -1215,6 +1357,7 @@ def run_experiment(args: argparse.Namespace) -> dict[str, Any]:
     data["mu"] = np.asarray([system.source(x, start_current, args.target_current_a, ramp_theta)[system.pump_node] for x in sample_theta])
     data["source_current_a"] = np.array(data["mu"], copy=True)
     data["time_s"] = sample_theta / system.omega
+    data["phase_winding_cycles"] = phase_winding_series(system, sample_theta, states)
     if compact_output:
         stride = max(1, sample_theta.size // 256)
         np.savez_compressed(
@@ -1223,7 +1366,10 @@ def run_experiment(args: argparse.Namespace) -> dict[str, Any]:
             max_abs_sin_phi=data["max_abs_sin_phi"][::stride],
             max_abs_phi=data["max_abs_phi"][::stride],
             min_cos_phi=data["min_cos_phi"][::stride],
+            strongest_branch=data["strongest_branch"][::stride],
             state_norm=data["state_norm"][::stride],
+            source_current_a=data["source_current_a"][::stride],
+            phase_winding_cycles=data["phase_winding_cycles"][::stride],
         )
     else:
         np.savez_compressed(outdir / "transient_observables.npz", **data)
@@ -1276,7 +1422,9 @@ def run_experiment(args: argparse.Namespace) -> dict[str, Any]:
     })
     branch_transfer = None
     projection_forced = bool(getattr(args, "force_periodic_projection", False))
-    if classification == "PERIOD_1" or projection_forced:
+    if (classification == "PERIOD_1" or projection_forced) and not bool(
+        getattr(args, "skip_projection", False)
+    ):
         checkpoint_mode_array = np.asarray(
             hb_report["metadata"]["pump_modes"], dtype=int
         )
@@ -1328,6 +1476,9 @@ def run_experiment(args: argparse.Namespace) -> dict[str, Any]:
         else:
             final_status = "HIGH_DRIVE_HB_BRANCH_FOUND"
         blocker_reason = None
+    elif classification == "PERIOD_1":
+        final_status = "VALIDATED_PERIOD1_TD"
+        blocker_reason = None
     elif classification in {"PERIOD_2", "PERIOD_3", "QUASIPERIODIC_OR_PERIOD_N", "RUNNING_PHASE", "BROADBAND_OR_CHAOTIC"}:
         final_status = "REPRODUCIBLE_PHYSICAL_TRANSITION"
         blocker_reason = None
@@ -1345,15 +1496,33 @@ def run_experiment(args: argparse.Namespace) -> dict[str, Any]:
     checkpoint_problem = FullPumpProblem(
         system.circuit.C, system.circuit.G, system.circuit.K,
         system.circuit.Bphi, make_branch_law(system.circuit), checkpoint_grid,
-        system.pump_node, start_current, dc_branch_flux=dc_flux,
+        system.pump_node, checkpoint_current, dc_branch_flux=dc_flux,
     )
     result = {
         "audit": audit.__dict__, "checkpoint": str(args.checkpoint),
         "hb_validation": validation,
         "start_current_a": start_current, "target_current_a": args.target_current_a,
+        "initialization_mode": initialization_mode,
+        "initialization_source": (
+            "zero_pump_equilibrium_q0_p0"
+            if initialization_mode == "zero_pump_equilibrium"
+            else "same_target_td_restart"
+            if restart_path is not None
+            else "validated_hb_periodic_waveform"
+        ),
+        "previous_target_restart_used": False,
+        "same_target_restart_used": bool(restart_path is not None),
+        "source_telemetry": {
+            "initial_source_current_a": float(data["source_current_a"][0]),
+            "final_source_current_a": float(data["source_current_a"][-1]),
+            "target_source_current_a": float(args.target_current_a),
+            "ramp_duration_periods": int(args.ramp_periods),
+            "hold_duration_periods": int(args.hold_periods),
+        },
         "ramp_periods": args.ramp_periods, "hold_periods": args.hold_periods,
         "integrator": integrator,
         "classification": classification, "stroboscopic": strobe,
+        "checkpoint_diagnostics": checkpoint_stroboscopic_diagnostics(strobe),
         "decay_aware": decay,
         "mean_phase_velocity_rad_s": mean_phase_velocity,
         "mean_phase_winding_cycles": phase_winding,
@@ -1401,6 +1570,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="resume a local TD bridge from a transient_restart.npz checkpoint",
     )
     parser.add_argument(
+        "--initialization-mode",
+        choices=("hb_periodic", "zero_pump_equilibrium"),
+        default="hb_periodic",
+        help="TD initialization source; zero_pump_equilibrium is independent turn-on mode",
+    )
+    parser.add_argument(
         "--compact-output", action="store_true",
         help=(
             "store only decimated observables and restart checkpoints; useful "
@@ -1414,6 +1589,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--compact-history-states", type=int, default=1024,
         help="maximum number of late-time full TD states retained for diagnostics",
+    )
+    parser.add_argument(
+        "--skip-projection", action="store_true",
+        help="skip optional TD-to-HB projection after classification",
     )
     parser.add_argument(
         "--force-periodic-projection", action="store_true",

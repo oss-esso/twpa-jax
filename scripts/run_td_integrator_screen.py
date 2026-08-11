@@ -9,6 +9,7 @@ engine.
 from __future__ import annotations
 
 import argparse
+import ctypes
 import json
 import subprocess
 import sys
@@ -20,6 +21,44 @@ try:
     import psutil
 except ImportError:  # pragma: no cover - optional runtime monitor
     psutil = None
+
+
+def process_rss_bytes(pid: int) -> int | None:
+    """Return child RSS without requiring psutil on Windows."""
+    if psutil is not None:
+        try:
+            return int(psutil.Process(pid).memory_info().rss)
+        except psutil.Error:
+            return None
+    if sys.platform != "win32":  # pragma: no cover - campaign host is Windows
+        return None
+    class PROCESS_MEMORY_COUNTERS(ctypes.Structure):
+        _fields_ = [
+            ("cb", ctypes.c_ulong),
+            ("PageFaultCount", ctypes.c_ulong),
+            ("PeakWorkingSetSize", ctypes.c_size_t),
+            ("WorkingSetSize", ctypes.c_size_t),
+            ("QuotaPeakPagedPoolUsage", ctypes.c_size_t),
+            ("QuotaPagedPoolUsage", ctypes.c_size_t),
+            ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t),
+            ("QuotaNonPagedPoolUsage", ctypes.c_size_t),
+            ("PagefileUsage", ctypes.c_size_t),
+            ("PeakPagefileUsage", ctypes.c_size_t),
+        ]
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    psapi = ctypes.WinDLL("psapi", use_last_error=True)
+    handle = kernel32.OpenProcess(0x1000 | 0x0400, False, int(pid))
+    if not handle:
+        return None
+    try:
+        counters = PROCESS_MEMORY_COUNTERS()
+        counters.cb = ctypes.sizeof(counters)
+        ok = psapi.GetProcessMemoryInfo(
+            handle, ctypes.byref(counters), counters.cb
+        )
+        return int(counters.WorkingSetSize) if ok else None
+    finally:
+        kernel32.CloseHandle(handle)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -34,18 +73,14 @@ def monitor_process(
     """Wait for a child and return code, peak RSS, and memory-limit status."""
     peak_rss = 0
     exceeded = False
-    child = psutil.Process(process.pid) if psutil is not None else None
     while process.poll() is None:
-        if child is not None:
-            try:
-                rss = int(child.memory_info().rss)
-                peak_rss = max(peak_rss, rss)
-                if rss > memory_limit_bytes:
-                    exceeded = True
-                    process.terminate()
-                    break
-            except psutil.Error:
-                child = None
+        rss = process_rss_bytes(process.pid)
+        if rss is not None:
+            peak_rss = max(peak_rss, rss)
+            if rss > memory_limit_bytes:
+                exceeded = True
+                process.terminate()
+                break
         time.sleep(2.0)
     if exceeded:
         try:

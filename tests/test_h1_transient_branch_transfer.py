@@ -2,10 +2,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import numpy as np
+
 from scripts.h1_transient_branch_transfer import (
     audit_circuit,
     classify_state,
     classify_td_result,
+    _strobe_summary,
+    checkpoint_stroboscopic_diagnostics,
     load_hb_initial,
     build_system,
     parse_args,
@@ -38,6 +42,30 @@ def test_h1_classifier_recognizes_period_two_from_stroboscopic_distance() -> Non
     period_two = {"tail_max": 2e-3, "tail_d2_max": 2e-4, "tail_d3_max": 2e-3}
 
     assert classify_state(period_two, 0.0, True) == "PERIOD_2"
+
+
+def test_h1_period_two_uses_late_d2_closure_not_early_transient_maximum() -> None:
+    periods = np.arange(31, dtype=float)
+    distances = {
+        "d1": np.full(30, 2e-3),
+        "d2": np.array([2e-2, *([2e-4] * 28)]),
+        "d3": np.full(28, 2e-3),
+    }
+    summary = _strobe_summary(periods, distances)
+
+    assert summary["tail_d2_max"] == 2e-4
+    assert classify_state(summary, 0.0, True) == "PERIOD_2"
+
+
+def test_h1_checkpoint_diagnostics_are_recorded_at_specified_hold_lengths() -> None:
+    periods = np.arange(441, dtype=float)
+    distances = {f"d{n}": np.full(441 - n, 1e-4) for n in (1, 2, 3, 4, 6, 8)}
+    strobe = _strobe_summary(periods, distances)
+
+    checkpoints = checkpoint_stroboscopic_diagnostics(strobe)
+
+    assert [item["hold_periods"] for item in checkpoints] == [40, 90, 140, 250, 440]
+    assert checkpoints[-1]["stroboscopic"]["periods"][-1] == 440.0
 
 
 def test_decay_aware_adapter_does_not_promote_broadband_hold() -> None:
