@@ -43,11 +43,18 @@ def target_plot(record: dict[str, Any], outdir: Path, ramp_periods: int) -> None
     period_offset = float(record.get("period_offset", 0.0))
     periods = np.asarray(compact["theta"], dtype=float) / (2.0 * np.pi) + period_offset
     peak = np.asarray(compact["max_abs_sin_phi"], dtype=float)
+    min_cos = np.asarray(compact.get("min_cos_phi", []), dtype=float)
     winding_series = np.asarray(compact.get("phase_winding_cycles", []), dtype=float)
     strobe = summary.get("stroboscopic", {})
     fig, axes = plt.subplots(3, 2, figsize=(12, 10), sharex=False)
     axes = axes.ravel()
     axes[0].plot(periods, peak, color="tab:red", linewidth=1.0)
+    if min_cos.size == periods.size:
+        cos_axis = axes[0].twinx()
+        cos_axis.plot(periods, min_cos, color="tab:blue", linewidth=1.0, alpha=0.9)
+        cos_axis.set_ylabel("min cos(phi_J)", color="tab:blue")
+        cos_axis.tick_params(axis="y", labelcolor="tab:blue")
+        cos_axis.grid(False)
     ramp_end = float(record.get("ramp_end_periods", ramp_periods))
     axes[0].axvline(ramp_end, color="k", linestyle="--", linewidth=0.8)
     axes[0].set_ylabel("peak |I_J| / I_c")
@@ -159,6 +166,7 @@ def overview(campaign: dict[str, Any], outdir: Path) -> None:
     outdir.mkdir(parents=True, exist_ok=True)
     powers = np.asarray([item["power_dbm"] for item in records])
     utilization = []
+    min_cos_values = []
     d1 = []
     best_n = []
     winding = []
@@ -168,6 +176,7 @@ def overview(campaign: dict[str, Any], outdir: Path) -> None:
         compact_path = Path(item["summary_path"]).parent / "td_compact.npz"
         compact = np.load(compact_path) if compact_path.exists() else None
         utilization.append(float(np.max(compact["max_abs_sin_phi"])) if compact is not None else np.nan)
+        min_cos_values.append(float(np.min(compact["min_cos_phi"])) if compact is not None and "min_cos_phi" in compact else np.nan)
         strobe = summary.get("stroboscopic", {})
         tail = strobe.get("tail_median_by_n", {})
         if tail:
@@ -193,6 +202,24 @@ def overview(campaign: dict[str, Any], outdir: Path) -> None:
     fig.suptitle("7.9 GHz 2c independent upward-turn-on overview")
     fig.tight_layout()
     fig.savefig(outdir / "overview_dynamics.png", dpi=150)
+    plt.close(fig)
+
+    fig, ax = plt.subplots(figsize=(9, 5))
+    cos_ax = ax.twinx()
+    ax.plot(powers, utilization, "o-", color="tab:red", label="r_max = max |sin(phi_J)|")
+    cos_ax.plot(powers, min_cos_values, "s-", color="tab:blue", label="min cos(phi_J)")
+    ax.set_xlabel("pump power (dBm)")
+    ax.set_ylabel("r_max = max |I_J| / I_c", color="tab:red")
+    cos_ax.set_ylabel("min cos(phi_J)", color="tab:blue")
+    ax.tick_params(axis="y", labelcolor="tab:red")
+    cos_ax.tick_params(axis="y", labelcolor="tab:blue")
+    ax.grid(True, alpha=0.25)
+    ax.set_title("7.9 GHz 2c overnight junction stress and tangent margin")
+    handles = ax.get_legend_handles_labels()[0] + cos_ax.get_legend_handles_labels()[0]
+    labels = ax.get_legend_handles_labels()[1] + cos_ax.get_legend_handles_labels()[1]
+    ax.legend(handles, labels, loc="best")
+    fig.tight_layout()
+    fig.savefig(outdir / "junction_headroom_vs_power.png", dpi=150)
     plt.close(fig)
 
     categories = {name: index for index, name in enumerate(sorted(set(regimes)))}
