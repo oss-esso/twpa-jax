@@ -167,6 +167,8 @@ def overview(campaign: dict[str, Any], outdir: Path) -> None:
     powers = np.asarray([item["power_dbm"] for item in records])
     utilization = []
     min_cos_values = []
+    max_phi_values = []
+    signed_winding = []
     d1 = []
     best_n = []
     winding = []
@@ -177,6 +179,7 @@ def overview(campaign: dict[str, Any], outdir: Path) -> None:
         compact = np.load(compact_path) if compact_path.exists() else None
         utilization.append(float(np.max(compact["max_abs_sin_phi"])) if compact is not None else np.nan)
         min_cos_values.append(float(np.min(compact["min_cos_phi"])) if compact is not None and "min_cos_phi" in compact else np.nan)
+        max_phi_values.append(float(np.max(compact["max_abs_phi"])) if compact is not None and "max_abs_phi" in compact else np.nan)
         strobe = summary.get("stroboscopic", {})
         tail = strobe.get("tail_median_by_n", {})
         if tail:
@@ -185,7 +188,9 @@ def overview(campaign: dict[str, Any], outdir: Path) -> None:
         else:
             best_n.append(np.nan)
         d1.append(float(strobe.get("tail_median", np.nan)))
-        winding.append(abs(float(summary.get("mean_phase_winding_cycles") or 0.0)))
+        signed = float(summary.get("mean_phase_winding_cycles") or 0.0)
+        signed_winding.append(signed)
+        winding.append(abs(signed))
         regimes.append(label(item))
     fig, axes = plt.subplots(2, 2, figsize=(12, 8))
     axes[0, 0].plot(powers, utilization, "o-")
@@ -220,6 +225,41 @@ def overview(campaign: dict[str, Any], outdir: Path) -> None:
     ax.legend(handles, labels, loc="best")
     fig.tight_layout()
     fig.savefig(outdir / "junction_headroom_vs_power.png", dpi=150)
+    plt.close(fig)
+
+    fig, axes = plt.subplots(3, 1, figsize=(10, 11), sharex=True)
+    stress_ax = axes[0]
+    stress_cos_ax = stress_ax.twinx()
+    stress_ax.plot(powers, utilization, "o-", color="tab:red", label="r_max = max |sin(phi_J)|")
+    stress_cos_ax.plot(powers, min_cos_values, "s-", color="tab:blue", label="min cos(phi_J)")
+    stress_cos_ax.axhline(0.0, color="tab:blue", linestyle="--", linewidth=0.8, alpha=0.7)
+    stress_ax.set_ylabel("r_max = max |sin(phi_J)|")
+    stress_cos_ax.set_ylabel("min cos(phi_J)", color="tab:blue")
+    stress_ax.tick_params(axis="y", labelcolor="tab:red")
+    stress_cos_ax.tick_params(axis="y", labelcolor="tab:blue")
+    stress_ax.set_title("aggregate Josephson stress and tangent margin")
+    handles = stress_ax.get_legend_handles_labels()[0] + stress_cos_ax.get_legend_handles_labels()[0]
+    labels = stress_ax.get_legend_handles_labels()[1] + stress_cos_ax.get_legend_handles_labels()[1]
+    stress_ax.legend(handles, labels, loc="best")
+    stress_ax.grid(True, alpha=0.25)
+
+    axes[1].plot(powers, np.asarray(max_phi_values) / (2.0 * np.pi), "^-", color="tab:green", label="max |phi_J| / 2pi")
+    axes[1].set_ylabel("max |phi_J| / 2pi")
+    axes[1].set_title("aggregate absolute Josephson phase")
+    axes[1].grid(True, alpha=0.25)
+    axes[1].legend(loc="best")
+
+    axes[2].plot(powers, np.maximum(np.abs(signed_winding), 1e-16), "o-", color="tab:purple", label="|signed mean winding|")
+    axes[2].axhline(0.1, color="0.4", linestyle="--", linewidth=0.8, label="0.1-cycle reference")
+    axes[2].set_yscale("log")
+    axes[2].set_xlabel("pump power (dBm)")
+    axes[2].set_ylabel("late winding magnitude (cycles)")
+    axes[2].set_title("aggregate signed mean winding over the final late-time window")
+    axes[2].grid(True, alpha=0.25)
+    axes[2].legend(loc="best")
+    fig.suptitle("7.9 GHz 2c overnight diagnostics available from stored aggregates")
+    fig.tight_layout()
+    fig.savefig(outdir / "available_aggregate_diagnostics.png", dpi=150)
     plt.close(fig)
 
     categories = {name: index for index, name in enumerate(sorted(set(regimes)))}
