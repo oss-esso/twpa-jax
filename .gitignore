@@ -10,6 +10,9 @@ pytest-of-*/
 /outputs/**
 .hybrid_outputs/
 /.claude/
+/.codex/
+/.graphifyignore
+/graphify-out/
 /research_runtime/
 /designs/ipm_2c_fixed/
 /.pytest*/
