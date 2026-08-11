@@ -35,6 +35,14 @@ from twpa_solver.signal import (
     solve_gain_one,
     solve_gain_one_schur,
 )
+from twpa_solver.stability import (
+    FloquetResult,
+    HBPeriodicOrbit,
+    MonodromyOperator,
+    build_hb_periodic_orbit,
+    build_monodromy_operator,
+    compute_floquet_multipliers,
+)
 
 __all__ = [
     "CircuitMatrices",
@@ -64,4 +72,10 @@ __all__ = [
     "build_khat",
     "solve_gain_one",
     "solve_gain_one_schur",
+    "FloquetResult",
+    "HBPeriodicOrbit",
+    "MonodromyOperator",
+    "build_hb_periodic_orbit",
+    "build_monodromy_operator",
+    "compute_floquet_multipliers",
 ]
