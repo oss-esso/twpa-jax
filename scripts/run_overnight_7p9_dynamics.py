@@ -55,24 +55,17 @@ def load_reference(checkpoint: Path, freq_ghz: float, pump_port: int) -> tuple[f
 
 
 def regime(summary: dict[str, Any]) -> str:
-    """Apply the decay-aware policy before interpreting the raw classifier."""
+    """Map the primary envelope label while retaining secondary diagnostics."""
     integrator = summary.get("integrator") or {}
     if not integrator.get("success", False):
         return "TRANSIENT_NUMERICAL_FAILURE"
-    decay = str((summary.get("decay_aware") or {}).get("class", ""))
     raw = str(summary.get("classification", ""))
-    if decay in {"UNRESOLVED_SLOW_RELAXATION", "RELAXING_TO_PERIOD1"}:
-        return "UNRESOLVED_LONG_TRANSIENT"
-    if decay == "PERIOD_1" or raw == "PERIOD_1":
+    if raw == "NON_GROWING_MAX_ABS_PHI":
         return "PERIOD1"
-    if raw == "RUNNING_PHASE":
-        return "RUNNING_PHASE"
-    if raw in {"PERIOD_2", "PERIOD_3"}:
-        return raw
-    if raw == "QUASIPERIODIC_OR_PERIOD_N":
-        return "PERIOD_N_OR_QUASIPERIODIC"
-    if raw == "BROADBAND_OR_CHAOTIC" or decay == "PERSISTENT_NONPERIODIC":
-        return "BROADBAND_NONPERIODIC"
+    if raw == "GROWING_MAX_ABS_PHI":
+        return "GROWING_ENVELOPE"
+    if raw == "ENVELOPE_SLOPE_UNRESOLVED":
+        return "UNRESOLVED_LONG_TRANSIENT"
     return "UNRESOLVED_LONG_TRANSIENT"
 
 
@@ -350,6 +343,8 @@ def choose_extension(campaign: dict[str, Any]) -> tuple[str, str]:
         return "FINITE_PERIOD_HB_NOT_APPROPRIATE", "The first deep transition was broadband/non-periodic rather than a confirmed finite period."
     if raw == "RUNNING_PHASE":
         return "FINITE_PERIOD_HB_NOT_APPROPRIATE", "Running phase was observed before a confirmed bounded periodic replacement."
+    if raw == "GROWING_MAX_ABS_PHI":
+        return "FINITE_PERIOD_HB_NOT_APPROPRIATE", "The post-ramp max_abs_phi envelope is growing above the Phase 1 threshold."
     return "NO_EXTENSION_YET", "No specific nonlinear HB ansatz was demonstrated by the available diagnostics."
 
 

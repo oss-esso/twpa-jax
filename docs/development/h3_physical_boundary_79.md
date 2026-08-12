@@ -1,6 +1,6 @@
 # 7.9 GHz physical operating-boundary search
 
-Status: `PHYSICAL_BOUNDARY_BRACKETED`
+Status: `UNCONFIRMED`
 
 This report uses the operational definition requested for the boundary: the
 lowest drive at which the standardized upward-ramped full-IPM trajectory no
@@ -30,7 +30,14 @@ once 11.6 uA was established as the first non-working candidate.
 
 ## Boundary
 
-The resulting physical-current bracket is:
+The result below is retained as an operational TD observation, but the physical
+boundary claim is downgraded to `UNCONFIRMED`. The requested
+`delta_theta = 0.01`, 10-period-ramp floor run terminated after 100 periods
+without a final summary, and the available floor evidence is only
+`3.0e-3 / 4.25e-4 = 7.1`, below the required tenfold margin. Phase 2 is the
+sole source of the boundary until this protocol is completed successfully.
+
+The operational current bracket is:
 
 ```text
 I_PHYSICAL_WORKING_MAX >= 11.40 uA

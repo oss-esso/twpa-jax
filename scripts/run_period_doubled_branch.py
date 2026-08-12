@@ -139,6 +139,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         pump.omega_p,
         ms,
         signal_ghz_guess=0.5 * pump.pump_freq_ghz,
+        loss_model="current_complex_c",
         max_iters=args.floquet_iters,
         tol=args.floquet_tol,
     )
