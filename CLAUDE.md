@@ -987,6 +987,322 @@ cell's plasma frequency. Because `conductance_abs_omega` is non-analytic in
 complex omega, Tier-1 stability remains available but Tier-2 complex-omega
 resonance refinement is unavailable for lossy circuits.
 
+## 7.9 GHz PERIOD1 branch and Floquet stability (measured 2026-08-11)
+
+Full evidence and the staged plan:
+`docs/development/high_power_79ghz_period1_floquet_plan.md`.
+
+### The `-23.421053` dBm "HB failure" is a power-step artifact
+
+`scripts/recover_period1_branch.py` reached `-24.25`, `-24.00`, `-23.80`,
+`-23.60` and `-23.421053` dBm from the `-24.473684` dBm column checkpoint by
+**plain Newton** (`method="natural"`); PALC was never invoked. Same basis
+`[1,3,...,19]`, `--pump-port 4`, `designs/ipm_2c_fixed`. The original column
+(`.hybrid_outputs/hb_up_7p9_m35_to_m21`) stepped `1.0526 dB` and stalled;
+`0.179`-`0.250` dB steps converge. The converged branch there is benign:
+`branch_current_max_over_ic` runs `0.5589 -> 0.6023` and `branch_min_cos_phase`
+`0.8292 -> 0.7983`, smooth and monotone.
+
+**Do not quote `0.862` utilization or `0.507` min-cos from
+`hb_up_to_failure.csv` row 11.** Those are the diverging Newton iterate, not a
+solution. The converged values at that power are `0.6023` and `0.7983`.
+
+The PALC fold remains `I_bound = 1.1628e-05 A`
+([[arclength-metric-bug-and-snaking-verdict]]). The TD ramp bracket
+`1.140e-05 A <= I_boundary <= 1.160e-05 A`
+(`docs/development/h3_physical_boundary_79.md`) is now **UNCONFIRMED**: the
+requested `delta_theta = 0.01` floor run terminated at its 100-period restart
+checkpoint without a final summary, and the available floor margin is only
+7.1x rather than the required 10x. The disputed point is `7.3489e-06 A`, i.e.
+**63% of the PALC boundary current, 3.98 dB below it**.
+
+### The TD campaign's `UNRESOLVED_LONG_TRANSIENT` labels are protocol artifacts
+
+`.hybrid_outputs/overnight_7p9_dynamics_v1/campaign_summary.json`:
+`d1_late = 4.25e-4 +/- 1e-6` **constant across 11 dB** of pump power
+(`-35` through `-24.0` dBm), and `tau_periods = 396..410` at every one of
+those powers. That is a numerical floor; fitting a decay slope on it produces a
+constant, meaningless timescale. The campaign's own controls at `-23.8` dBm:
+
+| `delta_theta` | ramp | init | d1_late |
+| ---: | ---: | --- | ---: |
+| 0.05 | 20 | zero-pump | 2.413e-3 |
+| 0.05 | 80 | zero-pump | 1.025e-3 |
+| 0.025 | 40 | zero-pump | 1.179e-3 |
+| 0.05 | 0 | TD restart | 4.678e-4 (**PERIOD1**) |
+| 0.05 | 40 | **HB orbit** | **4.436e-4** |
+
+The matched-protocol rerun does not support timestep convergence: at `-23.8`
+dBm, `delta_theta = 0.05` gives `1.075e-3`, while `0.025` gives `1.179e-3`.
+The ramp-length effect remains, and HB-orbit init lands at the same floor the
+classifier calls PERIOD1 at `-35` dBm (`6.313e-4` at `-23.421053` dBm).
+**TD preserves the PERIOD1 orbit at the disputed powers, but `d1` is not a
+stability discriminant.**
+Above the transition `d1` is non-monotone and falls back to `1.2e-2` by
+`-17` dBm, which is not a period-doubling ordering. The one physical signal up
+there is `mean_phase_winding_cycles`, `1e-8` below vs `-8.12e-2` at `-15` dBm.
+
+**Retracted:** the inference that ~1000-period relaxation implies a Floquet
+multiplier near `0.9992`. The same timescale is present 11 dB lower where
+nothing is marginal.
+
+Three instrument defects behind this:
+- `scripts/run_overnight_7p9_dynamics.py:105` hardcodes `implicit_trapezoid`,
+  which is A-stable but **not L-stable** (`R(z) -> -1`), so it applies no
+  numerical damping at any frequency. In a circuit whose only dissipation is
+  four port resistors, ramp-injected content never decays.
+  `h1_transient_branch_transfer.py:1557` already offers `BDF` and `Radau`.
+- Phase 1 now makes the post-ramp `max_abs_phi` envelope slope the primary
+  classifier (`>1e-5/period` means growth); recurrence distances and their
+  trend remain secondary diagnostics only.
+- A separate audit found `UNRESOLVED_SLOW_RELAXATION` while the `max_abs_phi`
+  envelope grew monotonically by `2.7x`; retire `d1` and use the envelope slope
+  as the transient diagnostic.
+- `scripts/floquet_stability_sweep.py` now prints the phase as ASCII `angle=`
+  and writes its JSON before the summary block.
+
+### `|lambda|` is not a decidable discriminant on this circuit
+
+`designs/ipm_2c_fixed` resolves to `has_loss = False`: four 50-ohm port
+resistors are the only dissipation in a 6136-node / 16312-element network, so
+`default_loss_model_for` returns `current_complex_c` (analytic, Tier-2 legal).
+Dense half-zone Hill scan (700 points, S=4, `gamma_nt=1024`, top-20 minima
+refined):
+
+| P [dBm] | max `\|lambda\|` | `1 - \|lambda\|` | f [GHz] | label |
+| ---: | ---: | ---: | ---: | --- |
+| -35.000000 | 0.99999994 | 6e-8 | 3.90277 | PERIOD_DOUBLING_CANDIDATE |
+| -24.473684 | 0.99999772 | 2.3e-6 | 2.69643 | NEIMARK_SACKER_CANDIDATE |
+| -23.421053 | 1.00000000 | 2e-11 | 3.47645 | NEIMARK_SACKER_CANDIDATE |
+
+`-35` dBm, unquestionably stable, looks *more* marginal than `-24.47` dBm and is
+labelled period-doubling. Exactly-real roots (`Im(omega)=0`, `|lambda|=1`) also
+appear (`2.977`/`2.797` GHz and `2.320`/`2.337` GHz): port-decoupled internal
+modes. A 16-point seeded power sweep shows the port-coupled branch flat at
+`0.9550..0.9573` with no approach, while the secant intermittently falls onto a
+power-independent neutral root at `3.5912` GHz -- a branch-tracking failure.
+`src/twpa_solver/stability/tracking.py` exists but is wired only to the
+monodromy scan, not to the Hill sweep.
+
+**Consequence: do not report a `|lambda|` crossing on a lossless circuit.**
+Making stability decidable requires physical dissipation first.
+
+### The time-domain monodromy route fails on 2c and should not be retried as-is
+
+`.hybrid_outputs/floquet_7p9_2c_v1_smoke2/floquet_results.json`: dimension
+`12271`, `k=2`, `which="LM"`, `ncv` default 20 ->
+`"ARPACK error -1: No convergence (81 iterations, 0/2 eigenvectors converged)"`
+after `651` matvecs / `121 s`; `spectral_radius = NaN`. Two independent
+blockers, both properties of the operator rather than defects in
+`src/twpa_solver/stability/`:
+- thousands of multipliers within `1e-8` of the unit circle -- Arnoldi cannot
+  split a 2-D subspace out of that cluster;
+- one-period closure error `3.922e-03` at 64 steps/period, against a target
+  `1 - |lambda| ~ 1e-8`. Trapezoid is 2nd order, so `~1e5` steps/period would be
+  needed.
+
+The formulation in `docs/development/floquet_implementation.md` is sound; the
+eigensolver strategy is what fails. Prefer the Hill route
+(`src/twpa_solver/signal/stability.py`) -- the conversion matrix *is* the Hill
+matrix and the gain solve already factorizes it.
+
+### Mode comb sets the required Hill scan density
+
+Unpumped linear circuit, `solve_linear_scattering` with
+`extra_K = Bphi diag(gamma_off) Bphi^T` at zero flux, 7.85-7.95 GHz:
+port 4->3 group delay `0.121 ns` (1.0 pump period, `|S|` -0.05..-0.67 dB);
+port 4->2 group delay `5.885 ns` (**46.5 pump periods**, `|S|` -8.5..-23.2 dB).
+The pump-shifted mode comb measured in Phase 0 is **~241.7 MHz**. Use about
+700 points for a full Hill-zone scan; `--n-points 200` is thin but not aliased,
+and the Phase 1 guard rejects scans below approximately 175 points.
+
+### The Themis 14.18.08 cube measures the collapse boundary directly
+
+`docs/development/14.18.08_Themis_SetupAug25_noVTS_transmission_15mK`: 51 pump
+frequencies `5.980`-`7.997` GHz at ~40 MHz spacing, so it **brackets 7.9 GHz**.
+(`17.03.10_...` spans only `7.043`-`7.373` GHz and is useless for this.) Each
+`.npy` is a pickled dict, load with `np.load(..., allow_pickle=True).item()`:
+
+```text
+Frequency    (2001,)      4.0 - 12.0 GHz
+Response     (31, 2001)   dB, "cali on unpumped device" -> IS gain_vs_off_db
+PumpPower    (31,)        -29.0800 .. -19.0267 dBm, 0.3351 dB step
+SignalPower  scalar       -30 dBm
+```
+
+`Response` is a pump-on/pump-off ratio, so it is **invariant under the source
+power convention** and directly comparable to the solver's `gain_vs_off_db`.
+
+**The device collapses abruptly and totally.** Median response over the whole
+4-12 GHz span falls from ~0 dB to ~-30 dB in one 0.335 dB pump step -- the line
+stops transmitting, it is not gain rolling off. At 7.916 GHz: 20.694 dB peak /
+-0.052 median at -22.7129 dBm, then 2.258 / -11.241 at -22.3778 dBm.
+
+The boundary is a **sawtooth comb in pump frequency**: period ~265 MHz (resets
+at 6.141, 6.383, 6.666, 6.908, 7.150, 7.432, 7.714, 7.997 GHz), depth 5.36 dB,
+envelope -24.388 to -19.027 dBm. The upper edge is **censored** by the
+instrument's max pump power -- at 6.908, 7.150, 7.714, 7.755 and 7.997 GHz the
+device never collapsed in range. Never report a censored frequency as a
+boundary. Peak gain immediately before collapse spans 8.4-33.2 dB, median ~20 dB
+(33.15 dB at 7.835 GHz).
+
+**First external contact with the PALC fold -- promising, not yet a
+confirmation.** An exhaustive search found exactly **three** `fold_curve.csv`
+files; there is **no 19-point sweep on disk** (a `-18.6..-23.0 dBm` 19-point
+figure circulating in session notes is unsupported -- do not cite it):
+
+| file | points | content |
+| --- | ---: | --- |
+| `outputs/phase4_fold_follow_reduced/` | 4 | 7.6: `-21.496451` (`lam=0.5311`); 7.9: `-19.435096` (`lam=0.6734`); 8.2: no fold; 8.5: `-19.825254` |
+| `outputs/campaign_diss/2c_single_column_7p6_fold_trace/` | 1 | 7.6: `-22.109839` (`lam=0.4949`) |
+| `outputs/continuation_diagnostics/f00_fold_follow/` | 3 | 7.786/7.969/8.153: **all empty** (retracted pre-metric-fix run) |
+
+| f_p [GHz] | model fold [dBm] | source | measured bracket | verdict |
+| ---: | ---: | --- | --- | --- |
+| 7.6 | -21.496451 | phase4 | [-21.7076, -21.3724] @ 7.593 | **inside** |
+| 7.6 | -22.109839 | campaign_diss | [-21.7076, -21.3724] @ 7.593 | 0.40 dB below |
+| 7.9 | -19.435096 | phase4 | [-21.3724, -21.0373] @ 7.876 | model high 1.6-3.3 dB |
+| 8.2 | no fold found | phase4 | measurement ends 7.997 | no comparison |
+
+**That table assumes `df = 0` and `dP = 0`, which is not admissible.** The
+measurement is a real device: fab tolerance on `Lj`/`Cg` shifts the comb in
+frequency, line calibration shifts the power. Both offsets are small in their
+own units, but the comb converts small `df` into large `dP` -- measured envelope
+slope is **-19.1 dB/GHz at 7.6 GHz and -20.8 dB/GHz at 7.9 GHz**, i.e. 0.19-0.21
+dB per 10 MHz, so the measurement's own 40 MHz grid step is already +/-0.4 dB of
+irreducible power ambiguity.
+
+**The comparison currently has ZERO degrees of freedom.** 8.5 GHz is outside the
+measured band and 8.2 GHz has no fold, so only 2 model points land inside; there
+are 2 calibration unknowns. Constrained scan against the 46 non-censored
+measured points (bracket midpoints):
+
+| window | best rms | at | `dP` within 0.25 dB of best |
+| --- | ---: | --- | --- |
+| `df`<=50 MHz, `dP`<=1.5 dB | 1.006 dB | df=-0.024 GHz, dP=-0.76 dB | -1.50..+0.40 (span **1.90 dB**) |
+| `df`<=100 MHz, `dP`<=3.0 dB | 0.975 dB | df=-0.100 GHz, dP=+0.76 dB | -3.00..+1.48 (span **4.48 dB**) |
+
+Two retractions follow:
+
+1. **The 0.12 dB agreement at 7.6 GHz is a single-point coincidence.** Adding
+   the 7.9 GHz point, no small `(df,dP)` reconciles both better than ~1.0 dB rms
+   -- 3x the measurement's own 0.335 dB bracket.
+2. **`dP` is NOT determined** (uncertain by 1.9-4.5 dB; the window edge, not the
+   data, does the constraining). The earlier inference that `dP ~ 0` rather than
+   `align_map_to_measurement.py`'s `+2.5..+3.3 dB` is **withdrawn**. Both remain
+   admissible.
+
+The 0.61 dB inter-run model spread is still real and still blocking, but it is
+now the second problem, not the first.
+
+Offset-free content that survives: both sides have frequencies with no boundary
+in range (model 8.2 GHz; measurement 6.908/7.150/7.714/7.755/7.997); every model
+fold and the whole measured envelope sit in the same -19..-24 dBm window (so the
+model is not wrong by tens of dB); and **curve shape** (265 MHz comb period,
+5.36 dB depth) is `dP`-invariant and only translates under `df`, so it is the
+comparison to make. Any `(df,dP)` fit needs >=10 usable model fold frequencies
+before it carries information.
+
+Two consequences:
+
+- **Fit `(df, dP)` on the boundary, not the gain lobes.** A 51-point collapse
+  envelope against a 51-point fold curve is over-determined and the parameters
+  separate, unlike `scripts/align_map_to_measurement.py`'s gain-lobe fit, whose
+  `dP = +2.5..+3.3 dB` was measured at 6.2-7.45 GHz. Whether it applies at 7.6+
+  GHz is **open** -- the two model folds available there cannot separate `df`
+  from `dP` (DOF = 0, see above). Do not argue `dP` from one or two fold points;
+  it needs the full 51-frequency curve.
+**Observable mismatch: the two sides do not measure the same thing.** The
+production column reports `gain_vs_off_db` at ONE tone `f_s = f_p - 500 MHz`;
+the measurement takes `max` over 4-12 GHz. Measured bias `G_peak - G@(fp-500)`:
+**1.79 -> 11.90 dB at 7.876 GHz** (+9.34 dB across the sweep), 1.15 -> 8.97 dB
+at 7.916 GHz. It grows because the gain lobes move in frequency as pump phase
+accumulates (peak wanders 4.824 -> 6.800 -> 6.408 -> 8.256 GHz at 7.876 GHz).
+Worse, at 7.876 GHz the single-tone trace **falls** (16.31 -> 15.55 -> 13.62 dB)
+while the peak still **rises** (21.81 -> 23.48 -> 25.52 dB) -- a fixed-offset
+probe reports rollover where the device is still gaining. No slope, shape
+statistic or normalization removes a power-dependent non-monotone 12 dB bias.
+**Match the observable at the source**: run with a signal spectrum and reduce it
+with the measurement's own rule (same span, same pump-exclusion window). Cost
+~0.36 s per signal frequency.
+
+**The measured device follows `G ~ (1 - I/I_th)^-2`.** Fitting `1/sqrt(G_lin)`
+against pump amplitude over amplifying pre-collapse points and extrapolating to
+zero predicts the observed collapse power:
+
+| f_p [GHz] | n | R^2 | `P_th` fit | collapse observed | error |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 7.835 | 7 | 0.9853 | -20.718 | -20.702 | **0.02 dB** |
+| 7.876 | 11 | 0.9009 | -21.634 | -21.372 | 0.26 dB |
+| 7.916 | 16 | 0.9666 | -22.435 | -22.713 | 0.28 dB |
+| 7.795 | 11 | 0.7630 | -18.459 | -19.697 | 1.24 dB (post-reset, exclude) |
+
+So the collapse **is** the parametric threshold, established from the gain
+trajectory alone with no model input.
+
+**Curve-shape comparison protocol** (each step kills a nuisance parameter by
+construction, not by fitting):
+1. **Landmark referencing (primary).** `u = P - P_boundary` on both sides -> the
+   boundary sits at `u=0` and `dP` never enters. Overlay `G(u)`.
+2. **Threshold-form scalars (primary quantitative).** Fit `1/sqrt(G_lin)` vs
+   pump amplitude on both sides; compare **intercept (threshold) and slope**.
+   Over-determined, physically meaningful. Gate on `R^2>=0.9`, `n>=6`, exclude
+   post-comb-reset frequencies.
+3. **`dG/dP` log-slope, secondary only.** Kills additive `dG` exactly but not
+   `dP`, and amplifies noise on a 0.335 dB grid. Use Savitzky-Golay.
+4. **Global `(df,dP)` registration last**, under the DOF gate above.
+
+Rejected: **DTW** (absorbs real physics discrepancy into an x-warp, always
+matches), **Procrustes** (removes rotation/isotropic scale, meaningless for
+dBm-vs-dB axes), **min-max normalization** (discards the dB scale under test),
+**correlation coefficient alone** (blind to a uniform offset).
+
+- **Gain at the boundary is a calibration-free test.** Both sides are
+  pump-on/pump-off ratios, so it is independent of the port convention and the
+  line-loss model. The 7.9 GHz column ran `--no-signal-spectrum`, so only a
+  single-frequency `gain_vs_off_db = 13.124` dB at 7.4 GHz exists; that is not
+  the peak and must not be compared against the measured 8.4-33.2 dB range.
+
+The `-23.421053` dBm point is below the measured collapse at 7.9 GHz (~-21.6
+dBm interpolated) as well as below the model fold. It is near no boundary at
+all. Separately, the TD campaign's rising `mean_phase_winding_cycles` at high
+power now has an external counterpart: total loss of transmission is what
+junction phase running looks like on a VNA.
+
+### Loss channels: three, not interchangeable (resolved 2026-08-11)
+
+| channel | stamped in | analytic in omega | available to `ipm_2c_fixed` |
+| --- | --- | --- | --- |
+| dielectric `tan_delta` | `Im(C)` = `C*(1-1j*tan_delta)` | **no** -> `conductance_abs_omega` | **yes, the only one** |
+| real shunt conductance | `G` | yes | **no** -- IPM has none. `shunt_conductance_s` is a `build_effective_snail_line` parameter only (`builders/le_gal_2025.py:47`, stamped uniform node-to-ground at `:113`); Le Gal benchmark knob, not IPM. |
+| RCSJ / quasiparticle resistance | -- | -- | **not implemented in `src/`**. Junctions are purely reactive (ideal JJ + `Cj`); `pump/diagnostics.py:37` names quasiparticle switching as out of model. |
+
+`CircuitMatrices.has_loss` (`core/circuit.py:106`) tests **only** `Im(C)`, never
+`G`. So `has_loss = False` on 2c means "no dielectric loss in C", **not** "no
+dissipation" -- the four 50-ohm port resistors are in `G` and do dissipate.
+
+Consequence for stability work: adding `tan_delta` flips
+`default_loss_model_for` to `conductance_abs_omega` and **kills Tier-2**
+complex-omega refinement. Choose the loss model explicitly:
+`conductance_abs_omega` = Tier-1 only, preserves `D(-w)=conj(D(w))`, production
+convention; `current_complex_c` = Tier-1 **and** Tier-2 (polynomial in omega,
+analytic) but breaks conjugate symmetry, so it is a stability-analysis
+convention and must never produce a published gain or compression number.
+Quantify the two at Tier-1, where both are legal, rather than assuming the gap
+is small.
+
+### Do not enable a new HB ansatz
+
+No PERIOD2, period-N, or torus basis is justified by any current evidence. The
+scaffolding (`pump/floquet.py`, `pump/periodic_branch.py`,
+`signal/period_doubled.py`, `scripts/run_period_doubled_branch.py`) stays
+dormant until a tracked multiplier crossing is resolved, timestep-converged,
+sideband-converged, and corroborated by an L-stable TD run at the Phase 2
+boundary. If a complex pair does cross, use the **auxiliary-generator** closure
+on the existing `multitone` two-frequency lattice (two extra real unknowns
+`(A_a, omega_a)`, two extra real equations `Y_AG=0` in an outer loop) rather
+than building a torus basis from scratch.
+
 ## graphify
 
 This project has a knowledge graph at graphify-out/ with god nodes, community structure, and cross-file relationships.
