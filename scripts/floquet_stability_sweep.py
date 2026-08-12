@@ -49,15 +49,18 @@ from twpa_solver.signal.stability import (  # noqa: E402
     NON_ANALYTIC_LOSS_MODELS,
     classify_floquet_resonance,
     local_minima,
+    require_explicit_loss_model,
     refine_resonances,
     sweep_sigma_min,
 )
+from twpa_solver.stability import track_multiplier_branches  # noqa: E402
+from twpa_solver.signal.floquet import assemble_khat_conversion_base  # noqa: E402
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--circuit-dir", required=True)
-    p.add_argument("--pump-dir", required=True,
+    p.add_argument("--pump-dir", required=True, nargs="+",
                    help="Directory with pump_solution.npz + pump_report.json "
                         "for the operating point under investigation.")
     p.add_argument("--baseline-pump-dir", default=None,
@@ -69,7 +72,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                         "pump report metadata.")
     p.add_argument("--sidebands", type=int, default=6)
     p.add_argument("--gamma-nt", type=int, default=4096)
-    p.add_argument("--loss-model", default="current_complex_c")
+    p.add_argument(
+        "--loss-model", required=True,
+        help="Explicit stability convention; never inferred from circuit metadata.",
+    )
     p.add_argument("--span-start-ghz", type=float, default=0.05,
                    help="Low edge of the sweep (avoid the omega=0 boundary "
                         "of the Brillouin zone).")
@@ -77,6 +83,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                    help="High edge of the sweep as a fraction of "
                         "pump_freq_ghz (avoid the omega=omega_p boundary).")
     p.add_argument("--n-points", type=int, default=200)
+    p.add_argument(
+        "--mode-spacing-mhz", type=float, default=241.7,
+        help="Measured mode-comb spacing used by the scan-density guard.",
+    )
     p.add_argument("--iters", type=int, default=8,
                    help="Inverse-iteration steps per sweep point.")
     p.add_argument("--seed", type=int, default=0)
@@ -105,6 +115,49 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     p.add_argument("--out", required=True)
     return p.parse_args(argv)
+
+
+def recommended_scan_points(pump_freq_ghz: float, mode_spacing_mhz: float) -> int:
+    """Return the recommended full-zone point count at the measured spacing."""
+    if pump_freq_ghz <= 0.0 or mode_spacing_mhz <= 0.0:
+        raise ValueError("pump frequency and mode spacing must be positive")
+    old_points_per_mode = 2000.0 / (7.9e3 / 85.0)
+    return int(math.ceil(
+        (pump_freq_ghz * 1.0e3 / mode_spacing_mhz) * old_points_per_mode
+    ))
+
+
+def enforce_scan_density_guard(args: argparse.Namespace, pump_freq_ghz: float) -> None:
+    recommended = recommended_scan_points(pump_freq_ghz, args.mode_spacing_mhz)
+    minimum = math.ceil(recommended / 4.0)
+    if args.n_points < minimum:
+        raise ValueError(
+            f"--n-points={args.n_points} under-resolves the {args.mode_spacing_mhz:g} "
+            f"MHz comb: use at least {minimum} points (recommended {recommended})"
+        )
+
+
+def track_complex_resonance_branches(
+    sweeps: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Order refined roots continuously across the supplied power sequence."""
+    previous: np.ndarray | None = None
+    for sweep in sweeps:
+        roots = sweep.get("complex_resonances", [])
+        if not roots:
+            continue
+        values = np.asarray([
+            complex(root["floquet"]["multiplier_real"], root["floquet"]["multiplier_imag"])
+            for root in roots
+        ])
+        tracked = values if previous is None else track_multiplier_branches(previous, values)
+        order = [int(np.argmin(np.abs(values - value))) for value in tracked]
+        sweep["complex_resonances"] = [roots[index] for index in order]
+        for branch_index, root in enumerate(sweep["complex_resonances"]):
+            root["tracked_branch_index"] = branch_index
+        sweep["max_abs_lambda"] = float(np.max(np.abs(tracked)))
+        previous = tracked
+    return sweeps
 
 
 def _load_pump_and_khat(circuit, pump_dir: Path, fallback_freq_ghz: float, sidebands: int, gamma_nt: int):
@@ -136,7 +189,10 @@ def _run_sweep(circuit, pump_dir: Path, fallback_freq_ghz: float, args: argparse
     pump, ms, khat = _load_pump_and_khat(
         circuit, pump_dir, fallback_freq_ghz, args.sidebands, args.gamma_nt,
     )
+    # This block is independent of signal frequency; reuse it across the scan.
+    khat_base = assemble_khat_conversion_base(circuit, khat, ms)
     pump_freq_ghz = float(pump.omega_p / (2.0 * math.pi * 1e9))
+    enforce_scan_density_guard(args, pump_freq_ghz)
     span_end_ghz = pump_freq_ghz * args.span_end_fraction
     grid = np.linspace(args.span_start_ghz, span_end_ghz, args.n_points).tolist()
 
@@ -144,6 +200,7 @@ def _run_sweep(circuit, pump_dir: Path, fallback_freq_ghz: float, args: argparse
     estimates = sweep_sigma_min(
         circuit=circuit, khat=khat, omega_p=pump.omega_p, signal_ghz_grid=grid,
         ms=ms, loss_model=args.loss_model, iters=args.iters, seed=args.seed,
+        khat_base=khat_base,
     )
     runtime_s = time.perf_counter() - t0
 
@@ -194,6 +251,7 @@ def _run_sweep(circuit, pump_dir: Path, fallback_freq_ghz: float, args: argparse
             circuit=circuit, khat=khat, omega_p=pump.omega_p, ms=ms,
             candidates_ghz=candidates, loss_model=args.loss_model,
             max_iters=args.refine_max_iters, tol=args.refine_tol,
+            khat_base=khat_base,
         )
         result["complex_resonances"] = [
             serialize_resonance(seed, resonance)
@@ -223,6 +281,7 @@ def _run_sweep(circuit, pump_dir: Path, fallback_freq_ghz: float, args: argparse
             loss_model=args.loss_model,
             max_iters=args.refine_max_iters,
             tol=args.refine_tol,
+            khat_base=khat_base,
         )
         result["bifurcation_resonances"] = [
             serialize_resonance(seed, resonance)
@@ -233,8 +292,8 @@ def _run_sweep(circuit, pump_dir: Path, fallback_freq_ghz: float, args: argparse
     return result
 
 
-def main(argv: list[str] | None = None) -> int:
-    args = parse_args(argv)
+def run_namespace(args: argparse.Namespace) -> dict[str, Any]:
+    args.loss_model = require_explicit_loss_model(args.loss_model)
     circuit = load_circuit(args.circuit_dir)
 
     if args.loss_model in NON_ANALYTIC_LOSS_MODELS:
@@ -259,54 +318,51 @@ def main(argv: list[str] | None = None) -> int:
                   f"{cr['signal_ghz_imag']:+.6f}j GHz "
                   f"growth_rate_per_s={cr['growth_rate_per_s']:.4e} "
                   f"multiplier={floquet.get('magnitude', float('nan')):.6f}"
-                  f"∠{floquet.get('phase_rad', float('nan')):.4f} "
+                  f"angle={floquet.get('phase_rad', float('nan')):.4f} "
                   f"kind={floquet.get('kind', 'UNKNOWN')} "
                   f"{verdict} ({conv}, {cr['iterations']} iters, "
                   f"residual={cr['residual']:.2e})")
 
-    target = _run_sweep(circuit, Path(args.pump_dir), args.pump_freq_ghz, args)
-    print(f"[target] pump_freq_ghz={target['pump_freq_ghz']:.6f} "
-          f"n_points={len(target['signal_ghz'])} runtime_s={target['runtime_s']:.2f}")
-    for r in target["resonances"][:5]:
-        print(f"  candidate resonance: signal_ghz={r['signal_ghz']:.6f} "
-              f"sigma_min={r['sigma_min']:.6e} conv_ratio={r['convergence_ratio']:.4f}")
-    _print_complex_resonances("target", target)
-    for resonance in target.get("bifurcation_resonances", []):
-        print(
-            f"  [target bifurcation] seed={resonance['seed_signal_ghz']:.6f} "
-            f"GHz kind={resonance['floquet']['kind']} "
-            f"multiplier_mag={resonance['floquet']['magnitude']:.6f} "
-            f"phase={resonance['floquet']['phase_rad']:.4f}"
+    out_path = Path(args.out)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    targets: list[dict[str, Any]] = []
+    for setting_index, pump_dir in enumerate(args.pump_dir):
+        targets.append(
+            _run_sweep(circuit, Path(pump_dir), args.pump_freq_ghz, args)
+        )
+        setting_path = out_path.with_name(
+            f"{out_path.stem}.setting_{setting_index:02d}.json"
+        )
+        setting_path.write_text(
+            json.dumps(
+                {
+                    "setting_index": setting_index,
+                    "pump_dir": str(pump_dir),
+                    "target": targets[-1],
+                },
+                indent=2,
+            )
+        )
+    track_complex_resonance_branches(targets)
+
+    for setting_index, target in enumerate(targets):
+        setting_path = out_path.with_name(
+            f"{out_path.stem}.setting_{setting_index:02d}.json"
+        )
+        setting_path.write_text(
+            json.dumps(
+                {
+                    "setting_index": setting_index,
+                    "pump_dir": str(args.pump_dir[setting_index]),
+                    "target": target,
+                },
+                indent=2,
+            )
         )
 
     baseline = None
     if args.baseline_pump_dir:
         baseline = _run_sweep(circuit, Path(args.baseline_pump_dir), args.pump_freq_ghz, args)
-        print(f"[baseline] pump_freq_ghz={baseline['pump_freq_ghz']:.6f} "
-              f"runtime_s={baseline['runtime_s']:.2f}")
-        for r in baseline["resonances"][:5]:
-            print(f"  candidate resonance: signal_ghz={r['signal_ghz']:.6f} "
-                  f"sigma_min={r['sigma_min']:.6e} conv_ratio={r['convergence_ratio']:.4f}")
-        _print_complex_resonances("baseline", baseline)
-        for resonance in baseline.get("bifurcation_resonances", []):
-            print(
-                f"  [baseline bifurcation] seed={resonance['seed_signal_ghz']:.6f} "
-                f"GHz kind={resonance['floquet']['kind']} "
-                f"multiplier_mag={resonance['floquet']['magnitude']:.6f} "
-                f"phase={resonance['floquet']['phase_rad']:.4f}"
-            )
-        # Compare genuine (interior, bracketed) local minima only -- the raw
-        # array min can sit on an edge point (e.g. near omega=0), which is not
-        # a resonance and is excluded from `resonances` for that reason.
-        if target["resonances"] and baseline["resonances"]:
-            target_min = target["resonances"][0]["sigma_min"]
-            baseline_min = baseline["resonances"][0]["sigma_min"]
-            print(f"  deepest interior resonance sigma_min: target={target_min:.6e} "
-                  f"baseline={baseline_min:.6e} "
-                  f"ratio(target/baseline)={target_min / baseline_min:.4e}")
-        else:
-            print("  no interior local minima found in one or both sweeps "
-                  "(sigma_min may be monotonic over this span)")
 
     out = {
         "metadata": {
@@ -315,19 +371,51 @@ def main(argv: list[str] | None = None) -> int:
             "span_start_ghz": args.span_start_ghz,
             "span_end_fraction": args.span_end_fraction,
             "n_points": args.n_points,
+            "mode_spacing_mhz": args.mode_spacing_mhz,
+            "recommended_n_points": recommended_scan_points(
+                float(targets[0]["pump_freq_ghz"]), args.mode_spacing_mhz
+            ),
             "iters": args.iters,
             "seed": args.seed,
             "non_analytic_loss_model_warning": args.loss_model in NON_ANALYTIC_LOSS_MODELS,
             "refine_bifurcations": args.refine_bifurcations,
             "bifurcation_fractions": args.bifurcation_fractions,
         },
-        "target": target,
+        "target": targets[0] if len(targets) == 1 else targets,
         "baseline": baseline,
     }
-    out_path = Path(args.out)
-    out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(json.dumps(out, indent=2))
+    for power_index, target in enumerate(targets):
+        print(f"[target {power_index}] pump_freq_ghz={target['pump_freq_ghz']:.6f} "
+              f"n_points={len(target['signal_ghz'])} runtime_s={target['runtime_s']:.2f}")
+        for resonance in target["resonances"][:5]:
+            print(f"  candidate resonance: signal_ghz={resonance['signal_ghz']:.6f} "
+                  f"sigma_min={resonance['sigma_min']:.6e} "
+                  f"conv_ratio={resonance['convergence_ratio']:.4f}")
+        _print_complex_resonances(f"target {power_index}", target)
+    if baseline is not None:
+        print(f"[baseline] pump_freq_ghz={baseline['pump_freq_ghz']:.6f} "
+              f"runtime_s={baseline['runtime_s']:.2f}")
+        for resonance in baseline["resonances"][:5]:
+            print(f"  candidate resonance: signal_ghz={resonance['signal_ghz']:.6f} "
+                  f"sigma_min={resonance['sigma_min']:.6e} "
+                  f"conv_ratio={resonance['convergence_ratio']:.4f}")
+        _print_complex_resonances("baseline", baseline)
+        if targets[0]["resonances"] and baseline["resonances"]:
+            target_min = targets[0]["resonances"][0]["sigma_min"]
+            baseline_min = baseline["resonances"][0]["sigma_min"]
+            print(f"  deepest interior resonance sigma_min: target={target_min:.6e} "
+                  f"baseline={baseline_min:.6e} "
+                  f"ratio(target/baseline)={target_min / baseline_min:.4e}")
+        else:
+            print("  no interior local minima found in one or both sweeps "
+                  "(sigma_min may be monotonic over this span)")
     print(f"wrote {out_path}")
+    return out
+
+
+def main(argv: list[str] | None = None) -> int:
+    run_namespace(parse_args(argv))
     return 0
 
 

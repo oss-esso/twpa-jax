@@ -9,14 +9,22 @@ from __future__ import annotations
 import numpy as np
 import pytest
 import scipy.sparse as sp
+import scripts.floquet_stability_sweep as floquet_sweep
 
 from twpa_solver.signal.stability import (
     ComplexResonance,
     classify_floquet_resonance,
     estimate_sigma_min,
     local_minima,
+    require_explicit_loss_model,
     refine_complex_resonance,
     refine_singular_omega,
+)
+from scripts.floquet_stability_sweep import (
+    enforce_scan_density_guard,
+    parse_args,
+    recommended_scan_points,
+    track_complex_resonance_branches,
 )
 
 
@@ -110,6 +118,14 @@ def test_refine_complex_resonance_rejects_non_analytic_loss_model() -> None:
         )
 
 
+def test_stability_requires_explicit_loss_model() -> None:
+    with pytest.raises(ValueError, match="require an explicit loss_model"):
+        require_explicit_loss_model(None)
+    with pytest.raises(ValueError, match="require an explicit loss_model"):
+        require_explicit_loss_model("default")
+    assert require_explicit_loss_model("current_complex_c") == "current_complex_c"
+
+
 def test_floquet_classification_identifies_period_doubling_multiplier() -> None:
     omega_p = 2.0 * np.pi * 10.0e9
     resonance = ComplexResonance(
@@ -127,3 +143,61 @@ def test_floquet_classification_identifies_period_doubling_multiplier() -> None:
     assert result.kind == "PERIOD_DOUBLING_CANDIDATE"
     assert result.multiplier.real == pytest.approx(-1.0, abs=1.0e-6)
     assert result.magnitude == pytest.approx(1.0, rel=1.0e-7)
+
+
+def test_scan_density_guard_uses_measured_comb_spacing() -> None:
+    args = parse_args([
+        "--circuit-dir", "c", "--pump-dir", "p", "--out", "o",
+        "--loss-model", "current_complex_c",
+    ])
+    recommended = recommended_scan_points(7.9, 241.7)
+
+    assert 690 <= recommended <= 710
+    args.n_points = recommended // 4
+    enforce_scan_density_guard(args, 7.9)
+    args.n_points -= 1
+    with pytest.raises(ValueError, match="under-resolves"):
+        enforce_scan_density_guard(args, 7.9)
+
+
+def test_floquet_sweep_tracks_refined_roots_across_powers() -> None:
+    def root(value: complex) -> dict[str, object]:
+        return {"floquet": {
+            "multiplier_real": value.real,
+            "multiplier_imag": value.imag,
+        }}
+
+    sweeps = [
+        {"complex_resonances": [root(0.8 + 0.1j), root(0.2 + 0.7j)]},
+        {"complex_resonances": [root(0.25 + 0.68j), root(0.82 + 0.08j)]},
+    ]
+
+    track_complex_resonance_branches(sweeps)
+
+    assert sweeps[1]["complex_resonances"][0]["tracked_branch_index"] == 0
+    assert sweeps[1]["complex_resonances"][0]["floquet"]["multiplier_real"] == pytest.approx(0.82)
+    assert sweeps[1]["max_abs_lambda"] == pytest.approx(abs(0.82 + 0.08j))
+
+
+def test_hill_cli_writes_json_before_summary_printing(monkeypatch, tmp_path) -> None:
+    target = {
+        "pump_freq_ghz": 7.9,
+        "signal_ghz": [1.0, 2.0],
+        "resonances": [],
+        "runtime_s": 0.0,
+    }
+    monkeypatch.setattr(floquet_sweep, "load_circuit", lambda _: object())
+    monkeypatch.setattr(floquet_sweep, "_run_sweep", lambda *args: target.copy())
+    monkeypatch.setattr("builtins.print", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("summary failure")))
+    output = tmp_path / "sweep.json"
+
+    with pytest.raises(RuntimeError, match="summary failure"):
+        floquet_sweep.main([
+            "--circuit-dir", "c",
+            "--pump-dir", "p",
+                "--out", str(output),
+                "--n-points", "200",
+                "--loss-model", "current_complex_c",
+            ])
+
+    assert output.exists()
