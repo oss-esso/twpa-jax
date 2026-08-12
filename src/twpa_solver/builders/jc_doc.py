@@ -510,6 +510,7 @@ def build_jtwpa() -> tuple[CircuitBuilder, dict[str, Any]]:
     cb.resistor(f"R{j}_0", j, 0, Rright)
     cb.port(f"P{j}_0", j, 0, 2)
     md = {
+        "junction_capacitance_f": Cj,
         "pump_freqs_ghz": [7.12],
         "pump_sources": [{"port": 1, "mode": [1], "current_a": 1.85e-6}],
         "signal_ghz": {"start": 1.0, "stop": 14.0, "step": 0.1},
