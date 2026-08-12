@@ -40,7 +40,10 @@ import scipy.sparse.linalg as spla
 
 from twpa_solver.core.circuit import CircuitMatrices
 from twpa_solver.core.linear import LOSS_MODELS
-from twpa_solver.signal.floquet import assemble_conversion_matrix
+from twpa_solver.signal.floquet import (
+    assemble_conversion_matrix,
+    assemble_conversion_matrix_from_base,
+)
 
 # These loss models are not analytic in omega, either via abs(omega) or a
 # sign(omega)/sign(Re(omega)) branch. Fine for a real-omega sweep (Tier 1),
@@ -54,6 +57,24 @@ NON_ANALYTIC_LOSS_MODELS = (
     "conductance_abs_omega_opposite",
     "complex_c_sign_omega",
 )
+
+
+def require_explicit_loss_model(loss_model: str | None) -> str:
+    """Validate the loss convention used by a stability calculation.
+
+    Stability results must identify the dynamic loss convention in their
+    metadata.  In particular, callers must not pass the circuit-dependent
+    ``default_loss_model_for`` result implicitly: selecting that convention is
+    a scientific decision, not a harmless implementation detail.
+    """
+    if loss_model is None or loss_model in {"", "default", "auto"}:
+        raise ValueError(
+            "stability calculations require an explicit loss_model; "
+            "choose conductance_abs_omega or current_complex_c"
+        )
+    if loss_model not in LOSS_MODELS:
+        raise ValueError(f"unknown loss_model={loss_model!r}")
+    return loss_model
 
 
 @dataclass
@@ -106,15 +127,23 @@ def sigma_min_at_signal_ghz(
     omega_p: float,
     signal_ghz: float,
     ms: list[int],
-    loss_model: str = "current_complex_c",
+    loss_model: str | None = None,
     iters: int = 8,
     seed: int = 0,
+    khat_base: sp.spmatrix | None = None,
 ) -> SigmaMinEstimate:
+    loss_model = require_explicit_loss_model(loss_model)
     omega_s = 2.0 * math.pi * float(signal_ghz) * 1e9
-    A = assemble_conversion_matrix(
-        circuit=circuit, khat=khat, omega_s=omega_s, omega_p=omega_p, ms=ms,
-        loss_model=loss_model,
-    )
+    if khat_base is None:
+        A = assemble_conversion_matrix(
+            circuit=circuit, khat=khat, omega_s=omega_s, omega_p=omega_p, ms=ms,
+            loss_model=loss_model,
+        )
+    else:
+        A = assemble_conversion_matrix_from_base(
+            circuit=circuit, khat_base=khat_base, omega_s=omega_s,
+            omega_p=omega_p, ms=ms, loss_model=loss_model,
+        )
     return estimate_sigma_min(A, iters=iters, seed=seed)
 
 
@@ -124,16 +153,16 @@ def sweep_sigma_min(
     omega_p: float,
     signal_ghz_grid: list[float],
     ms: list[int],
-    loss_model: str = "current_complex_c",
+    loss_model: str | None = None,
     iters: int = 8,
     seed: int = 0,
+    khat_base: sp.spmatrix | None = None,
 ) -> list[SigmaMinEstimate]:
-    if loss_model not in LOSS_MODELS:
-        raise ValueError(f"unknown loss_model={loss_model!r}")
+    loss_model = require_explicit_loss_model(loss_model)
     return [
         sigma_min_at_signal_ghz(
             circuit=circuit, khat=khat, omega_p=omega_p, signal_ghz=fs, ms=ms,
-            loss_model=loss_model, iters=iters, seed=seed,
+            loss_model=loss_model, iters=iters, seed=seed, khat_base=khat_base,
         )
         for fs in signal_ghz_grid
     ]
@@ -243,10 +272,11 @@ def refine_complex_resonance(
     omega_p: float,
     ms: list[int],
     signal_ghz_guess: float,
-    loss_model: str = "current_complex_c",
+    loss_model: str | None = None,
     max_iters: int = 30,
     tol: float = 1e-9,
     perturbation: complex = 1e-4 + 1e-4j,
+    khat_base: sp.spmatrix | None = None,
 ) -> ComplexResonance:
     """Refine a Tier 1 real-omega candidate into a complex Floquet exponent.
 
@@ -255,6 +285,7 @@ def refine_complex_resonance(
     plane; the real-only Tier 1 guess is otherwise a degenerate 1-D slice of
     this 2-D root search.
     """
+    loss_model = require_explicit_loss_model(loss_model)
     if loss_model in NON_ANALYTIC_LOSS_MODELS:
         raise ValueError(
             f"loss_model={loss_model!r} is not analytic in omega (see "
@@ -263,9 +294,14 @@ def refine_complex_resonance(
         )
 
     def assemble(omega_complex: complex) -> sp.spmatrix:
-        return assemble_conversion_matrix(
-            circuit=circuit, khat=khat, omega_s=omega_complex, omega_p=omega_p,
-            ms=ms, loss_model=loss_model,
+        if khat_base is None:
+            return assemble_conversion_matrix(
+                circuit=circuit, khat=khat, omega_s=omega_complex, omega_p=omega_p,
+                ms=ms, loss_model=loss_model,
+            )
+        return assemble_conversion_matrix_from_base(
+            circuit=circuit, khat_base=khat_base, omega_s=omega_complex,
+            omega_p=omega_p, ms=ms, loss_model=loss_model,
         )
 
     omega0 = 2.0 * math.pi * complex(signal_ghz_guess) * 1e9
@@ -279,14 +315,17 @@ def refine_resonances(
     omega_p: float,
     ms: list[int],
     candidates_ghz: list[float],
-    loss_model: str = "current_complex_c",
+    loss_model: str | None = None,
     max_iters: int = 30,
     tol: float = 1e-9,
+    khat_base: sp.spmatrix | None = None,
 ) -> list[ComplexResonance]:
+    loss_model = require_explicit_loss_model(loss_model)
     return [
         refine_complex_resonance(
             circuit=circuit, khat=khat, omega_p=omega_p, ms=ms,
             signal_ghz_guess=fs, loss_model=loss_model, max_iters=max_iters, tol=tol,
+            khat_base=khat_base,
         )
         for fs in candidates_ghz
     ]
