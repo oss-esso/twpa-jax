@@ -30,6 +30,8 @@ def build_args(args: argparse.Namespace) -> argparse.Namespace:
         "--pump-freq-min-ghz", str(args.freq_ghz),
         "--pump-freq-max-ghz", str(args.freq_ghz),
         "--signal-detuning-mhz", "500", "--no-signal-spectrum",
+        "--pump-mode-count", str(args.pump_mode_count),
+        "--nt", str(max(args.nt, 4 * args.pump_mode_count + 4)),
         "--log-level", "WARNING", "--overwrite",
     ]
     # Deliberately do not pass --attenuation-db: the A10 profile is resolved
@@ -43,9 +45,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--outdir", type=Path, required=True)
     parser.add_argument("--freq-ghz", type=float, default=7.9)
     parser.add_argument("--n-power", type=int, default=14)
+    parser.add_argument(
+        "--pump-mode-count", type=int, default=10,
+        help="Number of retained positive odd pump modes [1, 3, ..., 2K-1].",
+    )
+    parser.add_argument("--nt", type=int, default=40, help="HB reconstruction grid size.")
     parser.add_argument("--power-min-dbm", type=float, default=-35.0)
     parser.add_argument("--power-max-dbm", type=float, default=-21.31578947368421)
     args = parser.parse_args(argv)
+    args.outdir.mkdir(parents=True, exist_ok=True)
     production = build_args(args)
     points, _powers, _freqs = run_gain_map.build_points(production)
     points = sorted(points, key=lambda point: point.power_dbm)
@@ -59,6 +67,7 @@ def main(argv: list[str] | None = None) -> int:
         row, x = engine.solve_point(point, pass_dir, mode=mode, warm_X=last_x)
         row["column_mode"] = mode
         rows.append(row)
+        _write_artifacts(args, rows, started)
         print(
             f"[HB-UP] point={point.index} P={point.power_dbm:+.6f} dBm "
             f"status={row['status']} pump_status={row.get('pump_status')} "
@@ -68,15 +77,22 @@ def main(argv: list[str] | None = None) -> int:
         if row["status"] != "PASS":
             break
         last_x = x
-    args.outdir.mkdir(parents=True, exist_ok=True)
+    _write_artifacts(args, rows, started)
+    return 0 if rows and rows[-1]["status"] != "PASS" else 1
+
+
+def _write_artifacts(args: argparse.Namespace, rows: list[dict], started: float) -> None:
+    """Atomically publish the partial column after every accepted point."""
     keys = []
     for row in rows:
         for key in row:
             if key not in keys and key != "_spectrum":
                 keys.append(key)
-    with (args.outdir / "hb_up_to_failure.csv").open("w", newline="", encoding="utf-8") as handle:
+    csv_tmp = args.outdir / "hb_up_to_failure.tmp.csv"
+    with csv_tmp.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=keys, extrasaction="ignore")
         writer.writeheader(); writer.writerows(rows)
+    csv_tmp.replace(args.outdir / "hb_up_to_failure.csv")
     report = {
         "circuit_dir": str(args.circuit_dir.resolve()), "freq_ghz": args.freq_ghz,
         "power_min_dbm": args.power_min_dbm, "power_max_dbm": args.power_max_dbm,
@@ -85,8 +101,9 @@ def main(argv: list[str] | None = None) -> int:
         "rows": rows, "first_failure_index": next((r["point_index"] for r in rows if r["status"] != "PASS"), None),
         "runtime_s": time.perf_counter() - started,
     }
-    (args.outdir / "hb_up_to_failure.json").write_text(json.dumps(report, indent=2, default=str), encoding="utf-8")
-    return 0 if rows and rows[-1]["status"] != "PASS" else 1
+    json_tmp = args.outdir / "hb_up_to_failure.tmp.json"
+    json_tmp.write_text(json.dumps(report, indent=2, default=str), encoding="utf-8")
+    json_tmp.replace(args.outdir / "hb_up_to_failure.json")
 
 
 if __name__ == "__main__":

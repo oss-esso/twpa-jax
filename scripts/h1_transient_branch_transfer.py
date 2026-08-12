@@ -446,14 +446,45 @@ def checkpoint_dc_flux(
     return array
 
 
-def make_observables(system: TransientSystem, theta: np.ndarray, states: np.ndarray) -> dict[str, np.ndarray]:
-    out: dict[str, list[float]] = {"theta": [], "mu": [], "source_current_a": [], "max_abs_sin_phi": [], "max_abs_phi": [], "min_cos_phi": [], "strongest_branch": [], "state_norm": [], "pump_node_flux": []}
+def make_observables(
+    system: TransientSystem,
+    theta: np.ndarray,
+    states: np.ndarray,
+    *,
+    out_port: int = 2,
+    start_current: float = 0.0,
+    target_current: float = 0.0,
+    ramp_theta: float = 0.0,
+) -> dict[str, np.ndarray]:
+    """Collect transient observables, including the selected port voltage."""
+    out: dict[str, list[float]] = {
+        "theta": [], "mu": [], "source_current_a": [], "max_abs_sin_phi": [],
+        "max_abs_phi": [], "min_cos_phi": [], "strongest_branch": [],
+        "state_norm": [], "pump_node_flux": [], "output_voltage_v": [],
+        "shunt_power_w": [],
+    }
+    rcsj = system.circuit.metadata.get("metadata", {}).get("rcsj", {})
+    if not rcsj:
+        rcsj = system.circuit.metadata.get("rcsj", {})
+    resistance = np.asarray(rcsj.get("resistance_ohm", []), dtype=float).reshape(-1)
+    if resistance.size not in (0, system.circuit.branch_count):
+        raise ValueError("RCSJ resistance metadata does not match branch count")
+    output_node = system.circuit.port_to_index[out_port]
     dc_flux = np.asarray(
         getattr(system.branch, "dc_flux", np.zeros(system.circuit.branch_count)),
         dtype=float,
     ).reshape(-1)
     for angle, y in zip(theta, states.T):
         q, p = system.unpack(y)
+        if output_node in system.algebraic:
+            algebraic_index = int(np.flatnonzero(system.algebraic == output_node)[0])
+            p[output_node] = system.algebraic_velocity(
+                q,
+                p[system.differential],
+                system.source(
+                    float(angle), start_current, target_current, ramp_theta
+                ),
+            )[algebraic_index]
         phi = (
             np.asarray(system.circuit.Bphi.T @ (system.phi0 * q)) + dc_flux
         ) / system.phi0
@@ -468,7 +499,34 @@ def make_observables(system: TransientSystem, theta: np.ndarray, states: np.ndar
         out["strongest_branch"].append(idx)
         out["state_norm"].append(float(np.linalg.norm(q) / math.sqrt(q.size)))
         out["pump_node_flux"].append(float(system.phi0 * q[system.pump_node]))
+        out["output_voltage_v"].append(
+            float(system.omega * system.phi0 * p[output_node])
+        )
+        if resistance.size:
+            branch_voltage = system.omega * system.phi0 * np.asarray(
+                system.circuit.Bphi.T @ p, dtype=float
+            )
+            out["shunt_power_w"].append(float(np.sum(branch_voltage**2 / resistance)))
+        else:
+            out["shunt_power_w"].append(0.0)
     return {key: np.asarray(value) for key, value in out.items()}
+
+
+def node_velocity(
+    system: TransientSystem,
+    q: np.ndarray,
+    p: np.ndarray,
+    node: int,
+    source: np.ndarray,
+) -> float:
+    """Return a node velocity, including an index-one algebraic node."""
+    node = int(node)
+    if node not in system.algebraic:
+        return float(p[node])
+    algebraic_index = int(np.flatnonzero(system.algebraic == node)[0])
+    return float(
+        system.algebraic_velocity(q, p[system.differential], source)[algebraic_index]
+    )
 
 
 def stroboscopic_diagnostics(system: TransientSystem, theta: np.ndarray, states: np.ndarray, periods: int) -> dict[str, Any]:
@@ -580,6 +638,49 @@ def classify_td_result(result: dict[str, Any]) -> str:
         if decay_class in {"UNRESOLVED_SLOW_RELAXATION", "RELAXING_TO_PERIOD1"}:
             return "UNRESOLVED_SLOW_RELAXATION"
     return raw
+
+
+def max_abs_phi_envelope_classification(
+    data: dict[str, np.ndarray],
+    ramp_periods: int,
+    *,
+    growth_threshold_per_period: float = 1.0e-5,
+) -> dict[str, Any]:
+    """Classify the post-ramp phase envelope by its fitted slope.
+
+    The phase-envelope slope is the primary transient discriminant.  It is a
+    level-independent quantity, so it does not require a same-protocol floor
+    calibration.  Recurrence distances remain available as secondary
+    diagnostics, but cannot change this label.
+    """
+    periods = np.asarray(data.get("theta", []), dtype=float) / (2.0 * math.pi)
+    envelope = np.asarray(data.get("max_abs_phi", []), dtype=float)
+    mask = (
+        np.isfinite(periods)
+        & np.isfinite(envelope)
+        & (periods >= float(ramp_periods))
+    )
+    periods = periods[mask]
+    envelope = envelope[mask]
+    if periods.size < 2 or np.ptp(periods) <= 0.0:
+        return {
+            "class": "ENVELOPE_SLOPE_UNRESOLVED",
+            "slope_per_period": None,
+            "threshold_per_period": growth_threshold_per_period,
+            "post_ramp_samples": int(periods.size),
+        }
+    slope = float(np.polyfit(periods, envelope, 1)[0])
+    label = (
+        "GROWING_MAX_ABS_PHI"
+        if slope > growth_threshold_per_period
+        else "NON_GROWING_MAX_ABS_PHI"
+    )
+    return {
+        "class": label,
+        "slope_per_period": slope,
+        "threshold_per_period": growth_threshold_per_period,
+        "post_ramp_samples": int(periods.size),
+    }
 
 
 def checkpoint_stroboscopic_diagnostics(
@@ -921,7 +1022,7 @@ def implicit_trapezoid_ramp_bounded(
     step_theta: float, newton_tol: float = 1e-6, max_newton: int = 10,
     checkpoint_dir: Path | None = None, checkpoint_periods: int = 10,
     initial_theta: float = 0.0, min_step_theta: float = 1.0 / 32.0,
-    sample_count: int = 256, history_states: int = 1024,
+    sample_count: int = 256, history_states: int = 1024, out_port: int = 2,
 ) -> tuple[np.ndarray, np.ndarray, dict[str, Any]]:
     """Memory-bounded implicit trapezoid integration for long compact holds.
 
@@ -973,12 +1074,30 @@ def implicit_trapezoid_ramp_bounded(
         history.append((float(initial_theta), np.array(initial_state, copy=True)))
         next_history += history_step
     scalar_step = 2.0 * math.pi / 128.0
-    scalar_start = max(float(initial_theta), total_theta - 20.0 * 2.0 * math.pi)
-    scalar_history = deque(maxlen=max(2048, int(sample_count) * 8))
+    scalar_start = max(float(initial_theta), total_theta - 512.0 * 2.0 * math.pi)
+    scalar_history = deque(maxlen=max(65536, int(sample_count) * 8))
+    scalar_output_voltage = deque(maxlen=max(65536, int(sample_count) * 8))
+    output_node = system.circuit.port_to_index[int(out_port)]
     next_scalar = scalar_start
     if next_scalar <= initial_theta + 1e-12:
         scalar_history.append((
             float(initial_theta), float(system.phi0 * q[system.pump_node])
+        ))
+        scalar_output_voltage.append((
+            float(initial_theta),
+            float(
+                system.omega
+                * system.phi0
+                * node_velocity(
+                    system,
+                    q,
+                    p,
+                    output_node,
+                    system.source(
+                        initial_theta, start_current, target_current, ramp_theta
+                    ),
+                )
+            ),
         ))
         next_scalar += scalar_step
 
@@ -1012,6 +1131,9 @@ def implicit_trapezoid_ramp_bounded(
             "_bounded_history_states": np.column_stack([x[1] for x in history]),
             "_bounded_scalar_theta": np.asarray([x[0] for x in scalar_history], dtype=float),
             "_bounded_scalar_pump_flux": np.asarray([x[1] for x in scalar_history], dtype=float),
+            "_bounded_scalar_output_voltage": np.asarray(
+                [x[1] for x in scalar_output_voltage], dtype=float
+            ),
         }
 
     def finish(success: bool, message: str, steps: int) -> tuple[np.ndarray, np.ndarray, dict[str, Any]]:
@@ -1034,6 +1156,9 @@ def implicit_trapezoid_ramp_bounded(
     step_reductions = 0
     min_step_used = step_theta
     next_step_theta = step_theta
+    cached_factor = None
+    cached_factor_h = None
+    cached_factor_step = -10**9
     next_checkpoint = (
         initial_theta + float(checkpoint_periods) * 2.0 * math.pi
         if checkpoint_dir else math.inf
@@ -1043,6 +1168,12 @@ def implicit_trapezoid_ramp_bounded(
         q_old, p_old = q.copy(), p.copy()
         previous_theta = theta
         previous_state = system.pack(q_old, p_old)
+        # These quantities depend only on the accepted state at the beginning
+        # of the step. Recomputing them inside every Newton iteration was a
+        # dominant avoidable cost for the long 7.9 GHz holds.
+        flux_old = system.phi0 * (system.circuit.Bphi.T @ q_old)
+        current_old = np.asarray(system.branch.current(flux_old[None, :]))[0]
+        scale_dynamic = max(abs(target_current / system.phi0), 1.0)
         h = min(next_step_theta, total_theta - theta)
         while True:
             q_trial, p_trial = q_old + h * p_old, p_old.copy()
@@ -1050,18 +1181,22 @@ def implicit_trapezoid_ramp_bounded(
                 theta + 0.5 * h, start_current, target_current, ramp_theta
             )
             converged = False
+            factor = None
+            if (
+                cached_factor is not None
+                and cached_factor_h == h
+                and steps - cached_factor_step < 2
+            ):
+                factor = cached_factor
             for _ in range(max_newton):
                 flux = system.phi0 * (system.circuit.Bphi.T @ q_trial)
                 current_new = np.asarray(system.branch.current(flux[None, :]))[0]
-                flux_old = system.phi0 * (system.circuit.Bphi.T @ q_old)
-                current_old = np.asarray(system.branch.current(flux_old[None, :]))[0]
                 dynamic = system.circuit.C @ (system.omega**2 * (p_trial - p_old) / h)
                 dynamic = dynamic + system.circuit.G @ (system.omega * (p_trial + p_old) / 2.0)
                 dynamic = dynamic + system.circuit.K @ ((q_trial + q_old) / 2.0)
                 dynamic = dynamic + system.circuit.Bphi @ (current_new + current_old) / (2.0 * system.phi0)
                 dynamic = dynamic - source_mid / system.phi0
                 kinematic = q_trial - q_old - h * (p_trial + p_old) / 2.0
-                scale_dynamic = max(abs(target_current / system.phi0), 1.0)
                 norm = max(
                     float(np.linalg.norm(dynamic) / math.sqrt(n) / scale_dynamic),
                     float(np.linalg.norm(kinematic) / math.sqrt(n)),
@@ -1069,23 +1204,34 @@ def implicit_trapezoid_ramp_bounded(
                 if norm < newton_tol:
                     converged = True
                     break
-                tangent = np.asarray(system.branch.tangent(flux[None, :]))[0]
-                dynamic_q = (
-                    system.circuit.K / 2.0
-                    + system.circuit.Bphi @ sp.diags(tangent) @ system.circuit.Bphi.T / 2.0
-                )
-                dynamic_p = system.circuit.C * (system.omega**2 / h) + system.circuit.G * (system.omega / 2.0)
-                jac = sp.bmat(
-                    [[dynamic_q, dynamic_p],
-                     [sp.eye(n, format="csr"), -h * sp.eye(n, format="csr") / 2.0]],
-                    format="csc",
-                )
-                factor = spla.splu(jac)
-                delta = factor.solve(-np.concatenate((dynamic, kinematic)))
+                if factor is None:
+                    tangent = np.asarray(system.branch.tangent(flux[None, :]))[0]
+                    dynamic_q = (
+                        system.circuit.K / 2.0
+                        + system.circuit.Bphi @ sp.diags(tangent) @ system.circuit.Bphi.T / 2.0
+                    )
+                    dynamic_p = system.circuit.C * (system.omega**2 / h) + system.circuit.G * (system.omega / 2.0)
+                    jac = sp.bmat(
+                        [[dynamic_q, dynamic_p],
+                         [sp.eye(n, format="csr"), -h * sp.eye(n, format="csr") / 2.0]],
+                        format="csc",
+                    )
+                    factor = spla.splu(jac)
+                    cached_factor = factor
+                    cached_factor_h = h
+                    cached_factor_step = steps
+                rhs = np.empty(2 * n, dtype=float)
+                rhs[:n] = dynamic
+                rhs[n:] = kinematic
+                delta = factor.solve(-rhs)
                 q_trial += delta[:n]
                 p_trial += delta[n:]
                 newton_total += 1
-                del delta, factor, jac, dynamic_q, dynamic_p, tangent
+                # A reused factor is a two-step chord-Newton predictor. If it
+                # does not satisfy the residual on the next iteration, the
+                # factor is discarded and rebuilt at the updated state.
+                factor = None
+                del delta
             if converged:
                 next_step_theta = h
                 break
@@ -1108,7 +1254,10 @@ def implicit_trapezoid_ramp_bounded(
             )
         theta += h
         steps += 1
-        if steps % 32 == 0:
+        # Frequent full-generation collection costs more than it saves here:
+        # the bounded path already limits retained arrays. Keep a safety
+        # collection interval, but do not interrupt every 32 accepted steps.
+        if steps % 1024 == 0:
             gc.collect()
         current_state = system.pack(q, p)
         while next_sample < sample_targets.size and sample_targets[next_sample] <= theta + 1e-12:
@@ -1133,9 +1282,28 @@ def implicit_trapezoid_ramp_bounded(
             sampled = np.asarray(
                 previous_state + alpha * (current_state - previous_state), dtype=float
             )
-            sampled_q, _ = system.unpack(sampled)
+            sampled_q, sampled_p = system.unpack(sampled)
             scalar_history.append((
                 float(next_scalar), float(system.phi0 * sampled_q[system.pump_node])
+            ))
+            scalar_output_voltage.append((
+                float(next_scalar),
+                float(
+                    system.omega
+                    * system.phi0
+                    * node_velocity(
+                        system,
+                        sampled_q,
+                        sampled_p,
+                        output_node,
+                        system.source(
+                            next_scalar,
+                            start_current,
+                            target_current,
+                            ramp_theta,
+                        ),
+                    )
+                ),
             ))
             next_scalar += scalar_step
 
@@ -1161,6 +1329,14 @@ def implicit_trapezoid_ramp_bounded(
 
         if checkpoint_dir is not None and theta + 1e-10 >= next_checkpoint:
             checkpoint_dir.mkdir(parents=True, exist_ok=True)
+            voltage_checkpoint = checkpoint_dir / "transient_voltage_observables.npz"
+            voltage_tmp = checkpoint_dir / "transient_voltage_observables.tmp.npz"
+            np.savez(
+                voltage_tmp,
+                theta=np.asarray([x[0] for x in scalar_output_voltage], dtype=float),
+                output_voltage_v=np.asarray([x[1] for x in scalar_output_voltage], dtype=float),
+            )
+            voltage_tmp.replace(voltage_checkpoint)
             np.savez_compressed(
                 checkpoint_dir / "transient_restart.npz",
                 theta=np.asarray(theta), y=current_state,
@@ -1203,6 +1379,102 @@ def plot_results(outdir: Path, data: dict[str, np.ndarray], spectrum: dict[str, 
     ax.semilogy(spectrum["frequency_ghz"], spectrum["amplitude"], "o-")
     ax.set(xlabel="frequency (GHz)", ylabel="pump-node flux spectrum")
     fig.tight_layout(); fig.savefig(outdir / "late_time_spectrum.png", dpi=150); plt.close(fig)
+
+
+def _atomic_npz(path: Path, **arrays: Any) -> None:
+    """Replace a compact numerical artifact atomically."""
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    with temporary.open("wb") as handle:
+        np.savez_compressed(handle, **arrays)
+    temporary.replace(path)
+
+
+def _segmented_ivp(
+    system: TransientSystem,
+    y0: np.ndarray,
+    start_current: float,
+    target_current: float,
+    ramp_theta: float,
+    total_theta: float,
+        args: argparse.Namespace,
+        outdir: Path,
+) -> tuple[np.ndarray, np.ndarray, dict[str, Any]]:
+    """Integrate BDF/Radau in short segments and publish progress artifacts."""
+    # One-period segments keep restart and observable artifacts bounded even
+    # when the stiff BDF solve takes a long time on a high-Q ladder rung.
+    segment_theta = 2.0 * math.pi
+    theta = 0.0
+    state = np.asarray(y0, dtype=float)
+    theta_parts = [np.asarray([theta], dtype=float)]
+    state_parts = [state[:, None]]
+    nfev = njev = nlu = 0
+    success = True
+    message = "success"
+    segment_index = 0
+    while theta < total_theta - 1e-12:
+        endpoint = min(total_theta, theta + segment_theta)
+        solve_options: dict[str, Any] = {
+            "method": args.method, "rtol": args.rtol,
+            "atol": (
+                args.atol
+                * np.maximum(np.abs(state), args.atol_floor)
+                if args.atol_mode == "state_relative"
+                else args.atol
+            ),
+            "max_step": args.max_step, "dense_output": True,
+        }
+        if args.method in ("BDF", "Radau"):
+            solve_options["jac_sparsity"] = system.jacobian_sparsity()
+        sol = solve_ivp(
+            lambda angle, value: system.rhs(
+                angle, value, start_current, target_current, ramp_theta
+            ),
+            (theta, endpoint), state, **solve_options,
+        )
+        nfev += int(sol.nfev); njev += int(sol.njev or 0); nlu += int(sol.nlu or 0)
+        if not sol.success or sol.sol is None:
+            success = False
+            message = str(sol.message)
+            break
+        samples = max(2, int(round((endpoint - theta) / (2.0 * math.pi) * args.samples_per_period)) + 1)
+        segment_angles = np.linspace(theta, endpoint, samples)
+        segment_states = np.asarray(sol.sol(segment_angles), dtype=float)
+        theta_parts.append(segment_angles[1:])
+        state_parts.append(segment_states[:, 1:])
+        theta = endpoint
+        state = segment_states[:, -1]
+        segment_index += 1
+        _atomic_npz(
+            outdir / "transient_progress.npz",
+            theta=np.concatenate(theta_parts),
+            states=np.concatenate(state_parts, axis=1),
+            segment=np.asarray(segment_index),
+            completed_periods=np.asarray(theta / (2.0 * math.pi)),
+        )
+        _atomic_npz(
+            outdir / "transient_restart.npz",
+            theta=np.asarray(theta), y=state,
+            start_current=np.asarray(start_current), target_current=np.asarray(target_current),
+            ramp_theta=np.asarray(ramp_theta), step_theta=np.asarray(args.max_step),
+        )
+        segment_data = make_observables(
+            system,
+            segment_angles,
+            segment_states,
+            out_port=args.out_port,
+            start_current=start_current,
+            target_current=target_current,
+            ramp_theta=ramp_theta,
+        )
+        _atomic_npz(outdir / "transient_progress_observables.npz", **segment_data)
+    angles = np.concatenate(theta_parts)
+    states = np.concatenate(state_parts, axis=1)
+    return angles, states, {
+        "success": success, "message": message,
+        "nfev": nfev, "njev": njev, "nlu": nlu,
+        "steps": nfev, "newton_iterations": None,
+        "step_reductions": None,
+    }
 
 
 def run_experiment(args: argparse.Namespace) -> dict[str, Any]:
@@ -1288,12 +1560,12 @@ def run_experiment(args: argparse.Namespace) -> dict[str, Any]:
         y0 = system.pack(q0, p0)
     elif initialization_mode == "hb_periodic":
         q0 = X0 / system.phi0; p0 = w0 / system.phi0
+        start_current = checkpoint_current
         if system.g_alg_factor is None:
             system.project_algebraic_state(
                 q0, p0, system.source(0.0, start_current, args.target_current_a, 0.0)
             )
         y0 = system.pack(q0, p0)
-        start_current = checkpoint_current
     else:
         raise ValueError(f"unknown initialization mode: {initialization_mode}")
     ramp_theta = 2.0 * math.pi * args.ramp_periods
@@ -1315,6 +1587,7 @@ def run_experiment(args: argparse.Namespace) -> dict[str, Any]:
                 min_step_theta=getattr(args, "min_step_theta", 1.0 / 32.0),
                 sample_count=int(getattr(args, "compact_sample_count", 256)),
                 history_states=int(getattr(args, "compact_history_states", 1024)),
+                out_port=args.out_port,
             )
             integrator.pop("_bounded_sample_theta")
             integrator.pop("_bounded_sample_states")
@@ -1324,6 +1597,7 @@ def run_experiment(args: argparse.Namespace) -> dict[str, Any]:
             bounded_history_states = integrator.pop("_bounded_history_states")
             bounded_scalar_theta = integrator.pop("_bounded_scalar_theta")
             bounded_scalar_pump_flux = integrator.pop("_bounded_scalar_pump_flux")
+            bounded_scalar_output_voltage = integrator.pop("_bounded_scalar_output_voltage")
             dense_state = lambda query: np.vstack([
                 np.interp(query, bounded_history_theta, row)
                 for row in bounded_history_states
@@ -1338,26 +1612,55 @@ def run_experiment(args: argparse.Namespace) -> dict[str, Any]:
             )
             dense_state = lambda query: np.vstack([np.interp(query, sample_theta, row) for row in states])
     else:
-        solve_options: dict[str, Any] = {
-            "method": args.method, "rtol": args.rtol, "atol": args.atol,
-            "max_step": args.max_step, "dense_output": True,
-        }
-        if args.method in ("BDF", "Radau"):
-            solve_options["jac_sparsity"] = system.jacobian_sparsity()
-        sol = solve_ivp(
-            lambda theta, y: system.rhs(theta, y, start_current, args.target_current_a, ramp_theta),
-            (0.0, total_theta), y0, **solve_options,
-        )
-        sample_theta = np.linspace(0.0, total_theta, int((args.ramp_periods + args.hold_periods) * args.samples_per_period) + 1)
-        dense_state = sol.sol
-        states = dense_state(sample_theta) if dense_state is not None else np.empty((y0.size, 0))
-        integrator = {"success": bool(sol.success), "message": sol.message,
-                      "nfev": sol.nfev, "njev": sol.njev, "nlu": sol.nlu}
-    data = make_observables(system, sample_theta, states)
+        if compact_output:
+            sample_theta, states, integrator = _segmented_ivp(
+                system, y0, start_current, args.target_current_a, ramp_theta,
+                total_theta, args, outdir,
+            )
+            dense_state = lambda query: np.vstack([
+                np.interp(query, sample_theta, row) for row in states
+            ])
+        else:
+            solve_options: dict[str, Any] = {
+                "method": args.method, "rtol": args.rtol,
+                "atol": (
+                    args.atol
+                    * np.maximum(np.abs(y0), args.atol_floor)
+                    if args.atol_mode == "state_relative"
+                    else args.atol
+                ),
+                "max_step": args.max_step, "dense_output": True,
+            }
+            if args.method in ("BDF", "Radau"):
+                solve_options["jac_sparsity"] = system.jacobian_sparsity()
+            sol = solve_ivp(
+                lambda theta, y: system.rhs(theta, y, start_current, args.target_current_a, ramp_theta),
+                (0.0, total_theta), y0, **solve_options,
+            )
+            sample_count = int((args.ramp_periods + args.hold_periods) * args.samples_per_period) + 1
+            sample_theta = np.linspace(0.0, total_theta, sample_count)
+            dense_state = sol.sol
+            states = dense_state(sample_theta) if dense_state is not None else np.empty((y0.size, 0))
+            integrator = {"success": bool(sol.success), "message": sol.message,
+                          "nfev": sol.nfev, "njev": sol.njev, "nlu": sol.nlu,
+                "steps": int(sol.nfev), "newton_iterations": None,
+                "step_reductions": None}
+    data = make_observables(
+        system,
+        sample_theta,
+        states,
+        out_port=args.out_port,
+        start_current=start_current,
+        target_current=args.target_current_a,
+        ramp_theta=ramp_theta,
+    )
     data["mu"] = np.asarray([system.source(x, start_current, args.target_current_a, ramp_theta)[system.pump_node] for x in sample_theta])
     data["source_current_a"] = np.array(data["mu"], copy=True)
     data["time_s"] = sample_theta / system.omega
     data["phase_winding_cycles"] = phase_winding_series(system, sample_theta, states)
+    if not (compact_output and args.method == "implicit_trapezoid"):
+        bounded_scalar_theta = sample_theta
+        bounded_scalar_output_voltage = data["output_voltage_v"]
     if compact_output:
         stride = max(1, sample_theta.size // 256)
         np.savez_compressed(
@@ -1370,9 +1673,15 @@ def run_experiment(args: argparse.Namespace) -> dict[str, Any]:
             state_norm=data["state_norm"][::stride],
             source_current_a=data["source_current_a"][::stride],
             phase_winding_cycles=data["phase_winding_cycles"][::stride],
+            output_voltage_v=data["output_voltage_v"][::stride],
+            shunt_power_w=data["shunt_power_w"][::stride],
+            output_voltage_theta=bounded_scalar_theta,
+            output_voltage_trace_v=bounded_scalar_output_voltage,
         )
     else:
-        np.savez_compressed(outdir / "transient_observables.npz", **data)
+        observable_tmp = outdir / "transient_observables.tmp.npz"
+        np.savez_compressed(observable_tmp, **data)
+        observable_tmp.replace(outdir / "transient_observables.npz")
         with (outdir / "transient_observables.csv").open("w", newline="", encoding="utf-8") as handle:
             writer = csv.writer(handle); writer.writerow(data.keys())
             writer.writerows(zip(*data.values()))
@@ -1384,7 +1693,14 @@ def run_experiment(args: argparse.Namespace) -> dict[str, Any]:
         strobe_theta = np.arange(hold_start, total_theta + 0.1, 2.0 * math.pi)
         strobe_states = dense_state(strobe_theta)
         strobe = stroboscopic_diagnostics(system, strobe_theta, strobe_states, args.hold_periods)
-    last_theta = np.linspace(total_theta - 2.0 * math.pi * min(args.hold_periods, 20), total_theta, 2048)
+    spectrum_periods = min(args.hold_periods, int(getattr(args, "spectrum_periods", 20)))
+    late_sample_count = 2048
+    if compact_output:
+        late_sample_count = max(64, int(spectrum_periods * args.samples_per_period))
+    last_theta = np.linspace(
+        total_theta - 2.0 * math.pi * spectrum_periods,
+        total_theta, late_sample_count,
+    )
     if compact_output and args.method == "implicit_trapezoid":
         pump_flux = np.interp(last_theta, bounded_scalar_theta, bounded_scalar_pump_flux)
         phase_theta = bounded_history_theta
@@ -1412,17 +1728,34 @@ def run_experiment(args: argparse.Namespace) -> dict[str, Any]:
     phase_winding = float(np.mean(unwrapped_phase[-1] - unwrapped_phase[0]) / (2.0 * math.pi))
     if not compact_output:
         np.savez_compressed(outdir / "late_time_phase.npz", theta=last_theta, phase=phase_series, unwrapped_phase=unwrapped_phase)
-    raw_classification = classify_state(
+    recurrence_classification = classify_state(
         strobe, mean_phase_velocity, bool(integrator["success"]), phase_winding
     )
     decay = decay_aware_stroboscopic_classification(strobe)
-    classification = classify_td_result({
-        "classification": raw_classification,
+    recurrence_classification = classify_td_result({
+        "classification": recurrence_classification,
         "decay_aware": decay,
     })
+    envelope_start_period = max(int(args.ramp_periods), 100)
+    envelope_classification = max_abs_phi_envelope_classification(
+        data, envelope_start_period
+    )
+    output_voltage_nonzero = bool(
+        np.any(np.isfinite(data["output_voltage_v"])
+               & (np.abs(data["output_voltage_v"]) > 0.0))
+    )
+    if not output_voltage_nonzero:
+        raise AssertionError("output-port voltage trace is identically zero")
+    max_abs_phi = float(np.nanmax(data["max_abs_phi"])) if data["max_abs_phi"].size else 0.0
+    blowup = max_abs_phi > 5.0
+    if blowup:
+        envelope_classification = dict(envelope_classification)
+        envelope_classification["class"] = "BLOWUP"
+        envelope_classification["blowup_threshold_rad"] = 5.0
+    classification = envelope_classification["class"]
     branch_transfer = None
     projection_forced = bool(getattr(args, "force_periodic_projection", False))
-    if (classification == "PERIOD_1" or projection_forced) and not bool(
+    if (recurrence_classification == "PERIOD_1" or projection_forced) and not bool(
         getattr(args, "skip_projection", False)
     ):
         checkpoint_mode_array = np.asarray(
@@ -1465,9 +1798,12 @@ def run_experiment(args: argparse.Namespace) -> dict[str, Any]:
                 getattr(args, "projection_only", False)
             )
             branch_transfer["projection_forced"] = (
-                projection_forced and classification != "PERIOD_1"
+                projection_forced and recurrence_classification != "PERIOD_1"
             )
-    if not integrator["success"]:
+    if blowup:
+        final_status = "BLOWUP"
+        blocker_reason = "max_abs_phi exceeded 5 rad"
+    elif not integrator["success"]:
         final_status = "TRANSIENT_NUMERICAL_BLOCKER"
         blocker_reason = integrator["message"]
     elif branch_transfer is not None and branch_transfer["hb_converged"]:
@@ -1476,18 +1812,15 @@ def run_experiment(args: argparse.Namespace) -> dict[str, Any]:
         else:
             final_status = "HIGH_DRIVE_HB_BRANCH_FOUND"
         blocker_reason = None
-    elif classification == "PERIOD_1":
+    elif classification == "NON_GROWING_MAX_ABS_PHI":
         final_status = "VALIDATED_PERIOD1_TD"
         blocker_reason = None
-    elif classification in {"PERIOD_2", "PERIOD_3", "QUASIPERIODIC_OR_PERIOD_N", "RUNNING_PHASE", "BROADBAND_OR_CHAOTIC"}:
+    elif classification == "GROWING_MAX_ABS_PHI":
         final_status = "REPRODUCIBLE_PHYSICAL_TRANSITION"
         blocker_reason = None
-    elif classification == "UNRESOLVED_SLOW_RELAXATION":
-        final_status = "UNRESOLVED_SLOW_RELAXATION"
-        blocker_reason = "finite hold remains decay-inconclusive"
     else:
         final_status = "TRANSIENT_NUMERICAL_BLOCKER"
-        blocker_reason = "period-1 transient did not seed a converged fixed-drive HB root"
+        blocker_reason = "post-ramp max_abs_phi envelope slope is unresolved"
     if not compact_output:
         plot_results(outdir, data, spectrum)
     checkpoint_grid = HarmonicGrid(
@@ -1520,8 +1853,33 @@ def run_experiment(args: argparse.Namespace) -> dict[str, Any]:
             "hold_duration_periods": int(args.hold_periods),
         },
         "ramp_periods": args.ramp_periods, "hold_periods": args.hold_periods,
+        "method": args.method,
+        "rtol": args.rtol, "atol": args.atol,
+        "atol_mode": args.atol_mode, "atol_floor": args.atol_floor,
         "integrator": integrator,
-        "classification": classification, "stroboscopic": strobe,
+        "classification": classification,
+        "recurrence_classification": recurrence_classification,
+        "envelope_classification": envelope_classification,
+        "envelope_slope_window_start_period": envelope_start_period,
+        "max_abs_phi": max_abs_phi,
+        "output_voltage_nonzero": output_voltage_nonzero,
+        "integrator_health": {
+            "steps": integrator.get("steps"),
+            "newton_iterations": integrator.get("newton_iterations"),
+            "newton_iterations_per_step": (
+                float(integrator["newton_iterations"]) / float(integrator["steps"])
+                if integrator.get("steps") else None
+            ),
+            "step_reductions": integrator.get("step_reductions"),
+        },
+        "rcsj_shunt_power": {
+            "mean_w": float(np.mean(data["shunt_power_w"])) if data["shunt_power_w"].size else 0.0,
+            "hold_mean_w": float(np.mean(data["shunt_power_w"][data["theta"] / (2.0 * math.pi) >= args.ramp_periods])) if np.any(data["theta"] / (2.0 * math.pi) >= args.ramp_periods) else 0.0,
+            "max_w": float(np.max(data["shunt_power_w"])) if data["shunt_power_w"].size else 0.0,
+            "pump_reference_w": float(0.5 * args.target_current_a**2 * 50.0),
+            "hold_fraction": float(np.mean(data["shunt_power_w"][data["theta"] / (2.0 * math.pi) >= args.ramp_periods]) / (0.5 * args.target_current_a**2 * 50.0)) if np.any(data["theta"] / (2.0 * math.pi) >= args.ramp_periods) and args.target_current_a != 0.0 else 0.0,
+        },
+        "stroboscopic": strobe,
         "checkpoint_diagnostics": checkpoint_stroboscopic_diagnostics(strobe),
         "decay_aware": decay,
         "mean_phase_velocity_rad_s": mean_phase_velocity,
@@ -1542,6 +1900,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--outdir", type=Path, default=ROOT / "outputs" / "h1_79")
     parser.add_argument("--freq-ghz", type=float, default=7.9)
     parser.add_argument("--pump-port", type=int, default=4)
+    parser.add_argument("--out-port", type=int, default=2)
     parser.add_argument("--dc-flux-over-phi0", type=float, default=0.0)
     parser.add_argument("--target-current-a", type=float, default=1.6e-5)
     parser.add_argument("--ramp-periods", type=int, default=40)
@@ -1549,6 +1908,21 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--samples-per-period", type=int, default=8)
     parser.add_argument("--rtol", type=float, default=2e-5)
     parser.add_argument("--atol", type=float, default=1e-3)
+    parser.add_argument(
+        "--atol-mode",
+        choices=("scalar", "state_relative"),
+        default="scalar",
+        help=(
+            "Use a per-state absolute tolerance proportional to the initial "
+            "state for adaptive BDF/Radau integration."
+        ),
+    )
+    parser.add_argument(
+        "--atol-floor",
+        type=float,
+        default=1e-12,
+        help="Minimum state scale used by --atol-mode state_relative.",
+    )
     parser.add_argument("--max-step", type=float, default=0.5)
     parser.add_argument(
         "--min-step-theta", type=float, default=1.0 / 32.0,
@@ -1581,6 +1955,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "store only decimated observables and restart checkpoints; useful "
             "for long fixed-drive continuation holds"
         ),
+    )
+    parser.add_argument(
+        "--spectrum-periods", type=int, default=20,
+        help="number of final pump periods used for the late-time FFT export",
     )
     parser.add_argument(
         "--compact-sample-count", type=int, default=256,

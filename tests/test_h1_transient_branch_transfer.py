@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 from scripts.h1_transient_branch_transfer import (
     audit_circuit,
@@ -12,7 +13,9 @@ from scripts.h1_transient_branch_transfer import (
     checkpoint_stroboscopic_diagnostics,
     load_hb_initial,
     build_system,
+    node_velocity,
     parse_args,
+    max_abs_phi_envelope_classification,
 )
 
 
@@ -95,6 +98,51 @@ def test_h1_compact_storage_limits_are_explicit() -> None:
     assert args.compact_output
     assert args.compact_sample_count == 64
     assert args.compact_history_states == 128
+
+
+def test_h1_adaptive_state_relative_atol_is_an_explicit_option() -> None:
+    args = parse_args(["--method", "BDF", "--atol-mode", "state_relative"])
+
+    assert args.atol_mode == "state_relative"
+    assert args.atol_floor == pytest.approx(1e-12)
+
+
+def test_h1_node_velocity_reconstructs_algebraic_port() -> None:
+    system = build_system(ROOT / "designs" / "ipm_2c_fixed", 7.9, 4)
+    q = np.zeros(system.n)
+    p = np.zeros(system.n)
+    source = system.source(0.0, 0.0, 1e-6, 2.0 * np.pi)
+
+    expected = system.algebraic_velocity(q, p[system.differential], source)[0]
+
+    assert node_velocity(system, q, p, 4576, source) == pytest.approx(expected)
+
+
+def test_max_abs_phi_envelope_is_the_primary_growth_discriminant() -> None:
+    periods = np.arange(20, dtype=float)
+    result = max_abs_phi_envelope_classification(
+        {
+            "theta": periods * 2.0 * np.pi,
+            "max_abs_phi": 0.2 + 2.0e-5 * periods,
+        },
+        ramp_periods=5,
+    )
+
+    assert result["class"] == "GROWING_MAX_ABS_PHI"
+    assert result["slope_per_period"] == pytest.approx(2.0e-5)
+
+
+def test_max_abs_phi_envelope_accepts_bounded_slope() -> None:
+    periods = np.arange(20, dtype=float)
+    result = max_abs_phi_envelope_classification(
+        {
+            "theta": periods * 2.0 * np.pi,
+            "max_abs_phi": 0.2 + 5.0e-6 * periods,
+        },
+        ramp_periods=5,
+    )
+
+    assert result["class"] == "NON_GROWING_MAX_ABS_PHI"
 
 
 def test_h1_hb_checkpoint_reconstructs_a_phase_zero_state() -> None:
