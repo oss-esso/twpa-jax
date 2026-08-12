@@ -21,6 +21,13 @@ from twpa_solver.core.kinetic import (
 )
 from twpa_solver.core.nonlinear import CompositeBranchLaw
 from twpa_solver.core.environment import PortEnvironment
+from twpa_solver.core.rcsj import (
+    DEFAULT_AL_DELTA_EV,
+    RCSJParameters,
+    rcsj_capacitance_from_metadata,
+    rcsj_parameters,
+    stamp_rcsj_shunt,
+)
 
 __all__ = [
     "CircuitMatrices",
@@ -47,4 +54,9 @@ __all__ = [
     "resolve_ki_model",
     "CompositeBranchLaw",
     "PortEnvironment",
+    "DEFAULT_AL_DELTA_EV",
+    "RCSJParameters",
+    "rcsj_capacitance_from_metadata",
+    "rcsj_parameters",
+    "stamp_rcsj_shunt",
 ]
