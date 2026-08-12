@@ -193,6 +193,58 @@ class ComplexResonance:
     residual: float
 
 
+@dataclass(frozen=True)
+class FloquetClassification:
+    """Interpret one refined Hill root as a one-period multiplier candidate."""
+
+    multiplier: complex
+    phase_rad: float
+    magnitude: float
+    zone_frequency_ghz: float
+    kind: str
+    near_unit_circle: bool
+
+
+def _wrapped_phase(phase: float) -> float:
+    return float((phase + math.pi) % (2.0 * math.pi) - math.pi)
+
+
+def classify_floquet_resonance(
+    resonance: ComplexResonance,
+    omega_p: float,
+    *,
+    phase_tolerance_rad: float = 0.15,
+    unit_circle_tolerance: float = 0.05,
+) -> FloquetClassification:
+    """Classify a refined Hill root by its one-period Floquet multiplier."""
+    if omega_p <= 0.0:
+        raise ValueError("omega_p must be positive")
+    period = 2.0 * math.pi / omega_p
+    multiplier = complex(np.exp(1j * resonance.omega * period))
+    phase = _wrapped_phase(float(np.angle(multiplier)))
+    magnitude = float(abs(multiplier))
+    zone = float(
+        ((resonance.omega.real + 0.5 * omega_p) % omega_p) - 0.5 * omega_p
+    )
+    near_unit = abs(magnitude - 1.0) <= unit_circle_tolerance
+    if near_unit and abs(phase) <= phase_tolerance_rad:
+        kind = "FOLD_CANDIDATE"
+    elif near_unit and abs(abs(phase) - math.pi) <= phase_tolerance_rad:
+        kind = "PERIOD_DOUBLING_CANDIDATE"
+    elif near_unit:
+        kind = "NEIMARK_SACKER_CANDIDATE"
+    else:
+        kind = "OTHER_FLOQUET_MODE"
+    return FloquetClassification(
+        multiplier=multiplier,
+        phase_rad=phase,
+        magnitude=magnitude,
+        zone_frequency_ghz=zone / (2.0 * math.pi * 1e9),
+        kind=kind,
+        near_unit_circle=near_unit,
+    )
+
+
 def _nearest_zero_eigenpair(
     A: sp.spmatrix, v0: np.ndarray | None = None
 ) -> tuple[complex, np.ndarray]:
