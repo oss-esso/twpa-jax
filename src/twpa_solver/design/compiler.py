@@ -317,6 +317,11 @@ def _register_elements(ctx: BuildContext, path: str, before: int) -> None:
 
 def compile_design(spec: Mapping[str, Any], *, coupler_mode: str | None = None,
                    strict: bool = False, plan: Any = None) -> CompiledDesign:
+    # Keep the distinction between parameters declared by the design author
+    # and defaults injected by a technology preset.  Strict validation applies
+    # only to the former; a preset is a shared parameter catalogue, not a
+    # second set of declarations that every design must reference explicitly.
+    declared_parameters = set(spec.get("parameters", {}))
     spec = _technology(spec)
     validate_design(spec)
     raw_parameters = dict(spec.get("parameters", {}))
@@ -329,7 +334,28 @@ def compile_design(spec: Mapping[str, Any], *, coupler_mode: str | None = None,
     if strict:
         from twpa_solver.design.parameters import parameter_references
         used = parameter_references(spec["topology"])
-        unused = sorted(set(parameters) - used)
+        # Composite blocks consume parameters inside their compiler expansion,
+        # so those references are not visible in the compact source topology.
+        implicit_by_block = {
+            "input_ports": {"Rleft", "Rm", "Ll", "Cl", "len1", "len3"},
+            "output_ports": {"Rright", "Rm", "Ll", "Cl", "len2", "len4"},
+            "directional_coupler": {"coupling_dB", "Z0", "coupler_freq_hz",
+                                     "cached_coupler_width_um",
+                                     "cached_coupler_gap_um",
+                                     "cached_coupler_gap_to_ground_um",
+                                     "cached_coupler_length_um"},
+            "coupler": {"coupling_dB", "Z0", "coupler_freq_hz",
+                        "cached_coupler_width_um", "cached_coupler_gap_um",
+                        "cached_coupler_gap_to_ground_um",
+                        "cached_coupler_length_um"},
+            "ipm_line": {"array_length", "Lj", "Cj", "Cg", "Ll", "Cl",
+                         "length_of_short_TL", "short_tl"},
+            "ipm_tail": {"array_length", "Lj", "Cj", "Cg", "Ll", "Cl"},
+        }
+        for item in spec["topology"]:
+            if isinstance(item, Mapping):
+                used.update(implicit_by_block.get(str(item.get("type")), set()))
+        unused = sorted(declared_parameters - used)
         if unused:
             raise DesignParameterError(f"parameters: declared but unused {unused}")
     cursors = {str(key): int(value) for key, value in spec["cursors"].items()}
