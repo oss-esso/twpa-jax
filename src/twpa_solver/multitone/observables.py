@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import replace
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
@@ -24,6 +24,9 @@ from twpa_solver.multitone.basis import (
 )
 from twpa_solver.multitone.problem import FullMultiToneProblem
 from twpa_solver.multitone.source import AffineSourcePath
+
+if TYPE_CHECKING:
+    from twpa_solver.multitone.imd import ImProduct
 
 
 def _port_current_coefficients(
@@ -80,6 +83,33 @@ def extract_port_waves(
             values["a_power"][key] = float(abs(a) ** 2)
             values["b_power"][key] = float(abs(b) ** 2)
     return values
+
+
+def imd_products_dbc(
+    X_full: np.ndarray,
+    basis: MultiToneBasis,
+    circuit: CircuitMatrices,
+    products: list["ImProduct"],
+    *,
+    out_port: int,
+    z0_ohm: float = 50.0,
+    dc_branch_flux: np.ndarray | None = None,
+) -> dict[str, float]:
+    """Return each IM product's outgoing power relative to the signal tone."""
+    waves = extract_port_waves(
+        X_full, basis, circuit, ports=[int(out_port)], z0_ohm=z0_ohm,
+        dc_branch_flux=dc_branch_flux,
+    )
+    b_power = waves["b_power"]
+    signal_power = b_power.get((basis.signal_tone, int(out_port)))
+    results: dict[str, float] = {}
+    for product in products:
+        power = b_power.get((product.tone, int(out_port)))
+        if not signal_power or power is None or power <= 0.0:
+            results[f"{product.label}_dbc"] = float("nan")
+        else:
+            results[f"{product.label}_dbc"] = float(10.0 * math.log10(power / signal_power))
+    return results
 
 
 def tone_s21(

@@ -559,7 +559,7 @@ def _write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
 
 
 def plot_phase5_device(name: str, output: Path) -> list[Path]:
-    """Plot completed phase-5 gain and junction-drive comparisons."""
+    """Plot Guarcello FDTD points together with the HB reference column."""
     import matplotlib.pyplot as plt
 
     summary_path = output / "summary.csv"
@@ -569,55 +569,49 @@ def plot_phase5_device(name: str, output: Path) -> list[Path]:
     complete = [row for row in rows if row.get("status") == "COMPLETE"]
     if not complete:
         raise ValueError(f"no completed phase-5 rows in {summary_path}")
+    if any(not row.get("pump_power_dbm", "").strip() for row in complete):
+        raise ValueError("summary.csv is missing pump_power_dbm")
+
+    fdtd_power = np.array([float(row["pump_power_dbm"]) for row in complete])
+    fdtd_gain = np.array([float(row["gain_vs_off_db"]) for row in complete])
+    fdtd_rj = np.array([float(row["r_j"]) for row in complete])
+    fdtd_order = np.argsort(fdtd_power)
+    fdtd_power, fdtd_gain, fdtd_rj = fdtd_power[fdtd_order], fdtd_gain[fdtd_order], fdtd_rj[fdtd_order]
+
     hb_name = name.removeprefix("jc_")
     hb_path = ROOT / ".hybrid_outputs" / "hb_columns_jtwpa_fqjtwpa_20260811" / hb_name / "hb_up_to_failure.csv"
     hb_rows = _read_hb_rows(hb_path)
-
-    fdtd_current = np.array([float(row["pump_current_peak_a_requested"]) for row in complete])
-    fdtd_gain = np.array([float(row["gain_vs_off_db"]) for row in complete])
-    fdtd_r = np.array([float(row["r_j"]) for row in complete])
-    hb_current = np.array([float(row["pump_current_peak_a"]) for row in hb_rows])
-    hb_gain = np.array([float(row["gain_vs_off_db"]) for row in hb_rows])
-    hb_r = np.array([float(row["pump_branch_current_max_over_ic"]) for row in hb_rows])
-    failure = next(
-        (current for current, row in zip(hb_current, hb_rows)
-         if row.get("pump_status") not in {"VALID_CONVERGED", "VALID_SOLVED"}),
-        None,
-    )
+    hb_valid = [row for row in hb_rows if row.get("status") == "PASS" and row.get("pump_status") in {"VALID_CONVERGED", "VALID_SOLVED"} and row.get("gain_vs_off_db", "").strip()]
+    hb_power = np.array([float(row["pump_power_dbm"]) for row in hb_valid])
+    hb_gain = np.array([float(row["gain_vs_off_db"]) for row in hb_valid])
+    hb_rj = np.array([float(row["pump_branch_current_max_over_ic"]) for row in hb_valid])
+    hb_order = np.argsort(hb_power)
+    hb_power, hb_gain, hb_rj = hb_power[hb_order], hb_gain[hb_order], hb_rj[hb_order]
+    hb_failure = next((float(row["pump_power_dbm"]) for row in hb_rows if row.get("pump_status") not in {"VALID_CONVERGED", "VALID_SOLVED"}), None)
 
     output.mkdir(parents=True, exist_ok=True)
     paths: list[Path] = []
     fig, axis = plt.subplots(figsize=(7.2, 4.8), constrained_layout=True)
-    axis.plot(hb_current, hb_gain, "k--", alpha=0.7, label="HB gain vs off")
-    axis.plot(fdtd_current, fdtd_gain, "o-", label="transient gain vs off")
-    if failure is not None:
-        axis.axvline(failure, color="tab:red", linestyle=":", label="HB failure current")
-    axis.set(xlabel="On-chip peak pump current (A)", ylabel="Gain vs pump-off (dB)",
-             title=f"Phase 5 {name}: gain comparison")
-    axis.grid(alpha=0.25)
-    axis.legend()
-    gain_path = output / "phase5_gain_vs_current.png"
-    fig.savefig(gain_path, dpi=180)
-    plt.close(fig)
-    paths.append(gain_path)
+    axis.plot(hb_power, hb_gain, "k--", alpha=0.75, label="HB reference")
+    axis.plot(fdtd_power, fdtd_gain, "o-", color="tab:blue", label="Guarcello FDTD")
+    if hb_failure is not None:
+        axis.axvline(hb_failure, color="tab:red", linestyle=":", label="HB failure")
+    axis.set(xlabel="Pump power (dBm)", ylabel="Gain vs pump-off (dB)", title=f"Phase 5 {name}: gain")
+    axis.grid(alpha=0.25); axis.legend()
+    gain_path = output / "phase5_gain_vs_power_dbm.png"
+    fig.savefig(gain_path, dpi=180); plt.close(fig); paths.append(gain_path)
 
     fig, axis = plt.subplots(figsize=(7.2, 4.8), constrained_layout=True)
-    axis.plot(hb_current, hb_r, "k--", alpha=0.7, label="HB $r_j$")
-    axis.plot(fdtd_current, fdtd_r, "o-", label="transient $r_j$")
+    axis.plot(hb_power, hb_rj, "k--", alpha=0.75, label="HB reference")
+    axis.plot(fdtd_power, fdtd_rj, "o-", color="tab:orange", label="Guarcello FDTD")
     axis.axhline(1.0, color="tab:purple", linestyle="--", label="$r_j=1$")
-    if failure is not None:
-        axis.axvline(failure, color="tab:red", linestyle=":", label="HB failure current")
-    axis.set(xlabel="On-chip peak pump current (A)", ylabel=r"$r_j=I_{J,\max}/I_c$",
-             title=f"Phase 5 {name}: junction drive comparison")
-    axis.grid(alpha=0.25)
-    axis.legend()
-    drive_path = output / "phase5_rj_vs_current.png"
-    fig.savefig(drive_path, dpi=180)
-    plt.close(fig)
-    paths.append(drive_path)
+    if hb_failure is not None:
+        axis.axvline(hb_failure, color="tab:red", linestyle=":", label="HB failure")
+    axis.set(xlabel="Pump power (dBm)", ylabel=r"$r_j=I_{J,\max}/I_c$", title=f"Phase 5 {name}: junction drive")
+    axis.grid(alpha=0.25); axis.legend()
+    drive_path = output / "phase5_rj_vs_power_dbm.png"
+    fig.savefig(drive_path, dpi=180); plt.close(fig); paths.append(drive_path)
     return paths
-
-
 def _worker(args: argparse.Namespace) -> int:
     spec = derive_device_spec(Path(args.circuit_dir))
     initial = None if not args.state_in else np.load(args.state_in)["state"]
@@ -740,86 +734,119 @@ def measure_device_rate(
     return measurement
 
 
-def run_device(name: str, *, dt_norm: float, tmax_norm: float, output: Path, per_point_budget_s: float | None = None) -> dict[str, Any]:
+def run_device(name: str, *, dt_norm: float, tmax_norm: float, output: Path,
+               per_point_budget_s: float | None = None,
+               pump_power_min_dbm: float = -30.0,
+               pump_power_max_dbm: float = -28.0,
+               pump_power_points: int = 10,
+               pump_power_values: tuple[float, ...] | None = None) -> dict[str, Any]:
     circuit_dir = ROOT / "outputs" / "jc_doc_python_designs" / name
     hb_name = name.removeprefix("jc_")
     hb_dir = ROOT / ".hybrid_outputs" / "hb_columns_jtwpa_fqjtwpa_20260811" / hb_name
     spec = derive_device_spec(circuit_dir)
     budget = derive_time_budget(spec, dt_norm=dt_norm, tmax_norm=tmax_norm)
     output.mkdir(parents=True, exist_ok=True)
-    (output / "cost_estimate.json").write_text(
-        json.dumps({"method_attribution": "our sparse transient engine vs our harmonic-balance solver", "device": asdict(spec), "time_budget": asdict(budget)}, indent=2),
-        encoding="utf-8",
-    )
     hb_rows = _read_hb_rows(hb_dir / "hb_up_to_failure.csv")
-    requested_powers = (-32.5, -29.684, -29.053)
-    selected_rows = [
-        min(hb_rows, key=lambda row: abs(float(row["pump_power_dbm"]) - power))
-        for power in requested_powers
-    ]
-    points = [float(row["pump_current_peak_a"]) for row in selected_rows]
+    valid_hb = [r for r in hb_rows if r.get("status") == "PASS" and r.get("pump_status") in {"VALID_CONVERGED", "VALID_SOLVED"}]
+    if len(valid_hb) < 2:
+        raise RuntimeError("at least two valid HB rows are required for pump-power mapping")
+    hb_power = np.array([float(r["pump_power_dbm"]) for r in valid_hb])
+    hb_current = np.array([float(r["pump_current_peak_a"]) for r in valid_hb])
+    order = np.argsort(hb_power); hb_power, hb_current = hb_power[order], hb_current[order]
+    requested_powers = (np.asarray(pump_power_values, dtype=float)
+                        if pump_power_values is not None
+                        else np.linspace(pump_power_min_dbm, pump_power_max_dbm, pump_power_points))
+    edge = np.polyfit(hb_power[-2:], np.log(hb_current[-2:]), 1)
+    currents = np.interp(requested_powers, hb_power, hb_current)
+    high = requested_powers > hb_power[-1]
+    currents[high] = np.exp(np.polyval(edge, requested_powers[high]))
     signal_current = math.sqrt(2.0 * 1e-3 * 10.0 ** (-100.0 / 10.0) / 50.0) / 50.0
-    effective_tmax_norm = budget.tmax_norm
-    measurement = measure_device_rate(
-        spec, dt_norm=dt_norm, signal_current_a=signal_current, output=output,
-    )
+    measurement = measure_device_rate(spec, dt_norm=dt_norm, signal_current_a=signal_current, output=output)
     budget_payload = asdict(budget)
     budget_payload["measured_steps_per_second"] = measurement["measured_steps_per_second"]
-    budget_payload["measured_seconds_per_point"] = (
-        budget.tmax_norm / dt_norm / measurement["measured_steps_per_second"]
-    )
-    (output / "cost_estimate.json").write_text(
-        json.dumps({
-            "method_attribution": "Guarcello known-time-level banded FDTD algorithm",
-            "device": asdict(spec),
-            "time_budget": budget_payload,
-        }, indent=2),
-        encoding="utf-8",
-    )
+    budget_payload["measured_seconds_per_point"] = budget.tmax_norm / dt_norm / measurement["measured_steps_per_second"]
+    (output / "cost_estimate.json").write_text(json.dumps({"method_attribution": "Guarcello known-time-level banded FDTD algorithm", "device": asdict(spec), "time_budget": budget_payload}, indent=2), encoding="utf-8")
     point_budget = per_point_budget_s or min(900.0, budget_payload["measured_seconds_per_point"] * 1.5)
-    off_row, off_amplitude, off_state = _run_subprocess_point(
-        spec, pump_current_a=0.0, start_current_a=0.0, initial_state=None,
-        method="guarcello_banded", dt_norm=dt_norm, tmax_norm=effective_tmax_norm,
-        signal_current_a=signal_current, pump_off_output=None,
-        output=output / "pump_off", budget_s=point_budget,
-    )
-    (output / "pump_off" / "summary.json").write_text(
-        json.dumps(off_row, indent=2), encoding="utf-8",
-    )
+
+    pump_off_dir = output / "pump_off"
+    off_summary = pump_off_dir / "summary.json"
+    off_state_path = pump_off_dir / "state_out.npz"
+    if off_summary.exists() and off_state_path.exists():
+        off_row = json.loads(off_summary.read_text(encoding="utf-8"))
+        off_payload = pump_off_dir / "result.json"
+        if off_payload.exists():
+            off_amplitude = float(json.loads(off_payload.read_text(encoding="utf-8"))["amplitude"])
+        else:
+            off_amplitude = float(off_row.get("amplitude", 0.0))
+        off_state = np.load(off_state_path)["state"]
+    else:
+        off_row, off_amplitude, off_state = _run_subprocess_point(
+            spec, pump_current_a=0.0, start_current_a=0.0, initial_state=None,
+            method="guarcello_banded", dt_norm=dt_norm, tmax_norm=tmax_norm,
+            signal_current_a=signal_current, pump_off_output=None,
+            output=pump_off_dir, budget_s=point_budget)
+        (pump_off_dir / "summary.json").write_text(json.dumps({**off_row, "amplitude": off_amplitude}, indent=2), encoding="utf-8")
     if off_amplitude is None or off_state is None:
         raise RuntimeError("pump-off reference did not complete")
-    chosen = "guarcello_banded"
+
+    existing: list[dict[str, Any]] = []
+    summary_path = output / "summary.csv"
+    if summary_path.exists():
+        existing = _read_hb_rows(summary_path)
+    for row in existing:
+        if not row.get("pump_power_dbm", "").strip():
+            current = float(row["pump_current_peak_a_requested"])
+            row["pump_power_dbm"] = str(float(hb_power[np.argmin(abs(hb_current-current))]))
+            row["pump_power_mapping"] = "nearest_valid_hb_row"
+    unique_existing: dict[float, dict[str, Any]] = {}
+    for row in existing:
+        key = round(float(row["pump_current_peak_a_requested"]), 15)
+        unique_existing[key] = row
+    existing = list(unique_existing.values())
     rows: list[dict[str, Any]] = []
-    previous_state = off_state
-    previous_current = 0.0
-    for index, current in enumerate(points):
+    used_existing: set[int] = set()
+    previous_state = off_state; previous_current = 0.0
+    for index, (power_dbm, current) in enumerate(zip(requested_powers, currents)):
+        match_index = next((j for j, r in enumerate(existing)
+                            if j not in used_existing
+                            and abs(float(r.get("pump_power_dbm", "nan")) - power_dbm) <= 0.15
+                            and r.get("status") == "COMPLETE"), None)
+        match = existing[match_index] if match_index is not None else None
+        if match_index is not None:
+            used_existing.add(match_index)
+        if match is not None:
+            row = dict(match)
+            state_path = output / f"point_{int(row.get('point_index', index)):03d}" / "state_out.npz"
+            if not state_path.exists():
+                state_path = output / f"point_new_{index:03d}" / "state_out.npz"
+            if state_path.exists():
+                previous_state = np.load(state_path)["state"]
+                previous_current = float(row["pump_current_peak_a_requested"])
+            rows.append(row)
+            continue
+        point_dir = output / f"point_new_{index:03d}"
         row, _, state = _run_subprocess_point(
-            spec, pump_current_a=current, start_current_a=previous_current,
-            initial_state=previous_state, method=chosen, dt_norm=dt_norm,
-            tmax_norm=effective_tmax_norm, signal_current_a=signal_current,
-            pump_off_output=off_amplitude, output=output / f"point_{index:03d}",
-            budget_s=point_budget,
-        )
+            spec, pump_current_a=float(current), start_current_a=previous_current,
+            initial_state=previous_state, method="guarcello_banded", dt_norm=dt_norm,
+            tmax_norm=tmax_norm, signal_current_a=signal_current,
+            pump_off_output=off_amplitude, output=point_dir, budget_s=point_budget)
         row["point_index"] = index
+        row["pump_power_dbm"] = str(float(power_dbm))
+        row["pump_power_mapping"] = "hb_interpolation" if power_dbm <= hb_power[-1] else "hb_edge_extrapolation"
         rows.append(row)
-        _write_csv(output / "summary.csv", rows)
         if state is not None:
-            previous_state = state
-            previous_current = current
-    result = {
-        "device": asdict(spec),
-        "time_budget": asdict(budget),
-        "pump_off": off_row,
-        "points": len(rows),
-        "method_attribution": "Guarcello known-time-level banded FDTD algorithm vs our harmonic-balance solver",
-        "chosen_integrator": chosen,
-        "integrator_screen": None,
-        "per_point_wall_time_budget_s": point_budget,
-        "status": "COMPLETE",
-    }
+            previous_state, previous_current = state, float(current)
+        _write_csv(summary_path, rows)
+    for j, row in enumerate(existing):
+        if j not in used_existing:
+            rows.append(dict(row))
+    _write_csv(summary_path, rows)
+    result = {"device": asdict(spec), "time_budget": asdict(budget), "pump_off": off_row,
+              "points": len(rows), "method_attribution": "Guarcello known-time-level banded FDTD algorithm",
+              "chosen_integrator": "guarcello_banded", "per_point_wall_time_budget_s": point_budget,
+              "requested_pump_powers_dbm": requested_powers.tolist(), "status": "COMPLETE"}
     (output / "summary.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
     return result
-
 
 def main() -> int:
     parser = argparse.ArgumentParser()
@@ -842,6 +869,11 @@ def main() -> int:
     parser.add_argument("--benchmark-only", action="store_true")
     parser.add_argument("--plot-only", action="store_true")
     parser.add_argument("--per-point-budget-s", type=float, default=None)
+    parser.add_argument("--pump-power-min-dbm", type=float, default=-30.0)
+    parser.add_argument("--pump-power-max-dbm", type=float, default=-28.0)
+    parser.add_argument("--pump-power-points", type=int, default=10)
+    parser.add_argument("--pump-power-values", type=str, default=None,
+                        help="comma-separated explicit pump powers in dBm")
     args = parser.parse_args()
     if args.worker:
         return _worker(args)
@@ -880,6 +912,10 @@ def main() -> int:
         run_device(
             name, dt_norm=args.dt_norm, tmax_norm=args.tmax_norm,
             output=args.output / name, per_point_budget_s=args.per_point_budget_s,
+            pump_power_min_dbm=args.pump_power_min_dbm, pump_power_max_dbm=args.pump_power_max_dbm,
+            pump_power_points=args.pump_power_points,
+            pump_power_values=(tuple(float(value) for value in args.pump_power_values.split(","))
+                               if args.pump_power_values else None),
         )
         paths = plot_phase5_device(name, args.output / name)
         print(json.dumps({"device": name, "plots": [str(path) for path in paths]}))

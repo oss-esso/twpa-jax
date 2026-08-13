@@ -34,6 +34,28 @@ def test_pump_power_dbm_rejects_explicit_current() -> None:
         )
 
 
+@pytest.mark.parametrize("order", [2, 10, 17, -3])
+def test_imd_order_validation(order: int) -> None:
+    with pytest.raises(SystemExit, match="2"):
+        main([
+            "--output-dir", "unused", "--signal-ghz", "4.5",
+            "--imd-max-order", str(order),
+        ])
+
+
+def test_imd_order_three_extends_matched_basis_by_one_tone() -> None:
+    base_args = build_parser().parse_args(
+        ["--output-dir", "unused", "--signal-ghz", "6.0", "--multitone-sidebands", "10"]
+    )
+    plain = _build_multitone_basis(base_args, list(range(1, 20, 2)), 2.0 * 3.141592653589793 * 7e9, 2.0 * 3.141592653589793 * 1e9)
+    imd_args = build_parser().parse_args(
+        ["--output-dir", "unused", "--signal-ghz", "6.0", "--multitone-sidebands", "10", "--imd-max-order", "3"]
+    )
+    extended = _build_multitone_basis(imd_args, list(range(1, 20, 2)), 2.0 * 3.141592653589793 * 7e9, 2.0 * 3.141592653589793 * 1e9)
+    assert extended.n_tones == plain.n_tones + 1
+    assert len(imd_args._imd_tones_added) == 1
+
+
 def test_resolve_pump_current_prefers_explicit_current_over_power_and_default() -> None:
     parser = build_parser()
     args = parser.parse_args(
