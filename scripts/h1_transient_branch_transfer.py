@@ -1868,7 +1868,7 @@ def run_experiment(args: argparse.Namespace) -> dict[str, Any]:
             "newton_iterations": integrator.get("newton_iterations"),
             "newton_iterations_per_step": (
                 float(integrator["newton_iterations"]) / float(integrator["steps"])
-                if integrator.get("steps") else None
+                if integrator.get("steps") and integrator.get("newton_iterations") is not None else None
             ),
             "step_reductions": integrator.get("step_reductions"),
         },
