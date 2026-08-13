@@ -8,15 +8,8 @@ parameters:
   Ll: 4.24e-12
   Cl: 1.695e-15
   array_length: 418
-  num_rows: 7
-  arrays_per_dc: 1
-  short_tl: 90
   long_tl: 900
   coupler_section: 800
-  cached_coupler_width_um: 39.897
-  cached_coupler_gap_um: 44.762
-  cached_coupler_gap_to_ground_um: 10.5973385055
-  cached_coupler_length_um: 3787.7
 cursors:
   signal: 1
   pump: 100000
