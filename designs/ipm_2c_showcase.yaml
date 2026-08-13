@@ -1,0 +1,33 @@
+schema_version: 1
+extends: ipm_2c.yaml
+name: ipm_2c_showcase
+
+# A compact, reproducible example combining inheritance, a per-row profile,
+# and exact hierarchical edits.
+profiles:
+  Lj:
+    target: line_1
+    type: cosine
+    start: 112e-12
+    stop: 138e-12
+    domain: per_row
+    # cosine is evaluated by the profile engine; the endpoints are retained.
+  Cg:
+    target: line_2
+    type: custom
+    start: 60e-15
+    stop: 72e-15
+    domain: per_row
+    expression: 1 - 0.35 * sin(pi * t)
+
+patches:
+  - action: set
+    target: line_1.row[0].array[0].cell[42].Cj
+    value: 152e-15
+  - action: add
+    name: local_ground_cap
+    nodes:
+      - line_1.row[0].array[0].cell[42].right
+      - ground
+    value: 75e-15
+    kind: capacitor

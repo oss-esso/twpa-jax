@@ -1,0 +1,64 @@
+schema_version: 1
+name: ipm_explicit_blocks_showcase
+technology: ipm_default
+coupler_mode: ideal
+
+parameters:
+  Lj: 123.9e-12
+  Cj: 145e-15
+  Cg: 66e-15
+  array_length: 24
+
+topology:
+  - type: signal_port
+    name: signal_in
+    port: 1
+  - type: pump_port
+    name: pump_in
+    port: 3
+  - type: directional_coupler
+    name: input_coupler
+  - type: ipm_row
+    name: first_row
+    cursor: signal
+    cells: ${array_length}
+    Lj: ${Lj}
+    Cj: ${Cj}
+    Cg: ${Cg}
+  - type: transmission_line
+    name: inter_row_line
+    cursor: signal
+    cells: 5
+    L: 4.24e-12
+    C: 1.695e-15
+  - type: ipm_line
+    name: middle_rows
+    cursor: signal
+    rows: 2
+    cells: ${array_length}
+    Lj: ${Lj}
+    Cj: ${Cj}
+    Cg: ${Cg}
+    between: 3
+  - type: coupler
+    name: output_coupler
+    cursors: [signal, pump]
+  - type: ipm_tail
+    name: final_row
+    cursor: signal
+    rows: 1
+    cells: ${array_length}
+    Lj: ${Lj}
+    Cj: ${Cj}
+    Cg: ${Cg}
+    final_array: true
+  - type: output_ports
+    name: output
+
+profiles:
+  Lj:
+    target: first_row
+    type: linear
+    start: 118e-12
+    stop: 130e-12
+    domain: selection
