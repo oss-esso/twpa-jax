@@ -1,0 +1,43 @@
+schema_version: 1
+name: rf_squid_uniform_showcase
+
+parameters:
+  cells: 32
+  Ic: 0.93e-6
+  Lm: 58.6e-12
+  Lw: 37.0e-12
+  Lpar: 8.9e-12
+  Cj: 20e-15
+  Cg: 50e-15
+
+ground: 0
+cursors:
+  signal: 1
+
+topology:
+  - type: port
+    name: input
+    cursor: signal
+    port: 1
+  - type: resistor
+    name: input_termination
+    cursor: signal
+    value: 50.0
+  - type: rf_squid_line
+    name: uniform_rf_squid
+    cursor: signal
+    cells: ${cells}
+    Ic: ${Ic}
+    Lm: ${Lm}
+    Lw: ${Lw}
+    Lpar: ${Lpar}
+    Cj: ${Cj}
+    Cg: ${Cg}
+  - type: resistor
+    name: output_termination
+    cursor: signal
+    value: 50.0
+  - type: port
+    name: output
+    cursor: signal
+    port: 2
