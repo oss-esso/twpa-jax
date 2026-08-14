@@ -21,9 +21,14 @@ import numpy as np
 from scipy.integrate import solve_ivp
 
 PERIOD_DOUBLING = "PERIOD_DOUBLING"
+PERIOD_DOUBLING_ONSET = "PERIOD_DOUBLING_ONSET"
+PITCHFORK_CANDIDATE = "PITCHFORK_CANDIDATE"
+FOLD_CANDIDATE = "FOLD_CANDIDATE"
 NEIMARK_SACKER = "NEIMARK_SACKER"
 CHAOS_NO_CLEAN_BIFURCATION = "CHAOS_NO_CLEAN_BIFURCATION"
 NO_BIFURCATION_FOUND = "NO_BIFURCATION_FOUND"
+MIN_SAMPLES_PER_PERIOD = 4.0
+MAX_PERIOD_MULTIPLE = 8
 
 
 def poincare_crossing_branches(t: np.ndarray, v: np.ndarray) -> dict[str, np.ndarray]:
@@ -94,15 +99,20 @@ def _peak_frequencies(t: np.ndarray, v: np.ndarray, *, fmax_hz: float | None = N
     return frequencies[order], spectrum[order]
 
 
-def _period_clusters(points: np.ndarray, *, tolerance: float) -> tuple[int, np.ndarray]:
+def _period_clusters(
+    points: np.ndarray, *, tolerance: float, tolerance_decay: float = 1.0,
+) -> tuple[int, np.ndarray]:
     values = np.asarray(points, dtype=float).reshape(-1)
     if values.size == 0:
         return 0, np.empty(0)
+    if tolerance_decay <= 0.0:
+        raise ValueError("tolerance_decay must be positive")
     scale = max(float(np.ptp(values)), abs(float(np.median(values))), 1.0e-15)
     bins = np.sort(values)
     groups = [[bins[0]]]
     for value in bins[1:]:
-        if value - groups[-1][-1] <= tolerance * scale:
+        admitted_tolerance = tolerance / tolerance_decay ** (len(groups) - 1)
+        if value - groups[-1][-1] <= admitted_tolerance * scale:
             groups[-1].append(value)
         else:
             groups.append([value])
@@ -121,6 +131,11 @@ class Classification:
     sigma_deep_stable: float | None = None
     sigma_ratio: float | None = None
     ratio_threshold: float | None = None
+    period_multiple: int | None = None
+    q_even: float | None = None
+    q_dc: float | None = None
+    spectral_period_doubling: bool = False
+    spectral_period_disagreement: bool = False
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -130,10 +145,22 @@ def classify_attractor(
     poincare: np.ndarray, *, spectrum_frequencies_hz: np.ndarray | None = None,
     drive_hz: float | None = None, sigma_threshold: float = 0.1,
     cluster_tolerance: float = 0.03,
+    cluster_tolerance_decay: float = 1.0,
     sigma_deep_stable: float | None = None,
     ratio_threshold: float = 40.0,
     sweep_controls: np.ndarray | None = None,
     sweep_sigmas: np.ndarray | None = None,
+    period_multiple_value: int | None = None,
+    q_even: float | None = None,
+    q_dc: float | None = None,
+    baseline_q_even: float = 0.0,
+    baseline_q_dc: float = 0.0,
+    symmetry_floor_factor: float = 5.0,
+    half_integer_line_db: float | None = None,
+    half_integer_floor_db: float | None = None,
+    half_integer_gate_db: float = 20.0,
+    branch_terminated: bool = False,
+    incommensurate: bool = False,
 ) -> str:
     """Classify an attractor from Poincare geometry and optional spectrum.
 
@@ -143,9 +170,17 @@ def classify_attractor(
     return classify_details(
         poincare, spectrum_frequencies_hz=spectrum_frequencies_hz,
         drive_hz=drive_hz, sigma_threshold=sigma_threshold,
-        cluster_tolerance=cluster_tolerance, sigma_deep_stable=sigma_deep_stable,
+        cluster_tolerance=cluster_tolerance, cluster_tolerance_decay=cluster_tolerance_decay,
+        sigma_deep_stable=sigma_deep_stable,
         ratio_threshold=ratio_threshold, sweep_controls=sweep_controls,
         sweep_sigmas=sweep_sigmas,
+        period_multiple_value=period_multiple_value, q_even=q_even, q_dc=q_dc,
+        baseline_q_even=baseline_q_even, baseline_q_dc=baseline_q_dc,
+        symmetry_floor_factor=symmetry_floor_factor,
+        half_integer_line_db=half_integer_line_db,
+        half_integer_floor_db=half_integer_floor_db,
+        half_integer_gate_db=half_integer_gate_db,
+        branch_terminated=branch_terminated, incommensurate=incommensurate,
     ).verdict
 
 
@@ -153,10 +188,22 @@ def classify_details(
     poincare: np.ndarray, *, spectrum_frequencies_hz: np.ndarray | None = None,
     drive_hz: float | None = None, sigma_threshold: float = 0.1,
     cluster_tolerance: float = 0.03,
+    cluster_tolerance_decay: float = 1.0,
     sigma_deep_stable: float | None = None,
     ratio_threshold: float = 40.0,
     sweep_controls: np.ndarray | None = None,
     sweep_sigmas: np.ndarray | None = None,
+    period_multiple_value: int | None = None,
+    q_even: float | None = None,
+    q_dc: float | None = None,
+    baseline_q_even: float = 0.0,
+    baseline_q_dc: float = 0.0,
+    symmetry_floor_factor: float = 5.0,
+    half_integer_line_db: float | None = None,
+    half_integer_floor_db: float | None = None,
+    half_integer_gate_db: float = 20.0,
+    branch_terminated: bool = False,
+    incommensurate: bool = False,
 ) -> Classification:
     """Return a verdict with enough evidence to audit a campaign result."""
     values = np.asarray(poincare, dtype=float)
@@ -173,7 +220,9 @@ def classify_details(
     if sigma_deep_stable is not None and sigma_deep_stable <= 0.0:
         raise ValueError("sigma_deep_stable must be positive")
     ratio = None if sigma_deep_stable is None else sigma / sigma_deep_stable
-    clusters, centers = _period_clusters(scalar, tolerance=cluster_tolerance)
+    clusters, centers = _period_clusters(
+        scalar, tolerance=cluster_tolerance, tolerance_decay=cluster_tolerance_decay
+    )
     frequencies = np.asarray(spectrum_frequencies_hz if spectrum_frequencies_hz is not None else [], dtype=float)
     frequencies = frequencies[np.isfinite(frequencies)]
     dominant = tuple(float(x) for x in frequencies[:8])
@@ -182,7 +231,59 @@ def classify_details(
         half_harmonic = bool(np.min(np.abs(frequencies - drive_hz / 2.0)) < 0.03 * drive_hz or
                              np.min(np.abs(frequencies - 3.0 * drive_hz / 2.0)) < 0.03 * drive_hz)
     monotone = is_smooth_monotone_rise(sweep_controls, sweep_sigmas)
-    if monotone:
+    if symmetry_floor_factor <= 1.0:
+        raise ValueError("symmetry_floor_factor must exceed one")
+    if half_integer_gate_db <= 0.0:
+        raise ValueError("half_integer_gate_db must be positive")
+    spectral_period_doubling = bool(
+        half_integer_line_db is not None and half_integer_floor_db is not None
+        and np.isfinite(half_integer_line_db) and np.isfinite(half_integer_floor_db)
+        and half_integer_line_db - half_integer_floor_db >= half_integer_gate_db
+    )
+    spectral_period_disagreement = bool(
+        spectral_period_doubling and period_multiple_value not in (2, 4, 8)
+    )
+    new_evidence = period_multiple_value is not None or q_even is not None or q_dc is not None
+    if spectral_period_doubling and clusters > MAX_PERIOD_MULTIPLE:
+        verdict, reason = CHAOS_NO_CLEAN_BIFURCATION, (
+            "half-integer spectrum is present, but the Poincare section has "
+            f"{clusters} clusters, exceeding the maximum tested period "
+            f"multiple {MAX_PERIOD_MULTIPLE}"
+        )
+    elif spectral_period_doubling and period_multiple_value in (2, 4, 8):
+        verdict, reason = PERIOD_DOUBLING, (
+            f"pump-referred half-integer spectrum exceeds its floor by "
+            f"{half_integer_line_db - half_integer_floor_db:.3g} dB"
+        )
+    elif spectral_period_doubling:
+        verdict, reason = PERIOD_DOUBLING_ONSET, (
+            "half-integer spectrum is present, but the time-domain period "
+            f"test returned {period_multiple_value}; no clean period-{period_multiple_value} closure"
+        )
+    elif new_evidence and period_multiple_value is not None and period_multiple_value >= 2 and half_harmonic:
+        verdict, reason = PERIOD_DOUBLING, (
+            f"period multiple {period_multiple_value} with half-integer pump line"
+        )
+    elif new_evidence and period_multiple_value == 0:
+        if clusters <= 1:
+            verdict, reason = NO_BIFURCATION_FOUND, (
+                "the period test found no closure, but the directional Poincare "
+                "section remains one compact cluster"
+            )
+        else:
+            verdict, reason = CHAOS_NO_CLEAN_BIFURCATION, "no tested integer pump period matches the waveform"
+    elif new_evidence and period_multiple_value == 1 and (
+        (q_even is not None and q_even > max(abs(baseline_q_even), 1.0e-12) * symmetry_floor_factor)
+        or (q_dc is not None and q_dc > max(abs(baseline_q_dc), 1.0e-12) * symmetry_floor_factor)
+    ):
+        verdict, reason = PITCHFORK_CANDIDATE, "period unchanged with broken pump symmetry"
+    elif new_evidence and period_multiple_value == 1 and branch_terminated:
+        verdict, reason = FOLD_CANDIDATE, "period and symmetry unchanged at branch termination"
+    elif new_evidence and period_multiple_value == 1:
+        verdict, reason = NO_BIFURCATION_FOUND, "period and symmetry remain unchanged"
+    elif new_evidence and incommensurate:
+        verdict, reason = NEIMARK_SACKER, "incommensurate sideband lattice"
+    elif monotone:
         verdict, reason = NO_BIFURCATION_FOUND, (
             "sigma rises smoothly and monotonically with the drive; no bifurcation shape"
         )
@@ -220,6 +321,8 @@ def classify_details(
     return Classification(
         verdict, sigma, int(scalar.size), clusters, dominant, reason,
         sigma_deep_stable, ratio, ratio_threshold,
+        period_multiple_value, q_even, q_dc,
+        spectral_period_doubling, spectral_period_disagreement,
     )
 
 
@@ -271,13 +374,24 @@ def classify_sweep(
 
 def classify_trace(
     time: np.ndarray, output_voltage: np.ndarray, *, drive_hz: float,
-    sigma_threshold: float = 0.1,
+    sigma_threshold: float = 0.1, baseline_q_even: float = 0.0,
+    baseline_q_dc: float = 0.0, branch_terminated: bool = False,
+    symmetry_floor_factor: float = 5.0,
 ) -> Classification:
     """Extract Guarcello crossings and FFT peaks from one steady-state trace."""
     points = poincare_crossings(time, output_voltage)
     frequencies, _ = _peak_frequencies(time, output_voltage)
+    orders = symmetry_order_parameters(time, output_voltage, drive_hz)
+    multiple = period_multiple(time, output_voltage, drive_hz)
     return classify_details(points, spectrum_frequencies_hz=frequencies,
-                            drive_hz=drive_hz, sigma_threshold=sigma_threshold)
+                            drive_hz=drive_hz, sigma_threshold=sigma_threshold,
+                            period_multiple_value=multiple,
+                            q_even=float(orders["q_even"]),
+                            q_dc=float(orders["q_dc"]),
+                            baseline_q_even=baseline_q_even,
+                            baseline_q_dc=baseline_q_dc,
+                            symmetry_floor_factor=symmetry_floor_factor,
+                            branch_terminated=branch_terminated)
 
 
 @dataclass(frozen=True)
@@ -318,20 +432,132 @@ def largest_lyapunov_map(
     return float(total / used) if used else float("nan")
 
 
-def fourier_map(time: np.ndarray, voltage: np.ndarray, *, fmax_hz: float | None = None) -> dict[str, np.ndarray]:
+def fourier_map(
+    time: np.ndarray,
+    voltage: np.ndarray,
+    *,
+    fmax_hz: float | None = None,
+    keep_dc: bool = False,
+) -> dict[str, np.ndarray]:
     """Return a compact FT map row for a continuation point."""
     t = np.asarray(time, dtype=float)
     v = np.asarray(voltage, dtype=float)
     if t.size < 8 or t.size != v.size:
-        return {"frequency_hz": np.empty(0), "amplitude": np.empty(0)}
+        empty = np.empty(0)
+        return {"frequency_hz": empty, "amplitude": empty,
+                "complex_amplitude": empty.astype(complex)}
     dt = float(np.mean(np.diff(t)))
     window = np.hanning(v.size)
     frequency = np.fft.rfftfreq(v.size, dt)
-    amplitude = 2.0 * np.abs(np.fft.rfft((v - np.mean(v)) * window)) / max(np.sum(window), 1e-30)
+    signal = v if keep_dc else v - np.mean(v)
+    complex_amplitude = 2.0 * np.fft.rfft(signal * window) / max(np.sum(window), 1e-30)
+    amplitude = np.abs(complex_amplitude)
     if fmax_hz is not None:
         keep = frequency <= fmax_hz
-        frequency, amplitude = frequency[keep], amplitude[keep]
-    return {"frequency_hz": frequency, "amplitude": amplitude}
+        frequency = frequency[keep]
+        amplitude = amplitude[keep]
+        complex_amplitude = complex_amplitude[keep]
+    return {"frequency_hz": frequency, "amplitude": amplitude,
+            "complex_amplitude": complex_amplitude}
+
+
+def _exact_tone_coefficients(
+    time: np.ndarray, voltage: np.ndarray, frequencies_hz: np.ndarray,
+) -> np.ndarray:
+    """Return least-squares cosine/sine coefficients for exact tones."""
+    t = np.asarray(time, dtype=float).reshape(-1)
+    v = np.asarray(voltage, dtype=float).reshape(-1)
+    frequencies = np.asarray(frequencies_hz, dtype=float).reshape(-1)
+    if t.size != v.size or t.size < 4:
+        raise ValueError("time and voltage must have at least four equal samples")
+    columns = [np.ones(t.size)]
+    for frequency in frequencies:
+        angle = 2.0 * np.pi * frequency * t
+        columns.extend((np.cos(angle), np.sin(angle)))
+    coefficients, *_ = np.linalg.lstsq(np.column_stack(columns), v, rcond=None)
+    return coefficients
+
+
+def _bandlimited_interpolate(
+    time: np.ndarray, values: np.ndarray, queries: np.ndarray,
+    *, kernel_half_width: int = 12,
+) -> np.ndarray:
+    """Interpolate a uniformly sampled trace with a local sinc kernel."""
+    step = float(np.mean(np.diff(time)))
+    output = np.empty(queries.size, dtype=float)
+    for index, query in enumerate(queries):
+        sample = (query - time[0]) / step
+        center = int(round(sample))
+        left = max(0, center - kernel_half_width)
+        right = min(values.size, center + kernel_half_width + 1)
+        output[index] = float(np.sum(
+            values[left:right] * np.sinc(sample - np.arange(left, right))
+        ))
+    return output
+
+
+def _fractional_delay(values: np.ndarray, shift_samples: float) -> np.ndarray:
+    """Resample a uniform trace at a fractional sample delay by Fourier phase."""
+    frequency = np.fft.fftfreq(values.size)
+    spectrum = np.fft.fft(values)
+    return np.fft.ifft(
+        spectrum * np.exp(2.0j * np.pi * frequency * shift_samples)
+    ).real
+
+
+def symmetry_order_parameters(
+    time: np.ndarray, voltage: np.ndarray, pump_hz: float,
+) -> dict[str, np.ndarray | float]:
+    """Measure DC and pump-harmonic symmetry using exact-tone least squares."""
+    if pump_hz <= 0.0:
+        raise ValueError("pump_hz must be positive")
+    coefficients = _exact_tone_coefficients(
+        time, voltage, pump_hz * np.arange(1.0, 7.0),
+    )
+    dc = abs(float(coefficients[0]))
+    magnitudes = np.array([
+        float(np.hypot(coefficients[2 * index - 1], coefficients[2 * index]))
+        for index in range(1, 7)
+    ])
+    fundamental = max(magnitudes[0], np.finfo(float).eps)
+    return {
+        "q_even": float(magnitudes[1] / fundamental),
+        "q_dc": float(dc / fundamental),
+        "harmonic_magnitudes": magnitudes,
+    }
+
+
+def period_multiple(
+    time: np.ndarray, voltage: np.ndarray, pump_hz: float, max_n: int = 8,
+) -> int:
+    """Return the smallest resolved integer multiple of the pump period."""
+    t = np.asarray(time, dtype=float).reshape(-1)
+    v = np.asarray(voltage, dtype=float).reshape(-1)
+    if pump_hz <= 0.0 or max_n < 1 or t.size != v.size or t.size < 8:
+        raise ValueError("invalid period-test inputs")
+    period = 1.0 / pump_hz
+    samples_per_period = 1.0 / (float(np.mean(np.diff(t))) * pump_hz)
+    if samples_per_period < MIN_SAMPLES_PER_PERIOD:
+        raise ValueError(
+            f"period test requires at least {MIN_SAMPLES_PER_PERIOD:g} samples "
+            f"per pump period; got {samples_per_period:.3g}"
+        )
+    centered_norm = np.linalg.norm(v - np.mean(v))
+    if centered_norm == 0.0:
+        return 1
+    tolerance = 2.0e-3
+    for multiple in range(1, max_n + 1):
+        shift = multiple * period
+        shift_samples = shift / float(np.mean(np.diff(t)))
+        shifted = _fractional_delay(v, shift_samples)
+        margin = int(np.ceil(shift_samples)) + 4
+        if v.size - 2 * margin < 32:
+            continue
+        valid = slice(margin, -margin)
+        residual = np.linalg.norm(shifted[valid] - v[valid]) / centered_norm
+        if residual <= tolerance:
+            return multiple
+    return 0
 
 
 @dataclass

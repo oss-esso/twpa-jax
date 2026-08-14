@@ -2,16 +2,21 @@
 
 from .attractor_classify import (
     CHAOS_NO_CLEAN_BIFURCATION,
+    FOLD_CANDIDATE,
     NEIMARK_SACKER,
     NO_BIFURCATION_FOUND,
+    PITCHFORK_CANDIDATE,
     PERIOD_DOUBLING,
+    PERIOD_DOUBLING_ONSET,
     classify_attractor,
     classify_sweep,
     is_smooth_monotone_rise,
+    period_multiple,
     poincare_crossings,
     poincare_crossing_branches,
     sigma_ratio,
     sigma_vprime_ps,
+    symmetry_order_parameters,
 )
 from .rcsj_single_junction import (
     RCSJParameters,
@@ -35,8 +40,10 @@ __all__ = [
     "stroboscopic_period_count",
     "poincare_crossings", "poincare_crossing_branches", "sigma_vprime_ps",
     "classify_attractor", "classify_sweep", "sigma_ratio",
-    "is_smooth_monotone_rise", "PERIOD_DOUBLING", "NEIMARK_SACKER",
+    "is_smooth_monotone_rise", "PERIOD_DOUBLING", "PERIOD_DOUBLING_ONSET", "NEIMARK_SACKER",
     "CHAOS_NO_CLEAN_BIFURCATION", "NO_BIFURCATION_FOUND",
+    "PITCHFORK_CANDIDATE", "FOLD_CANDIDATE", "period_multiple",
+    "symmetry_order_parameters",
     "LevinsenParameters", "levinsen_rhs", "integrate_levinsen",
     "gamma_from_phasors",
 ]

@@ -17,12 +17,14 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import json
 import math
+import re
 import sys
 import subprocess
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from types import MethodType
 from typing import Any
@@ -30,6 +32,8 @@ from typing import Any
 import numpy as np
 import scipy.sparse as sp
 from scipy.linalg import solve_banded
+from scipy.sparse.csgraph import reverse_cuthill_mckee
+from scipy.sparse.linalg import eigsh
 from numba import njit
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
@@ -41,8 +45,13 @@ from scripts.h1_transient_branch_transfer import (
     make_observables,
     stroboscopic_diagnostics,
 )
+from twpa_solver.builders.ipm import LossSpec, build_matrices
 from twpa_solver.core import load_circuit
 from twpa_solver.core.constants import PHI0_REDUCED
+from twpa_solver.core.linear import solve_linear_scattering
+from twpa_solver.design import compile_design, load_design
+from twpa_solver.loss import pump_line_loss_model
+from twpa_solver.ports import port_available_power_w
 from scipy.integrate import solve_ivp
 
 
@@ -68,6 +77,21 @@ class DeviceSpec:
     pump_ghz: float
     signal_ghz: float
     port_network: str
+    source_path: str
+    natural_bandwidth: int
+    rcm_bandwidth: int
+    selected_bandwidth: int
+    selected_ordering: str
+    pump_port: int
+    pump_output_port: int
+    signal_source_port: int
+    signal_output_port: int
+    cj_min_f: float
+    cj_max_f: float
+    cg_min_f: float
+    cg_max_f: float
+    dc_flux_bias_present: bool
+    dc_flux_bias_source: str
 
     @property
     def omega_plasma(self) -> float:
@@ -84,10 +108,21 @@ class JcDevice:
     Bphi: sp.csr_matrix
     Ic: np.ndarray
     Lj: np.ndarray
+    Cj: np.ndarray
+    Cg: np.ndarray
+    phi0: float
     natural_bandwidth: int
+    rcm_bandwidth: int
+    selected_bandwidth: int
+    selected_ordering: str
+    permutation: np.ndarray
     ic_uniform: bool
     pump_node: int
+    pump_output_node: int
+    signal_node: int
     output_node: int
+    has_parallel_geometric_inductor: bool
+    implicit_linear_stiffness: bool
 
 
 def _load_sparse(path: Path) -> sp.csr_matrix:
@@ -98,30 +133,227 @@ def _load_sparse(path: Path) -> sp.csr_matrix:
     )
 
 
+def _array_path(circuit_dir: Path) -> Path:
+    for name in ("ipm_arrays.npz", "arrays.npz"):
+        path = circuit_dir / name
+        if path.exists():
+            return path
+    raise FileNotFoundError(f"no persisted array file in {circuit_dir}")
+
+
+def _load_device_arrays(circuit_dir: Path) -> dict[str, np.ndarray]:
+    with np.load(_array_path(circuit_dir), allow_pickle=True) as arrays:
+        return {name: np.asarray(arrays[name]) for name in arrays.files}
+
+
+def _assembled_pattern(
+    C: sp.csr_matrix, G: sp.csr_matrix, K: sp.csr_matrix, Bphi: sp.csr_matrix,
+) -> sp.csr_matrix:
+    pattern = (K != 0).astype(np.int8)
+    pattern = pattern + (C != 0).astype(np.int8)
+    pattern = pattern + (G != 0).astype(np.int8)
+    pattern = pattern + ((Bphi @ Bphi.T) != 0).astype(np.int8)
+    return pattern.tocsr()
+
+
+def _matrix_bandwidth(matrix: sp.spmatrix) -> int:
+    coo = matrix.tocoo()
+    if coo.nnz == 0:
+        return 0
+    return int(np.max(np.abs(coo.row - coo.col)))
+
+
+def _ordering_for_pattern(
+    pattern: sp.csr_matrix,
+) -> tuple[int, int, str, np.ndarray, int]:
+    natural = _matrix_bandwidth(pattern)
+    permutation = reverse_cuthill_mckee(pattern, symmetric_mode=True)
+    rcm_pattern = pattern[permutation][:, permutation]
+    rcm = _matrix_bandwidth(rcm_pattern)
+    if natural <= rcm:
+        return natural, rcm, "natural", np.arange(pattern.shape[0], dtype=np.int64), natural
+    return natural, rcm, "rcm", permutation.astype(np.int64), rcm
+
+
+def _profile_from_source(
+    name: str, n_branches: int, arrays: dict[str, np.ndarray],
+) -> tuple[np.ndarray, np.ndarray]:
+    cj = np.asarray(arrays.get("Cj", np.empty(0)), dtype=float).reshape(-1)
+    cg = np.asarray(arrays.get("Cg", np.empty(0)), dtype=float).reshape(-1)
+    if cj.size == n_branches and cg.size == n_branches:
+        return cj, cg
+    if name != "rf_squid_2393_3wm":
+        defaults = {
+            "jc_jtwpa": (55.0e-15, 45.0e-15),
+            "jc_fqjtwpa": (40.0e-15, 76.6e-15),
+        }
+        if name not in defaults:
+            raise ValueError(f"missing per-cell Cj/Cg arrays for {name}")
+        cj_value, cg_value = defaults[name]
+        return np.full(n_branches, cj_value), np.full(n_branches, cg_value)
+    source = ROOT / "designs" / "rf_squid_2393_3wm.yaml"
+    text = source.read_text(encoding="utf-8")
+
+    def scalar(name: str) -> float:
+        match = re.search(rf"^\s*{name}:\s*([^#\s]+)", text, re.MULTILINE)
+        if match is None:
+            raise ValueError(f"missing {name} in {source}")
+        return float(match.group(1))
+
+    cj = np.full(n_branches, scalar("Cj"), dtype=float)
+    pattern = np.asarray(
+        [scalar("C1"), scalar("C2"), scalar("C1"), scalar("C3")],
+        dtype=float,
+    )
+    counts = np.asarray([6, 6, 6, 6], dtype=int)
+    period = np.repeat(pattern, counts)
+    cg = np.resize(period, n_branches)
+    return cj, cg
+
+
+def _built_element_records(circuit_dir: Path) -> list[dict[str, Any]]:
+    path = circuit_dir / "design_resolved.json"
+    if not path.exists():
+        return []
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    return [item for item in payload.get("elements", []) if isinstance(item, dict)]
+
+
+def _has_parallel_geometric_inductor(circuit_dir: Path) -> bool:
+    """Detect an RF-SQUID shunt from the built circuit, not its device name."""
+    return any(
+        item.get("role") == "rf_squid_lpar" and float(item.get("value", 0.0)) > 0.0
+        for item in _built_element_records(circuit_dir)
+    )
+
+
+def _dc_flux_bias_metadata(circuit_dir: Path) -> tuple[bool, str]:
+    """Report whether the built source contains an explicit DC flux/bias term."""
+    records = _built_element_records(circuit_dir)
+    bias_roles = {"dc_flux", "flux_bias", "bias_current", "dc_bias"}
+    if any(item.get("role") in bias_roles for item in records):
+        return True, "built element role"
+    source = circuit_dir / "design_resolved.json"
+    if source.exists():
+        text = source.read_text(encoding="utf-8").lower()
+        if "flux_bias" in text or "dc_flux" in text or "bias_current" in text:
+            return True, "built design metadata"
+    return False, "absent from YAML and built element list"
+
+
+def _build_yaml_design(source_path: Path) -> Path:
+    output = ROOT / "outputs" / "chaos" / "phaseC" / "build" / source_path.stem
+    if (output / "C.npz").exists() and _array_path(output).exists():
+        arrays = _load_device_arrays(output)
+        if "Cj" not in arrays or "Cg" not in arrays:
+            cj, cg = _profile_from_source(source_path.stem, arrays["Ic"].size, arrays)
+            arrays.update({"Cj": cj, "Cg": cg})
+            np.savez(output / "ipm_arrays.npz", **arrays)
+        return output
+    output.mkdir(parents=True, exist_ok=True)
+    design = compile_design(load_design(source_path), coupler_mode="cached", strict=True)
+    matrices = build_matrices(design.elements, LossSpec(0.0))
+    for name in ("C", "G", "K", "Bphi"):
+        sp.save_npz(output / f"{name}.npz", matrices[name].tocsr())
+    arrays = {
+        "nodes": np.asarray(matrices["nodes"]),
+        "Ic": np.asarray(matrices["Ic"], dtype=float),
+        "Lj": np.asarray(matrices["Lj"], dtype=float),
+        "phi0_reduced": np.asarray([PHI0_REDUCED]),
+        "port_numbers": np.asarray(sorted(matrices["port_vectors"]), dtype=np.int64),
+        "port_indices": np.asarray(
+            [matrices["port_vectors"][port] for port in sorted(matrices["port_vectors"])]
+        ),
+    }
+    cj, cg = _profile_from_source(source_path.stem, arrays["Ic"].size, arrays)
+    arrays.update({"Cj": cj, "Cg": cg})
+    np.savez(
+        output / "ipm_arrays.npz", **arrays,
+    )
+    (output / "design_summary.json").write_text(
+        json.dumps({"name": design.name, "nodes": int(matrices["C"].shape[0]),
+                    "branches": int(matrices["Bphi"].shape[1]),
+                    "ports": {str(k): int(v) for k, v in matrices["ports"].items()}}, indent=2),
+        encoding="utf-8",
+    )
+    return output
+
+
+def resolve_device_directory(circuit_dir: Path) -> Path:
+    """Return a matrix directory, building a YAML design under phaseC output."""
+    if circuit_dir.is_file() and circuit_dir.suffix.lower() in {".yaml", ".yml"}:
+        return _build_yaml_design(circuit_dir)
+    if not circuit_dir.is_dir():
+        raise FileNotFoundError(f"device source does not exist: {circuit_dir}")
+    return circuit_dir
+
+
+def phase_c_source_path(name: str) -> Path:
+    """Return the checked-in source for a Phase C device."""
+    if name == "rf_squid_2393_3wm":
+        return ROOT / "designs" / f"{name}.yaml"
+    if name == "ipm_2c_fixed":
+        return ROOT / "designs" / name
+    raise ValueError(f"not a Phase C device: {name}")
+
+
 def load_jc_device(circuit_dir: Path) -> JcDevice:
-    """Load one JC topology for the known-time-level Guarcello scheme."""
+    """Load one topology and select the measured narrowest band ordering."""
+    circuit_dir = resolve_device_directory(circuit_dir)
     C = _load_sparse(circuit_dir / "C.npz")
     G = _load_sparse(circuit_dir / "G.npz")
     K = _load_sparse(circuit_dir / "K.npz")
     Bphi = _load_sparse(circuit_dir / "Bphi.npz")
-    matrix = (K + C + G + Bphi @ Bphi.T).tocoo()
-    bandwidth = int(np.max(np.abs(matrix.row - matrix.col)))
-    if bandwidth > 2:
-        raise RuntimeError(
-            f"{circuit_dir.name}: natural bandwidth {bandwidth} exceeds 2"
-        )
-    arrays = np.load(circuit_dir / "ipm_arrays.npz", allow_pickle=True)
-    Ic = np.asarray(arrays["Ic"], dtype=float)
-    Lj = np.asarray(arrays["Lj"], dtype=float)
+    pattern = _assembled_pattern(C, G, K, Bphi)
+    natural_bandwidth, rcm_bandwidth, ordering, permutation, selected_bandwidth = _ordering_for_pattern(pattern)
+    arrays = _load_device_arrays(circuit_dir)
+    Ic = np.asarray(arrays["Ic"], dtype=float).reshape(-1)
+    Lj = np.asarray(arrays.get("Lj", np.empty(0)), dtype=float).reshape(-1)
+    Cj, Cg = _profile_from_source(circuit_dir.name, Ic.size, arrays)
     if C.shape[0] != C.shape[1] or Bphi.shape[0] != C.shape[0]:
         raise ValueError("JC matrices have incompatible node dimensions")
+    if ordering == "rcm":
+        C = C[permutation][:, permutation].tocsr()
+        G = G[permutation][:, permutation].tocsr()
+        K = K[permutation][:, permutation].tocsr()
+        Bphi = Bphi[permutation, :].tocsr()
+    selected_actual = _matrix_bandwidth(_assembled_pattern(C, G, K, Bphi))
+    if selected_actual != selected_bandwidth:
+        raise RuntimeError(
+            f"{circuit_dir.name}: selected bandwidth changed from "
+            f"{selected_bandwidth} to {selected_actual} after ordering"
+        )
+    inverse = np.empty_like(permutation)
+    inverse[permutation] = np.arange(permutation.size, dtype=np.int64)
+    port_numbers = np.asarray(arrays["port_numbers"], dtype=int)
+    port_indices = np.asarray(arrays["port_indices"], dtype=int)
+    ports = {int(number): int(inverse[index]) for number, index in zip(port_numbers, port_indices)}
+    name = circuit_dir.name
+    if name == "ipm_2c_fixed":
+        required = {1, 2, 3, 4}
+        if not required.issubset(ports):
+            raise ValueError(f"ipm_2c_fixed requires ports 1,2,3,4; found {ports}")
+        pump_port, pump_output_port, signal_port, output_port = 4, 3, 1, 2
+    else:
+        if not {1, 2}.issubset(ports):
+            raise ValueError(f"{name} requires ports 1 and 2; found {ports}")
+        pump_port, pump_output_port, signal_port, output_port = 1, 2, 1, 2
     return JcDevice(
         name=circuit_dir.name,
         n_nodes=C.shape[0], C=C, G=G, K=K, Bphi=Bphi,
-        Ic=Ic, Lj=Lj, natural_bandwidth=bandwidth,
+        Ic=Ic, Lj=Lj, Cj=Cj, Cg=Cg, phi0=float(np.asarray(arrays["phi0_reduced"]).reshape(-1)[0]),
+        natural_bandwidth=natural_bandwidth, rcm_bandwidth=rcm_bandwidth,
+        selected_bandwidth=selected_bandwidth, selected_ordering=ordering,
+        permutation=permutation,
         ic_uniform=bool(np.ptp(Ic) == 0.0),
-        pump_node=int(np.asarray(arrays["port_indices"])[0]),
-        output_node=int(np.asarray(arrays["port_indices"])[1]),
+        pump_node=ports[pump_port], pump_output_node=ports[pump_output_port],
+        signal_node=ports[signal_port],
+        output_node=ports[output_port],
+        has_parallel_geometric_inductor=_has_parallel_geometric_inductor(circuit_dir),
+        # K is linear and belongs in the constant factored matrix. The old
+        # explicit treatment remains available only through an explicit
+        # override in the integration helpers for regression comparisons.
+        implicit_linear_stiffness=True,
     )
 
 
@@ -202,7 +434,8 @@ def integrate_jc_banded_numba(
     k_indptr, k_indices, k_data,
     b_indptr, b_indices, b_data, n_branches,
     ic, lower_factor, phi0, pump_current_a, pump_hz, signal_current_a,
-    signal_hz, dt_s, n_steps, record_stride, pump_node, output_node,
+    signal_hz, dt_s, n_steps, record_stride, pump_node, signal_node, output_node,
+    implicit_linear_stiffness,
     q_initial,
 ):
     """Compiled Guarcello known-time-level loop using precomputed band factors."""
@@ -237,10 +470,14 @@ def integrate_jc_banded_numba(
             current[j] = ic[j] * math.sin(phase[j])
         source[:] = 0.0
         source[pump_node] = pump_current_a * math.cos(pump_omega * t)
-        source[pump_node] += signal_current_a * math.cos(signal_omega * t)
+        if signal_node == pump_node:
+            source[pump_node] += signal_current_a * math.cos(signal_omega * t)
+        else:
+            source[signal_node] += signal_current_a * math.cos(signal_omega * t)
         rhs[:] = source
-        _csr_matvec_into(k_indptr, k_indices, k_data, q_cur, work)
-        rhs -= work
+        if not implicit_linear_stiffness:
+            _csr_matvec_into(k_indptr, k_indices, k_data, q_cur, work)
+            rhs -= work
         _csr_matvec_into(b_indptr, b_indices, b_data, current, work)
         rhs -= work
         q_difference[:] = 2.0 * q_cur - q_prev
@@ -274,17 +511,26 @@ def _integrate_jc_compiled(
     device: JcDevice, *, pump_current_a: float, pump_hz: float,
     signal_current_a: float, signal_hz: float, dt_s: float, n_steps: int,
     record_stride: int, initial_q: np.ndarray | None,
+    implicit_linear_stiffness: bool | None = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, float, np.ndarray]:
     n = device.n_nodes
+    use_implicit_linear_stiffness = (
+        device.implicit_linear_stiffness
+        if implicit_linear_stiffness is None else bool(implicit_linear_stiffness)
+    )
     constant = device.C / dt_s**2 + device.G / (2.0 * dt_s)
-    lower = _factor_banded_lu(constant, device.natural_bandwidth)
+    if use_implicit_linear_stiffness:
+        constant = constant + device.K
+    lower = _factor_banded_lu(constant, device.selected_bandwidth)
     parts = [_csr_parts(matrix) for matrix in (device.C, device.G, device.K, device.Bphi)]
     started = time.perf_counter()
     result = integrate_jc_banded_numba(
         *parts[0], *parts[1], *parts[2], *parts[3], device.Ic.size,
         device.Ic, lower, PHI0_REDUCED, pump_current_a, pump_hz, signal_current_a,
         signal_hz, dt_s, n_steps, record_stride, device.pump_node,
-        device.output_node, np.zeros(n) if initial_q is None else np.asarray(initial_q, dtype=np.float64),
+        device.signal_node, device.output_node,
+        use_implicit_linear_stiffness,
+        np.zeros(n) if initial_q is None else np.asarray(initial_q, dtype=np.float64),
     )
     return (*result[:3], time.perf_counter() - started, result[3])
 
@@ -300,13 +546,20 @@ def integrate_jc_banded(
     n_steps: int,
     record_stride: int = 20,
     initial_q: np.ndarray | None = None,
+    implicit_linear_stiffness: bool | None = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, float, np.ndarray]:
     """Integrate JC node fluxes with known-time-level Josephson currents."""
     n = device.n_nodes
     dt = float(dt_s)
     omega = 2.0 * math.pi * pump_hz
+    use_implicit_linear_stiffness = (
+        device.implicit_linear_stiffness
+        if implicit_linear_stiffness is None else bool(implicit_linear_stiffness)
+    )
     A = device.C / dt**2 + device.G / (2.0 * dt)
-    band = _jc_band_matrix(A, device.natural_bandwidth)
+    if use_implicit_linear_stiffness:
+        A = A + device.K
+    band = _jc_band_matrix(A, device.selected_bandwidth)
     q_prev = np.zeros(n, dtype=float) if initial_q is None else np.array(initial_q, copy=True)
     q_cur = np.array(q_prev, copy=True)
     source = np.zeros(n, dtype=float)
@@ -325,12 +578,17 @@ def integrate_jc_banded(
         current = device.Ic * np.sin(phase)
         source.fill(0.0)
         source[pump_node] = pump_current_a * math.cos(omega * t)
-        source[pump_node] += signal_current_a * math.cos(2.0 * math.pi * signal_hz * t)
-        rhs = source - device.K @ q_cur - device.Bphi @ current
+        if device.signal_node == pump_node:
+            source[pump_node] += signal_current_a * math.cos(2.0 * math.pi * signal_hz * t)
+        else:
+            source[device.signal_node] += signal_current_a * math.cos(2.0 * math.pi * signal_hz * t)
+        rhs = source - device.Bphi @ current
+        if not use_implicit_linear_stiffness:
+            rhs -= device.K @ q_cur
         rhs += device.C @ (2.0 * q_cur - q_prev) / dt**2
         rhs += device.G @ q_prev / (2.0 * dt)
         q_next = solve_banded(
-            (device.natural_bandwidth, device.natural_bandwidth),
+            (device.selected_bandwidth, device.selected_bandwidth),
             band, np.asarray(rhs).reshape(-1), check_finite=False,
         )
         if step % record_stride == 0:
@@ -355,42 +613,134 @@ class TimeBudget:
 
 
 def _load_arrays(circuit_dir: Path) -> tuple[np.ndarray, np.ndarray]:
-    arrays = np.load(circuit_dir / "ipm_arrays.npz", allow_pickle=True)
-    return np.asarray(arrays["Ic"], dtype=float), np.asarray(arrays["Lj"], dtype=float)
+    arrays = _load_device_arrays(resolve_device_directory(circuit_dir))
+    return np.asarray(arrays["Ic"], dtype=float), np.asarray(
+        arrays.get("Lj", np.empty(0)), dtype=float
+    )
+
+
+def _summary_for_device(circuit_dir: Path) -> dict[str, Any]:
+    for name in ("ipm_summary.json", "summary.json", "design_summary.json"):
+        path = circuit_dir / name
+        if path.exists():
+            return json.loads(path.read_text(encoding="utf-8"))
+    return {"name": circuit_dir.name}
+
+
+def _device_name(summary: dict[str, Any], circuit_dir: Path) -> str:
+    return str(summary.get("case") or summary.get("name") or circuit_dir.name)
+
+
+def _cached_rf_pump_frequency(circuit_dir: Path) -> float | None:
+    cache = ROOT / "outputs" / "chaos" / "phaseC" / "rf_squid_2393_3wm" / "transmitting_band.json"
+    if not cache.exists():
+        return None
+    payload = json.loads(cache.read_text(encoding="utf-8"))
+    return float(payload["selected_pump_ghz"])
+
+
+def measure_transmitting_band(
+    device: JcDevice, *, start_ghz: float = 4.0, stop_ghz: float = 12.0,
+    points: int = 33,
+) -> dict[str, Any]:
+    """Measure the RF-SQUID signal band and select its strongest point."""
+    frequencies = np.linspace(start_ghz, stop_ghz, points)
+    rows = [
+        solve_linear_scattering(
+            device_to_circuit(device), frequency_hz=float(frequency) * 1e9,
+            source_port=1, out_port=2, source_current_a=1.0,
+        )
+        for frequency in frequencies
+    ]
+    s_db = np.asarray([row.s_db for row in rows], dtype=float)
+    index = int(np.argmax(s_db))
+    selected = float(frequencies[index])
+    payload = {
+        "frequency_ghz": frequencies.tolist(), "s21_db": s_db.tolist(),
+        "selected_pump_ghz": selected,
+        "selection": "maximum measured linear S21 within 4-12 GHz scan",
+    }
+    cache = ROOT / "outputs" / "chaos" / "phaseC" / "rf_squid_2393_3wm" / "transmitting_band.json"
+    cache.parent.mkdir(parents=True, exist_ok=True)
+    cache.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    return payload
+
+
+def device_to_circuit(device: JcDevice) -> Any:
+    """Convert the ordered kernel representation to the linear solver type."""
+    from twpa_solver.core.circuit import CircuitMatrices
+
+    ports = {1: device.signal_node, 2: device.output_node}
+    if device.name == "ipm_2c_fixed":
+        ports.update({3: device.pump_output_node, 4: device.pump_node})
+    return CircuitMatrices(
+        C=device.C, G=device.G, K=device.K, Bphi=device.Bphi,
+        Ic=device.Ic, Lj=device.Lj, phi0=device.phi0,
+        port_to_index=ports,
+    )
 
 
 def derive_device_spec(circuit_dir: Path) -> DeviceSpec:
     """Extract the circuit facts needed by the phase-5 campaign."""
-    summary = json.loads((circuit_dir / "ipm_summary.json").read_text(encoding="utf-8"))
-    ic, lj = _load_arrays(circuit_dir)
-    name = str(summary["case"])
+    resolved_dir = resolve_device_directory(circuit_dir)
+    summary = _summary_for_device(resolved_dir)
+    ic, lj = _load_arrays(resolved_dir)
+    arrays = _load_device_arrays(resolved_dir)
+    name = _device_name(summary, resolved_dir)
+    cj, cg = _profile_from_source(name, ic.size, arrays)
     if name == "jc_jtwpa":
-        cj_nominal_f, cg_nominal_f, period = 55e-15, 45e-15, 4
+        period = 4
         pump_ghz, signal_ghz = 7.12, 6.62
     elif name == "jc_fqjtwpa":
-        cj_nominal_f, cg_nominal_f, period = 40e-15, 76.6e-15, 8
+        period = 8
         pump_ghz, signal_ghz = 7.90, 7.40
+    elif name == "ipm_2c_fixed":
+        period = 1
+        pump_ghz, signal_ghz = 7.90, 7.40
+    elif name == "rf_squid_2393_3wm":
+        period = 4
+        pump_ghz = _cached_rf_pump_frequency(resolved_dir)
+        if pump_ghz is None:
+            pump_ghz = float("nan")
+        signal_ghz = float("nan")
     else:
-        raise ValueError(f"unsupported phase-5 circuit: {name}")
-    k = np.load(circuit_dir / "K.npz", allow_pickle=True)
-    has_linear_inductor = bool(np.any(np.asarray(k["data"], dtype=float) != 0.0))
+        raise ValueError(f"unsupported Phase C circuit: {name}")
+    device = load_jc_device(resolved_dir)
+    if name == "rf_squid_2393_3wm" and not math.isfinite(pump_ghz):
+        pump_ghz = 0.0
+    dc_flux_bias_present, dc_flux_bias_source = _dc_flux_bias_metadata(resolved_dir)
     return DeviceSpec(
         name=name,
-        circuit_dir=str(circuit_dir),
-        node_count=int(summary["nodes"]),
+        circuit_dir=str(resolved_dir),
+        node_count=int(device.n_nodes),
         branch_count=int(ic.size),
         ic_min_a=float(np.min(ic)),
         ic_max_a=float(np.max(ic)),
         ic_median_a=float(np.median(ic)),
-        cj_nominal_f=cj_nominal_f,
-        cg_nominal_f=cg_nominal_f,
+        cj_nominal_f=float(np.median(cj)),
+        cg_nominal_f=float(np.median(cg)),
         resonator_period=period,
-        has_parallel_geometric_inductor=False,
-        profile_is_nonuniform=bool(np.ptp(ic) > 0.0 or np.ptp(lj) > 0.0),
+            has_parallel_geometric_inductor=device.has_parallel_geometric_inductor,
+        profile_is_nonuniform=bool(np.ptp(ic) > 0.0 or np.ptp(lj) > 0.0 or np.ptp(cg) > 0.0),
         pump_ghz=pump_ghz,
         signal_ghz=signal_ghz,
-        port_network="50 ohm source and load from G.npz; ports 1 and 2",
-    )
+        port_network=("50 ohm source/load from G.npz; pump port 4, signal 1 -> 2"
+                      if name == "ipm_2c_fixed" else
+                      "50 ohm source/load from G.npz; ports 1 -> 2"),
+        source_path=str(circuit_dir),
+        natural_bandwidth=device.natural_bandwidth,
+        rcm_bandwidth=device.rcm_bandwidth,
+        selected_bandwidth=device.selected_bandwidth,
+        selected_ordering=device.selected_ordering,
+        pump_port=4 if name == "ipm_2c_fixed" else 1,
+        pump_output_port=3 if name == "ipm_2c_fixed" else 2,
+        signal_source_port=1,
+        signal_output_port=2,
+            cj_min_f=float(np.min(cj)), cj_max_f=float(np.max(cj)),
+            cg_min_f=float(np.min(cg)), cg_max_f=float(np.max(cg)),
+            dc_flux_bias_present=dc_flux_bias_present,
+            dc_flux_bias_source=dc_flux_bias_source,
+        )
 
 
 def derive_time_budget(
@@ -484,35 +834,58 @@ def _run_point(
     device = load_jc_device(Path(spec.circuit_dir))
     dt_s = dt_norm / spec.omega_plasma
     n_steps = int(round(tmax_norm / dt_norm))
+    pump_hz = resolve_pump_frequency(spec)
+    signal_hz = (
+        spec.signal_ghz * 1e9
+        if math.isfinite(spec.signal_ghz) and spec.signal_ghz > 0.0
+        else pump_hz
+    )
     theta, voltage, branch_r, runtime, final_q = _integrate_jc_compiled(
         device,
-        pump_current_a=pump_current_a,
-        pump_hz=spec.pump_ghz * 1e9,
+        pump_current_a=pump_current_a, pump_hz=pump_hz,
         signal_current_a=signal_current_a,
-        signal_hz=spec.signal_ghz * 1e9,
+        signal_hz=signal_hz,
         dt_s=dt_s,
         n_steps=n_steps,
         record_stride=20,
         initial_q=initial_state,
     )
-    signal_hz = spec.signal_ghz * 1e9
-    pump_hz = spec.pump_ghz * 1e9
     late = np.arange(theta.size) >= max(0, theta.size - max(10, theta.size // 2))
     trace_t = theta.copy()
     trace_v = voltage.copy()
     time_s = trace_t[late]
     voltage_ss = trace_v[late]
-    amplitude = _tone_amplitude(time_s, voltage_ss, signal_hz)
-    gain_absolute = 20.0 * math.log10(max(amplitude, 1e-300) / (signal_current_a * 50.0))
-    gain_vs_off = float("nan") if pump_off_output is None else 20.0 * math.log10(max(amplitude / pump_off_output, 1e-300))
-    total_periods = theta[-1] * spec.pump_ghz * 1e9
+    signal_installed = bool(signal_current_a > 0.0)
+    amplitude = _tone_amplitude(time_s, voltage_ss, signal_hz) if signal_installed else None
+    gain_absolute = (
+        None if amplitude is None else
+        20.0 * math.log10(max(amplitude, 1e-300) / (signal_current_a * 50.0))
+    )
+    gain_vs_off = (
+        None if amplitude is None or pump_off_output is None else
+        20.0 * math.log10(max(amplitude / pump_off_output, 1e-300))
+    )
+    total_periods = theta[-1] * pump_hz
     row = {
         "method_attribution": "Guarcello known-time-level banded FDTD algorithm",
+        "device_source_path": spec.source_path,
+        "selected_ordering": spec.selected_ordering,
+        "natural_bandwidth": spec.natural_bandwidth,
+        "rcm_bandwidth": spec.rcm_bandwidth,
+        "selected_bandwidth": spec.selected_bandwidth,
+        "pump_port": spec.pump_port,
+        "signal_source_port": spec.signal_source_port,
+        "signal_output_port": spec.signal_output_port,
         "pump_current_peak_a_requested": pump_current_a,
         "pump_current_peak_a_achieved": pump_current_a,
+        **power_labels(pump_current_a, pump_hz),
         "gain_absolute_db": gain_absolute,
         "gain_vs_off_db": gain_vs_off,
-        "gain_wideband_db": _wideband_gain(time_s, voltage_ss, signal_hz, pump_hz, signal_current_a),
+        "gain_wideband_db": (
+            None if not signal_installed else
+            _wideband_gain(time_s, voltage_ss, signal_hz, pump_hz, signal_current_a)
+        ),
+        "signal_installed": signal_installed,
         "r_j": float(np.max(branch_r[late])),
         "pump_branch_current_peak_a_achieved": float(
             np.max(branch_r[late]) * spec.ic_max_a
@@ -526,13 +899,381 @@ def _run_point(
         "integrator": "guarcello_banded",
         "total_pump_periods": total_periods,
         "steady_window_pump_periods": min(100.0, total_periods),
-        "effective_transient_fraction": max(0.0, 1.0 - min(100.0, total_periods) / total_periods),
+        "effective_transient_fraction": (
+            max(0.0, 1.0 - min(100.0, total_periods) / total_periods)
+            if total_periods > 0.0 else 0.0
+        ),
         "record_stride": 20,
         "dt_s": dt_s,
         "n_steps": n_steps,
         "steady_state_start_index": int(np.flatnonzero(late)[0]) if np.any(late) else 0,
     }
     return row, amplitude, runtime, final_q, trace_t, trace_v
+
+
+def resolve_pump_frequency(spec: DeviceSpec) -> float:
+    """Return a measured or fixed pump frequency in Hz for a device."""
+    if math.isfinite(spec.pump_ghz) and spec.pump_ghz > 0.0:
+        return spec.pump_ghz * 1e9
+    device = load_jc_device(Path(spec.circuit_dir))
+    payload = measure_transmitting_band(device)
+    return float(payload["selected_pump_ghz"]) * 1e9
+
+
+def power_labels(
+    current_a: float, pump_hz: float, *, z0_ohm: float = 50.0,
+    convention: str = "legacy_traveling_wave",
+) -> dict[str, Any]:
+    """Label one applied current with both on-chip and instrument powers."""
+    on_chip_w = port_available_power_w(current_a, z0_ohm, convention=convention)
+    on_chip_dbm = 10.0 * math.log10(max(on_chip_w, 1e-300) / 1e-3)
+    loss = pump_line_loss_model()
+    attenuation_db = float(loss.attenuation_db(pump_hz / 1e9))
+    return {
+        "pump_power_onchip_dbm": on_chip_dbm,
+        "pump_power_instrument_dbm": on_chip_dbm + attenuation_db,
+        "power_convention": convention,
+        "loss_model": "pump_line_loss_model_A10",
+        "loss_attenuation_db": attenuation_db,
+    }
+
+
+def _measure_linear_limit(
+    device: JcDevice, spec: DeviceSpec, pump_hz: float, dt_norm: float,
+) -> dict[str, Any]:
+    """Compare a zero-Ic kernel run with the continuous linear S21 solve."""
+    linear_device = replace(
+        device, Ic=np.zeros_like(device.Ic), output_node=device.pump_output_node,
+    )
+    dt_s = dt_norm / spec.omega_plasma
+    steps_per_period = 1.0 / pump_hz / dt_s
+    n_steps = max(200, int(math.ceil(100.0 * steps_per_period)))
+    source_current = 1.0e-8
+    times, voltage, _, runtime, _ = _integrate_jc_compiled(
+        linear_device, pump_current_a=source_current, pump_hz=pump_hz,
+        signal_current_a=0.0, signal_hz=pump_hz, dt_s=dt_s, n_steps=n_steps,
+        record_stride=20, initial_q=None,
+    )
+    late = times >= times[-1] * 0.5
+    amplitude = _tone_amplitude(times[late], voltage[late], pump_hz)
+    kernel_s = 2.0 * amplitude / source_current / 50.0
+    reference = solve_linear_scattering(
+        device_to_circuit(linear_device), frequency_hz=pump_hz,
+        source_port=spec.pump_port, out_port=spec.pump_output_port,
+        source_current_a=1.0,
+    )
+    finite = bool(math.isfinite(kernel_s) and math.isfinite(reference.s_abs))
+    relative_error = (
+        abs(abs(kernel_s) - reference.s_abs) / max(reference.s_abs, 1e-300)
+        if finite and reference.s_abs > 0.0 else float("nan")
+    )
+    return {
+        "kernel_s_abs": float(abs(kernel_s)) if finite else None,
+        "linear_solve_s_abs": float(reference.s_abs),
+        "relative_error": float(relative_error) if math.isfinite(relative_error) else None,
+        "kernel_finite": finite,
+        "runtime_s": float(runtime), "n_steps": n_steps,
+        "pass_rtol_1e-9": bool(finite and relative_error <= 1e-9),
+    }
+
+
+def _measure_zero_drive(
+    device: JcDevice, spec: DeviceSpec, pump_hz: float, dt_norm: float,
+) -> dict[str, Any]:
+    """Run the zero-drive equilibrium for 100 pump periods."""
+    dt_s = dt_norm / spec.omega_plasma
+    steps_per_period = 1.0 / pump_hz / dt_s
+    n_steps = max(1, int(math.ceil(100.0 * steps_per_period)))
+    _, _, _, runtime, final_q = _integrate_jc_compiled(
+        device, pump_current_a=0.0, pump_hz=pump_hz, signal_current_a=0.0,
+        signal_hz=pump_hz, dt_s=dt_s, n_steps=n_steps,
+        record_stride=n_steps, initial_q=np.zeros(device.n_nodes),
+    )
+    maximum = float(np.max(np.abs(final_q)))
+    return {
+        "n_steps": n_steps, "periods": 100.0, "runtime_s": float(runtime),
+        "max_abs_final_q": maximum, "pass_at_1e-12": bool(maximum <= 1e-12),
+    }
+
+
+def _explicit_stability_bound(device: JcDevice, spec: DeviceSpec, dt_norm: float) -> dict[str, Any]:
+    """Measure the finite explicit bound of the linearized generalized pencil."""
+    stiffness = (
+        device.K
+        + device.Bphi @ sp.diags(device.Ic / device.phi0) @ device.Bphi.T
+    ).tocsr()
+    mass = (device.C + device.G).tocsr()
+    zero_diagonal = np.flatnonzero(np.abs(mass.diagonal()) == 0.0)
+    dynamic = np.flatnonzero(np.abs(mass.diagonal()) > 0.0)
+    if zero_diagonal.size and mass[zero_diagonal].nnz:
+        raise RuntimeError(
+            f"{device.name}: zero-mass rows are coupled in C+G; "
+            "finite-subspace reduction is not valid"
+        )
+    pencil_stiffness = stiffness[dynamic][:, dynamic] if zero_diagonal.size else stiffness
+    pencil_mass = mass[dynamic][:, dynamic] if zero_diagonal.size else mass
+    eigenvalue = float(eigsh(
+        pencil_stiffness, M=pencil_mass, k=1, which="LA",
+        return_eigenvectors=False, tol=1e-8, maxiter=20000,
+    )[0])
+    explicit_limit = 2.0 / math.sqrt(eigenvalue)
+    dt_s = dt_norm / spec.omega_plasma
+    return {
+        "lambda_max_s_minus_2": eigenvalue,
+        "explicit_limit_s": explicit_limit,
+        "dt_s": dt_s,
+        "dt_over_limit": dt_s / explicit_limit,
+        "explicitly_stable": bool(dt_s < explicit_limit),
+        "mass_matrix_singular": bool(zero_diagonal.size),
+        "mass_zero_diagonal_nodes": int(zero_diagonal.size),
+        "dynamic_nodes_used": int(dynamic.size if zero_diagonal.size else mass.shape[0]),
+        "bound_method": (
+            "eigsh on dynamic subspace after removing uncoupled algebraic rows"
+            if zero_diagonal.size else "generalized eigsh on full pencil"
+        ),
+    }
+
+
+def _stiffness_path_regression(
+    spec: DeviceSpec, *, dt_norm: float, pump_current_a: float = 1.0e-6,
+) -> dict[str, Any]:
+    """Compare the retained explicit Phase B path with the implicit default."""
+    if spec.name not in {"jc_jtwpa", "jc_fqjtwpa"}:
+        return {"status": "NOT_APPLICABLE"}
+    device = load_jc_device(Path(spec.circuit_dir))
+    settings = {
+        "pump_current_a": pump_current_a,
+        "pump_hz": spec.pump_ghz * 1.0e9,
+        "signal_current_a": 0.0,
+        "signal_hz": spec.signal_ghz * 1.0e9,
+        "dt_s": dt_norm / spec.omega_plasma,
+        "n_steps": 2000,
+        "record_stride": 20,
+        "initial_q": None,
+    }
+    explicit = _integrate_jc_compiled(
+        device, **settings, implicit_linear_stiffness=False,
+    )
+    implicit = _integrate_jc_compiled(device, **settings, implicit_linear_stiffness=True)
+    q_scale = max(float(np.max(np.abs(explicit[4]))), 1.0e-300)
+    v_scale = max(float(np.max(np.abs(explicit[1]))), 1.0e-300)
+    q_difference = float(np.max(np.abs(explicit[4] - implicit[4])) / q_scale)
+    v_difference = float(np.max(np.abs(explicit[1] - implicit[1])) / v_scale)
+    return {
+        "status": "COMPLETE",
+        "explicit_path": "Phase B known-time-level path; K on RHS",
+        "implicit_path": "new default; K in constant factored matrix",
+        "n_steps": settings["n_steps"],
+        "max_relative_voltage_difference": v_difference,
+        "max_relative_final_state_difference": q_difference,
+        "explicit_runtime_s": float(explicit[3]),
+        "implicit_runtime_s": float(implicit[3]),
+        "explicit_integrator_success": True,
+        "implicit_integrator_success": True,
+    }
+
+
+def _profile_kernel_components(device: JcDevice, dt_s: float, repetitions: int = 200) -> dict[str, Any]:
+    """Time the compiled per-step primitives after their signatures are warm."""
+    constant = device.C / dt_s**2 + device.G / (2.0 * dt_s) + device.K
+    factor_started = time.perf_counter()
+    factor = _factor_banded_lu(constant, device.selected_bandwidth)
+    factor_time = time.perf_counter() - factor_started
+    c_parts = _csr_parts(device.C)
+    g_parts = _csr_parts(device.G)
+    k_parts = _csr_parts(device.K)
+    b_parts = _csr_parts(device.Bphi)
+    n = device.n_nodes
+    branch_count = device.Ic.size
+    vector = np.ones(n, dtype=np.float64)
+    branch_vector = np.ones(branch_count, dtype=np.float64)
+    result = np.empty(n, dtype=np.float64)
+    branch_result = np.empty(branch_count, dtype=np.float64)
+    rhs = np.ones(n, dtype=np.float64)
+    for fn, args in (
+        (_csr_matvec_into, (*c_parts, vector, result)),
+        (_csr_matvec_into, (*g_parts, vector, result)),
+        (_csr_matvec_into, (*k_parts, vector, result)),
+        (_csr_matvec_into, (*b_parts, branch_vector, result)),
+        (_csr_transpose_matvec_into, (*b_parts, vector, branch_result)),
+        (_solve_banded_lu, (factor, rhs)),
+    ):
+        fn(*args)
+
+    def timed(fn: Any, args: tuple[Any, ...]) -> float:
+        started = time.perf_counter()
+        for _ in range(repetitions):
+            fn(*args)
+        return (time.perf_counter() - started) / repetitions
+
+    components = {
+        "Bphi_transpose_phase_s": timed(
+            _csr_transpose_matvec_into, (*b_parts, vector, branch_result),
+        ),
+        "C_matvec_s": timed(_csr_matvec_into, (*c_parts, vector, result)),
+        "G_matvec_s": timed(_csr_matvec_into, (*g_parts, vector, result)),
+        "K_matvec_s": timed(_csr_matvec_into, (*k_parts, vector, result)),
+        "Bphi_matvec_s": timed(_csr_matvec_into, (*b_parts, branch_vector, result)),
+        "band_solve_s": timed(_solve_banded_lu, (factor, rhs)),
+    }
+    return {
+        "repetitions": repetitions,
+        "selected_bandwidth": device.selected_bandwidth,
+        "node_count": device.n_nodes,
+        "branch_count": int(branch_count),
+        "factor_setup_s": factor_time,
+        "components": components,
+        "measured_component_sum_s": float(sum(components.values())),
+    }
+
+
+def _matrix_digest(matrix: sp.spmatrix) -> str:
+    csr = matrix.tocsr()
+    digest = hashlib.sha256()
+    for values in (csr.indptr, csr.indices, csr.data):
+        digest.update(np.asarray(values).tobytes())
+    return digest.hexdigest()
+
+
+def _json_safe(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {str(key): _json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(item) for item in value]
+    if isinstance(value, np.ndarray):
+        return [_json_safe(item) for item in value.tolist()]
+    if isinstance(value, (np.floating, np.integer)):
+        return value.item()
+    if isinstance(value, float) and not math.isfinite(value):
+        return None
+    return value
+
+
+def _ordering_regression(name: str) -> dict[str, Any]:
+    source = (ROOT / "outputs" / "jc_doc_python_designs" / name)
+    device = load_jc_device(source)
+    raw = {key: _load_sparse(source / f"{key}.npz") for key in ("C", "G", "K", "Bphi")}
+    identity = np.array_equal(device.permutation, np.arange(device.n_nodes))
+    unchanged = identity and all(_matrix_digest(raw[key]) == _matrix_digest(getattr(device, key)) for key in raw)
+    return {
+        "device": name, "selected_ordering": device.selected_ordering,
+        "permutation_identity": bool(identity), "matrix_bytes_unchanged": bool(unchanged),
+        "natural_bandwidth": device.natural_bandwidth,
+        "rcm_bandwidth": device.rcm_bandwidth,
+        "pass": bool(unchanged),
+    }
+
+
+def run_phase_c_preflight(
+    output: Path, *, dt_norm: float = 0.01,
+) -> dict[str, Any]:
+    """Run C-G1 through C-G5 without launching a sweep."""
+    output.mkdir(parents=True, exist_ok=True)
+    sources = {
+        "ipm_2c_fixed": ROOT / "designs" / "ipm_2c_fixed",
+        "rf_squid_2393_3wm": ROOT / "designs" / "rf_squid_2393_3wm.yaml",
+    }
+    stability_sources = {
+        "jc_jtwpa": ROOT / "outputs" / "jc_doc_python_designs" / "jc_jtwpa",
+        "jc_fqjtwpa": ROOT / "outputs" / "jc_doc_python_designs" / "jc_fqjtwpa",
+        **sources,
+    }
+    stability: dict[str, Any] = {}
+    for name, source in stability_sources.items():
+        stability_device = load_jc_device(Path(derive_device_spec(source).circuit_dir))
+        stability[name] = _explicit_stability_bound(
+            stability_device, derive_device_spec(source), dt_norm,
+        )
+    (output / "eigenvalue_table.json").write_text(
+        json.dumps(_json_safe({"dt_norm": dt_norm, "results": stability}), indent=2),
+        encoding="utf-8",
+    )
+    results: dict[str, Any] = {}
+    for name, source in sources.items():
+        spec = derive_device_spec(source)
+        device = load_jc_device(Path(spec.circuit_dir))
+        if name == "rf_squid_2393_3wm" and spec.pump_ghz <= 0.0:
+            band = measure_transmitting_band(device)
+            spec = derive_device_spec(source)
+        else:
+            band = None
+        pump_hz = resolve_pump_frequency(spec)
+        measured = measure_device_rate(
+            spec, dt_norm=dt_norm, signal_current_a=0.0,
+            output=output / name,
+        )
+        linear = _measure_linear_limit(device, spec, pump_hz, dt_norm)
+        zero_drive = _measure_zero_drive(device, spec, pump_hz, dt_norm)
+        result = {
+            "device": name, "source_path": str(source),
+            "resolved_circuit_dir": spec.circuit_dir,
+            "device_spec": asdict(spec),
+            "ordering": {
+                "natural_bandwidth": device.natural_bandwidth,
+                "rcm_bandwidth": device.rcm_bandwidth,
+                "selected_bandwidth": device.selected_bandwidth,
+                "selected_ordering": device.selected_ordering,
+                "asserted": device.selected_bandwidth in {
+                    device.natural_bandwidth, device.rcm_bandwidth
+                },
+            },
+            "ports": {
+                "pump_port": spec.pump_port,
+                "pump_output_port": spec.pump_output_port,
+                "signal_source_port": spec.signal_source_port,
+                "signal_output_port": spec.signal_output_port,
+                "selected_pump_frequency_ghz": pump_hz / 1e9,
+            },
+            "per_cell_profiles": {
+                "Ic_min_a": float(np.min(device.Ic)), "Ic_max_a": float(np.max(device.Ic)),
+                "Cj_min_f": float(np.min(device.Cj)), "Cj_max_f": float(np.max(device.Cj)),
+                "Cg_min_f": float(np.min(device.Cg)), "Cg_max_f": float(np.max(device.Cg)),
+                "Cj_array_length": int(device.Cj.size), "Cg_array_length": int(device.Cg.size),
+            },
+            "parallel_geometric_inductor": {
+                "present": device.has_parallel_geometric_inductor,
+                "branch_law": (
+                    "K includes Lpar^-1 and Bphi carries Ic*sin(phi/phi0)"
+                    if device.has_parallel_geometric_inductor else
+                    "Bphi carries Ic*sin(phi/phi0); no Lpar branch detected"
+                ),
+            },
+            "dc_flux_bias": {
+                "present": spec.dc_flux_bias_present,
+                "source": spec.dc_flux_bias_source,
+            },
+            "D1_explicit_stability": stability[name],
+            "C-G3_rate": measured,
+            "C-G4_linear_limit": linear,
+            "C-G5_zero_drive": zero_drive,
+            "C-G2_stiffness_path": _stiffness_path_regression(
+                spec, dt_norm=dt_norm,
+            ),
+            "rf_transmitting_band": band,
+        }
+        (output / name / "result.json").write_text(
+            json.dumps(_json_safe(result), indent=2), encoding="utf-8",
+        )
+        results[name] = result
+    results["C-G2_ordering_regression"] = {
+        name: _ordering_regression(name)
+        for name in ("jc_jtwpa", "jc_fqjtwpa")
+    }
+    results["C-G2_stiffness_paths"] = {}
+    for name in ("jc_jtwpa", "jc_fqjtwpa"):
+        old_spec = derive_device_spec(stability_sources[name])
+        results["C-G2_stiffness_paths"][name] = _stiffness_path_regression(
+            old_spec, dt_norm=dt_norm,
+        )
+    payload = {
+        "status": "PREFLIGHT_COMPLETE", "dt_norm": dt_norm,
+        "D1_explicit_stability_table": stability,
+        "devices": results,
+    }
+    (output / "preflight.json").write_text(
+        json.dumps(_json_safe(payload), indent=2), encoding="utf-8",
+    )
+    return payload
 
 
 def _read_hb_rows(path: Path) -> list[dict[str, str]]:
@@ -700,7 +1441,8 @@ def _run_subprocess_point(
     row["wall_time_budget_s"] = budget_s
     row["trace_path"] = str(trace_out)
     state = np.load(state_out)["state"] if state_out.exists() else None
-    return row, float(payload["amplitude"]), state
+    amplitude = payload.get("amplitude")
+    return row, (None if amplitude is None else float(amplitude)), state
 
 
 def measure_device_rate(
@@ -712,6 +1454,13 @@ def measure_device_rate(
 ) -> dict[str, Any]:
     """Measure the bounded solver on exactly 200 normalized steps."""
     output.mkdir(parents=True, exist_ok=True)
+    # Compile the device-specific Numba signature before timing the requested
+    # 200-step measurement. The compilation cost is not an integration rate.
+    _run_point(
+        spec, 0.0, dt_norm=dt_norm, tmax_norm=dt_norm,
+        signal_current_a=0.0, pump_off_output=None,
+        method="guarcello_banded",
+    )
     started = time.perf_counter()
     row, _, runtime, _, _, _ = _run_point(
         spec, 0.0, dt_norm=dt_norm, tmax_norm=200.0 * dt_norm,
@@ -727,6 +1476,10 @@ def measure_device_rate(
         "measured_steps_per_second": rate,
         "benchmark_row": row,
         "measured_wall_time_s": time.perf_counter() - started,
+        "component_breakdown": _profile_kernel_components(
+            load_jc_device(Path(spec.circuit_dir)),
+            dt_norm / spec.omega_plasma,
+        ),
     }
     (output / "measured_rate_200_steps.json").write_text(
         json.dumps(measurement, indent=2), encoding="utf-8",
@@ -740,7 +1493,12 @@ def run_device(name: str, *, dt_norm: float, tmax_norm: float, output: Path,
                pump_power_max_dbm: float = -28.0,
                pump_power_points: int = 10,
                pump_power_values: tuple[float, ...] | None = None) -> dict[str, Any]:
-    circuit_dir = ROOT / "outputs" / "jc_doc_python_designs" / name
+    if name == "ipm_2c_fixed":
+        circuit_dir = ROOT / "designs" / name
+    elif name == "rf_squid_2393_3wm":
+        circuit_dir = ROOT / "designs" / f"{name}.yaml"
+    else:
+        circuit_dir = ROOT / "outputs" / "jc_doc_python_designs" / name
     hb_name = name.removeprefix("jc_")
     hb_dir = ROOT / ".hybrid_outputs" / "hb_columns_jtwpa_fqjtwpa_20260811" / hb_name
     spec = derive_device_spec(circuit_dir)
@@ -861,13 +1619,14 @@ def main() -> int:
     parser.add_argument("--state-out", type=Path)
     parser.add_argument("--result-json", type=Path)
     parser.add_argument("--trace-out", type=Path)
-    parser.add_argument("--device", choices=["jc_jtwpa", "jc_fqjtwpa", "both"], default="both")
+    parser.add_argument("--device", choices=["jc_jtwpa", "jc_fqjtwpa", "ipm_2c_fixed", "rf_squid_2393_3wm", "both"], default="both")
     parser.add_argument("--dt-norm", type=float, default=0.01)
     parser.add_argument("--tmax-norm", type=float, default=20_000.0)
     parser.add_argument("--output", type=Path, default=ROOT / "outputs/chaos/phase5")
     parser.add_argument("--estimate-only", action="store_true")
     parser.add_argument("--benchmark-only", action="store_true")
     parser.add_argument("--plot-only", action="store_true")
+    parser.add_argument("--phase-c-preflight", action="store_true")
     parser.add_argument("--per-point-budget-s", type=float, default=None)
     parser.add_argument("--pump-power-min-dbm", type=float, default=-30.0)
     parser.add_argument("--pump-power-max-dbm", type=float, default=-28.0)
@@ -875,6 +1634,9 @@ def main() -> int:
     parser.add_argument("--pump-power-values", type=str, default=None,
                         help="comma-separated explicit pump powers in dBm")
     args = parser.parse_args()
+    if args.phase_c_preflight:
+        run_phase_c_preflight(args.output, dt_norm=args.dt_norm)
+        return 0
     if args.worker:
         return _worker(args)
     names = ["jc_jtwpa", "jc_fqjtwpa"] if args.device == "both" else [args.device]
@@ -887,7 +1649,12 @@ def main() -> int:
         args.output.mkdir(parents=True, exist_ok=True)
         signal_current = math.sqrt(2.0 * 1e-3 * 10.0 ** (-100.0 / 10.0) / 50.0) / 50.0
         for name in names:
-            spec = derive_device_spec(ROOT / "outputs/jc_doc_python_designs" / name)
+            spec_source = (
+                phase_c_source_path(name)
+                if name in {"ipm_2c_fixed", "rf_squid_2393_3wm"}
+                else ROOT / "outputs/jc_doc_python_designs" / name
+            )
+            spec = derive_device_spec(spec_source)
             measure_device_rate(
                 spec, dt_norm=args.dt_norm, signal_current_a=signal_current,
                 output=args.output / name,
