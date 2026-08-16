@@ -65,6 +65,22 @@ def _pump_success(row: dict[str, Any]) -> bool:
     return row.get("pump_status") == "VALID_CONVERGED"
 
 
+_TIMING_FIELDS = (
+    "pump_runtime_s", "pump_wall_runtime_s", "pump_setup_runtime_s",
+    "pump_schur_setup_runtime_s", "pump_solve_wall_runtime_s",
+    "pump_write_runtime_s", "pump_factor_runtime_s",
+    "pump_preconditioner_assembly_runtime_s",
+    "pump_preconditioner_numeric_factor_runtime_s",
+    "gain_total_runtime_s", "gain_wall_runtime_s",
+    "gain_gamma_hat_runtime_s", "gain_khat_build_runtime_s",
+    "gain_khat_off_runtime_s", "gain_matrix_assemble_runtime_s",
+    "gain_factor_solve_runtime_s", "gain_baseline_off_runtime_s",
+    "gain_baseline_pumpdiag_runtime_s", "elapsed_s",
+    "pump_continuation_method", "pump_continuation_steps",
+    "pump_continuation_reached_target", "pump_continuation_runtime_s",
+)
+
+
 class ProductionPeriodicBackend:
     """Adapter around the same in-process production engine used by G1."""
 
@@ -248,6 +264,9 @@ class ProductionPeriodicBackend:
     ) -> HBResult:
         values = dict(metadata or {})
         values.update({"current_a": point.current_a * self.scale, "point_index": point.index})
+        values.update({name: row.get(name) for name in _TIMING_FIELDS})
+        values["sidebands"] = row.get("sidebands")
+        values["single_tone_forced"] = row.get("single_tone_forced", False)
         residual = row.get("pump_coeff_rel")
         valid_residual = residual is not None and np.isfinite(float(residual))
         checkpoint = self.pass_dir / "points" / run_gain_map.point_name(
@@ -415,6 +434,9 @@ def build_targets(args: argparse.Namespace) -> tuple[list[Any], argparse.Namespa
         args.circuit_dir, args.outdir, args.freq_ghz, args.n_power,
         args.power_min_dbm, args.power_max_dbm,
     )
+    gain_args.attenuation_db = args.attenuation_db
+    gain_args.sidebands = args.sidebands
+    gain_args.force_single_tone = args.force_single_tone
     points, _, _ = run_gain_map.build_points(gain_args)
     return sorted(points, key=lambda item: item.power_dbm), gain_args
 
@@ -427,6 +449,18 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--n-power", type=int, default=20)
     parser.add_argument("--power-min-dbm", type=float, default=-26.0)
     parser.add_argument("--power-max-dbm", type=float, default=-16.0)
+    parser.add_argument(
+        "--attenuation-db", type=float, default=None,
+        help="Optional flat pump-line attenuation override; omitted uses loss_A10.",
+    )
+    parser.add_argument(
+        "--sidebands", type=int, default=6,
+        help="Explicit small-signal sideband count for the delegated gain map.",
+    )
+    parser.add_argument(
+        "--force-single-tone", action="store_true",
+        help="Solve pump-only single-tone HB and skip delegated signal solves.",
+    )
     parser.add_argument("--td-ramp-periods", type=int, default=10)
     parser.add_argument("--td-hold-periods", type=int, default=40)
     parser.add_argument("--td-checkpoint-periods", type=int, default=10)

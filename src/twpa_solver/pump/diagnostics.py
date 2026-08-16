@@ -54,7 +54,11 @@ def branch_stress_metrics(
         ratio_max = None
     else:
         ratio_by_branch = peak_by_branch / np.maximum(np.abs(critical), 1e-300)
-        ratio = float(ratio_by_branch[strongest])
+        # The FDTD diagnostic reports max(|sin(phi)|), not the ratio on the
+        # branch carrying the largest absolute current.  These are identical
+        # for uniform-Ic devices, but differ for flux-pumped devices whose Ic
+        # varies along the branch set.
+        ratio = float(np.max(ratio_by_branch))
         ratio_max = float(np.max(ratio_by_branch))
 
     phi0 = getattr(problem.branch, "phi0", None)
