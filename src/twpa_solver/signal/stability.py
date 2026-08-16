@@ -323,7 +323,7 @@ def refine_complex_resonance(
     khat: dict[int, sp.csr_matrix],
     omega_p: float,
     ms: list[int],
-    signal_ghz_guess: float | complex,
+    signal_ghz_guess: float,
     loss_model: str | None = None,
     max_iters: int = 30,
     tol: float = 1e-9,
@@ -356,9 +356,6 @@ def refine_complex_resonance(
             omega_p=omega_p, ms=ms, loss_model=loss_model,
         )
 
-    # A continuation seed may already contain the previous setting's small
-    # imaginary part.  Preserve it; dropping it turns a complex-root
-    # continuation into a fresh real-axis secant search.
     omega0 = 2.0 * math.pi * complex(signal_ghz_guess) * 1e9
     omega1 = omega0 * (1.0 + perturbation)
     return refine_singular_omega(assemble, omega0, omega1, max_iters=max_iters, tol=tol)
@@ -369,7 +366,7 @@ def refine_resonances(
     khat: dict[int, sp.csr_matrix],
     omega_p: float,
     ms: list[int],
-    candidates_ghz: list[float | complex],
+    candidates_ghz: list[float],
     loss_model: str | None = None,
     max_iters: int = 30,
     tol: float = 1e-9,
