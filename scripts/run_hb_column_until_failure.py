@@ -32,6 +32,9 @@ def build_args(args: argparse.Namespace) -> argparse.Namespace:
         "--signal-detuning-mhz", "500", "--no-signal-spectrum",
         "--pump-mode-count", str(args.pump_mode_count),
         "--nt", str(max(args.nt, 4 * args.pump_mode_count + 4)),
+        "--continuation-steps", str(args.continuation_steps),
+        "--sidebands", str(getattr(args, "sidebands", 6)),
+        "--inproc-continuation", getattr(args, "continuation_method", "adaptive_secant"),
         "--log-level", "WARNING", "--overwrite",
     ]
     # Deliberately do not pass --attenuation-db: the A10 profile is resolved
@@ -49,6 +52,24 @@ def main(argv: list[str] | None = None) -> int:
         "--pump-mode-count", type=int, default=10,
         help="Number of retained positive odd pump modes [1, 3, ..., 2K-1].",
     )
+    parser.add_argument(
+        "--sidebands", type=int, default=6,
+        help="Explicit small-signal sideband count recorded in every row.",
+    )
+    parser.add_argument(
+        "--continuation-method",
+        choices=("fixed", "adaptive_secant"),
+        default="adaptive_secant",
+        help="In-process pump continuation strategy used for the timing comparison.",
+    )
+    parser.add_argument(
+        "--continuation-steps", type=int, default=4,
+        help="Fixed-ladder step count; adaptive uses this only as its fallback.",
+    )
+    parser.add_argument(
+        "--cold-each-point", action="store_true",
+        help="Solve every power point from a zero seed for fair strategy timing.",
+    )
     parser.add_argument("--nt", type=int, default=40, help="HB reconstruction grid size.")
     parser.add_argument("--power-min-dbm", type=float, default=-35.0)
     parser.add_argument("--power-max-dbm", type=float, default=-21.31578947368421)
@@ -63,9 +84,13 @@ def main(argv: list[str] | None = None) -> int:
     started = time.perf_counter()
     last_x = None
     for point in points:
-        mode = "warm" if last_x is not None else "seed"
-        row, x = engine.solve_point(point, pass_dir, mode=mode, warm_X=last_x)
+        use_warm = last_x is not None and not args.cold_each_point
+        mode = "warm" if use_warm else "seed"
+        row, x = engine.solve_point(
+            point, pass_dir, mode=mode, warm_X=last_x if use_warm else None
+        )
         row["column_mode"] = mode
+        row["sidebands"] = args.sidebands
         rows.append(row)
         _write_artifacts(args, rows, started)
         print(
@@ -76,7 +101,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         if row["status"] != "PASS":
             break
-        last_x = x
+        last_x = None if args.cold_each_point else x
     _write_artifacts(args, rows, started)
     return 0 if rows and rows[-1]["status"] != "PASS" else 1
 
@@ -96,8 +121,13 @@ def _write_artifacts(args: argparse.Namespace, rows: list[dict], started: float)
     report = {
         "circuit_dir": str(args.circuit_dir.resolve()), "freq_ghz": args.freq_ghz,
         "power_min_dbm": args.power_min_dbm, "power_max_dbm": args.power_max_dbm,
-        "n_power": args.n_power, "attenuation_override_db": None,
-        "attenuation_policy": "default_A10_profile", "pump_modes": [1,3,5,7,9,11,13,15,17,19],
+        "n_power": args.n_power, "sidebands": args.sidebands,
+        "continuation_method": args.continuation_method,
+        "continuation_steps": args.continuation_steps,
+        "cold_each_point": args.cold_each_point,
+        "attenuation_override_db": None,
+        "attenuation_policy": "default_A10_profile",
+        "pump_modes": list(range(1, 2 * args.pump_mode_count, 2)),
         "rows": rows, "first_failure_index": next((r["point_index"] for r in rows if r["status"] != "PASS"), None),
         "runtime_s": time.perf_counter() - started,
     }
