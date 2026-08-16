@@ -8,7 +8,9 @@ import json
 import logging
 import math
 import os
+import time
 from concurrent.futures import ProcessPoolExecutor
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -25,15 +27,23 @@ from twpa_solver.core.nonlinear import make_branch_law
 from twpa_solver.core.kinetic import kinetic_dc_branch_flux
 from twpa_solver.multitone.basis import (
     MultiToneBasis,
+    ToneIndex,
     build_half_pump_basis,
     build_lattice_basis,
     build_sideband_matched_basis,
     build_three_tone_basis,
+    canonicalize,
 )
 from twpa_solver.multitone.imd import (
+    ImProduct,
     enumerate_im_products,
+    enumerate_two_tone_im_products,
     extend_basis_with_im_tones,
     required_new_tones,
+)
+from twpa_solver.multitone.imd_theory import (
+    perturbative_imd_dbc,
+    solve_pump_dressed_im3,
 )
 from twpa_solver.multitone.compression import solve_signal_power_point
 from twpa_solver.multitone.compression_curve import (
@@ -147,12 +157,48 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--multitone-sidebands", type=int, default=2)
     parser.add_argument(
+        "--force-single-tone", action="store_true",
+        help="Solve pump-only single-tone HB and skip multitone signal work.",
+    )
+    parser.add_argument(
         "--imd-max-order",
         type=int,
         default=0,
         help=(
             "Emit intermodulation products through odd order 3, 5, 7, 9, 11, 13, or 15. "
             "0 disables IMD and leaves the basis unchanged."
+        ),
+    )
+    parser.add_argument(
+        "--imd-two-tone-spacing-hz",
+        type=float,
+        help=(
+            "Frequency spacing between two equal-power signal tones. With "
+            "--imd-tone-indices, tones are placed at omega_p + q*delta."
+        ),
+    )
+    parser.add_argument(
+        "--imd-two-tone-frequencies-ghz",
+        type=str,
+        help="Two comma-separated signal frequencies in GHz for the same lattice.",
+    )
+    parser.add_argument(
+        "--imd-tone-indices",
+        type=str,
+        help="Two comma-separated signal-sector indices q1,q2.",
+    )
+    parser.add_argument(
+        "--imd-tone2-amplitude-ratio",
+        type=float,
+        default=1.0,
+        help="Tone-2 current amplitude divided by tone-1 amplitude.",
+    )
+    parser.add_argument(
+        "--imd-theory",
+        action="store_true",
+        help=(
+            "Compute the exact pump-dressed third-order IMD prediction; "
+            "requires a two-tone full-node HB run."
         ),
     )
     parser.add_argument("--resource-budget-gb", type=float, default=8.0)
@@ -511,12 +557,149 @@ def _resolve_signal_current_bracket_a(
     return min_a, max_a, "explicit_current"
 
 
+def _parse_two_tone_indices(value: str) -> tuple[int, int]:
+    try:
+        values = tuple(int(item.strip()) for item in value.split(","))
+    except ValueError as error:
+        raise ValueError("--imd-tone-indices must be two comma-separated integers") from error
+    if len(values) != 2:
+        raise ValueError("--imd-tone-indices must contain exactly q1,q2")
+    return values
+
+
+def _parse_two_tone_frequencies(value: str) -> tuple[float, float]:
+    try:
+        values = tuple(float(item.strip()) for item in value.split(","))
+    except ValueError as error:
+        raise ValueError(
+            "--imd-two-tone-frequencies-ghz must be two comma-separated values"
+        ) from error
+    if len(values) != 2:
+        raise ValueError(
+            "--imd-two-tone-frequencies-ghz must contain exactly f1,f2"
+        )
+    return values
+
+
+def _resolve_two_tone_configuration(
+    args: argparse.Namespace, omega_p: float
+) -> dict[str, object] | None:
+    indices = getattr(args, "imd_tone_indices", None)
+    spacing_hz = getattr(args, "imd_two_tone_spacing_hz", None)
+    frequencies = getattr(args, "imd_two_tone_frequencies_ghz", None)
+    requested = indices is not None or spacing_hz is not None or frequencies is not None
+    if not requested:
+        return None
+    if indices is None:
+        raise ValueError("two-tone IMD requires --imd-tone-indices q1,q2")
+    if spacing_hz is None and frequencies is None:
+        raise ValueError(
+            "two-tone IMD requires --imd-two-tone-spacing-hz or "
+            "--imd-two-tone-frequencies-ghz"
+        )
+    if spacing_hz is not None and frequencies is not None:
+        raise ValueError(
+            "--imd-two-tone-spacing-hz and --imd-two-tone-frequencies-ghz "
+            "are mutually exclusive"
+        )
+    q1, q2 = _parse_two_tone_indices(indices)
+    if args.imd_max_order == 0:
+        raise ValueError("two-tone IMD requires --imd-max-order")
+    if args.multitone_lattice == "half_pump":
+        raise ValueError("two-tone IMD requires the full-pump lattice")
+    if spacing_hz is not None:
+        spacing = float(spacing_hz)
+        if not np.isfinite(spacing) or spacing <= 0.0:
+            raise ValueError("two-tone spacing must be finite and positive")
+        delta = 2.0 * math.pi * spacing / (q2 - q1)
+        omega_1 = omega_p + q1 * delta
+        omega_2 = omega_p + q2 * delta
+        placement_source = "spacing"
+    else:
+        f1_ghz, f2_ghz = _parse_two_tone_frequencies(frequencies)
+        delta = 2.0 * math.pi * (f2_ghz - f1_ghz) * 1e9 / (q2 - q1)
+        omega_1 = 2.0 * math.pi * f1_ghz * 1e9
+        omega_2 = 2.0 * math.pi * f2_ghz * 1e9
+        placement_source = "frequencies"
+        expected_1 = omega_p + q1 * delta
+        expected_2 = omega_p + q2 * delta
+        if not np.isclose(omega_1, expected_1, rtol=1e-12, atol=1e-6) or not np.isclose(
+            omega_2, expected_2, rtol=1e-12, atol=1e-6
+        ):
+            raise ValueError(
+                "two-tone frequencies must satisfy w1=wp+q1*delta and "
+                "w2=wp+q2*delta"
+            )
+    if omega_1 <= 0.0 or omega_2 <= 0.0:
+        raise ValueError("two-tone frequencies must be positive")
+    if args.signal_ghz is not None and not np.isclose(
+        float(args.signal_ghz), omega_1 / (2.0 * math.pi * 1e9), rtol=1e-12, atol=1e-12
+    ):
+        raise ValueError(
+            "--signal-ghz, when supplied for two-tone IMD, must equal tone 1"
+        )
+    return {
+        "q1": q1,
+        "q2": q2,
+        "delta": delta,
+        "omega_1": omega_1,
+        "omega_2": omega_2,
+        "f1_ghz": omega_1 / (2.0 * math.pi * 1e9),
+        "f2_ghz": omega_2 / (2.0 * math.pi * 1e9),
+        "placement_source": placement_source,
+    }
+
+
+def _imd_products_for(
+    args: argparse.Namespace,
+    omega_p: float,
+    delta: float,
+    two_tone: dict[str, object] | None,
+) -> list[ImProduct]:
+    if not args.imd_max_order:
+        return []
+    if two_tone is not None:
+        products = enumerate_two_tone_im_products(
+            args.imd_max_order, int(two_tone["q1"]), int(two_tone["q2"])
+        )
+        canonical_products = []
+        for product in products:
+            tone, conjugated = canonicalize(product.raw, omega_p, delta)
+            canonical_products.append(
+                replace(product, tone=tone, conjugated=conjugated)
+            )
+        return canonical_products
+    return enumerate_im_products(args.imd_max_order, omega_p, delta)
+
+
 def _build_multitone_basis(
     args: argparse.Namespace,
     pump_modes: list[int],
     omega_p: float,
     delta: float,
 ) -> MultiToneBasis:
+    two_tone = _resolve_two_tone_configuration(args, omega_p)
+    if two_tone is not None:
+        args.signal_ghz = float(two_tone["f1_ghz"])
+        if args.multitone_basis == "matched":
+            raise ValueError(
+                "two-tone IMD cannot use a matched basis; use "
+                "--multitone-basis lattice so all q products are explicit"
+            )
+        products = _imd_products_for(args, omega_p, float(two_tone["delta"]), two_tone)
+        q_required = {
+            int(two_tone["q1"]),
+            int(two_tone["q2"]),
+            *(product.raw.q for product in products),
+        }
+        if args.multitone_basis == "lattice" and args.multitone_sidebands < max(
+            abs(q) for q in q_required
+        ):
+            raise ValueError(
+                "two-tone lattice signal_order_max is too small for the "
+                f"requested products: need {max(abs(q) for q in q_required)}, "
+                f"got {args.multitone_sidebands}"
+            )
     # Matched sidebands fold Floquet indices into h; the largest retained h
     # grows with the requested sideband count, even for a fundamental-only
     # pump.  The previous ``max(pump_modes)+1`` clipped S=10 production bases.
@@ -550,7 +733,7 @@ def _build_multitone_basis(
         basis = build_three_tone_basis(omega_p, delta)
     imd_order = int(getattr(args, "imd_max_order", 0))
     if imd_order:
-        products = enumerate_im_products(imd_order, omega_p, delta)
+        products = _imd_products_for(args, omega_p, delta, two_tone)
         added = required_new_tones(products, basis)
         basis = extend_basis_with_im_tones(basis, products)
         args._imd_tones_added = added
@@ -560,6 +743,20 @@ def _build_multitone_basis(
         )
     else:
         args._imd_tones_added = []
+    if two_tone is not None:
+        required_fundamentals = (
+            ToneIndex(1, int(two_tone["q1"])),
+            ToneIndex(1, int(two_tone["q2"])),
+        )
+        represented = set(basis.tones) | {tone.conjugate() for tone in basis.tones}
+        missing_fundamentals = [
+            tone for tone in required_fundamentals if tone not in represented
+        ]
+        if missing_fundamentals:
+            raise ValueError(
+                "two-tone basis does not contain both fundamentals: "
+                f"missing={missing_fundamentals}"
+            )
     scale = basis.pump_tone.h
     represented_modes = {tone.h // scale for tone in basis.tones if tone.q == 0 and tone.h % scale == 0}
     missing_modes = sorted(set(pump_modes) - represented_modes)
@@ -586,6 +783,20 @@ def _current_to_dbm(
 # it, P1dB and P_sat -- reads too high. Measured on the exp20 jtwpa/2c sweep:
 # 15.9736 vs 15.9311 dB at the two lowest currents, delta 0.043 dB, passes.
 SMALL_SIGNAL_FLOOR_TOL_DB = 0.05
+_CONTINUATION_MIN_STEP_FLOOR = 1.0 / 4096.0
+
+
+def _derived_continuation_min_step(
+    span: float, nominal_step: float = 0.01,
+) -> float:
+    """Derive a bounded adaptive step from the requested continuation span."""
+    span = float(span)
+    if not np.isfinite(span) or span <= 0.0:
+        raise ValueError("continuation span must be finite and positive")
+    return max(
+        _CONTINUATION_MIN_STEP_FLOOR,
+        min(float(nominal_step), span / 256.0),
+    )
 
 
 def _small_signal_floor_delta_db(points: list[dict[str, object]]) -> float | None:
@@ -657,7 +868,7 @@ def _solve_pump_from_scratch(
     pump_port: int,
     pump_current: float,
     omega_p: float,
-) -> tuple[np.ndarray, PumpBasis, list[object], FullPumpProblem]:
+) -> tuple[np.ndarray, PumpBasis, list[object], FullPumpProblem, dict[str, object]]:
     """Solve the pump from a zero seed via natural-parameter continuation.
 
     Factored out of ``_solve_compression`` so a ``--n-signal-freq`` sweep can
@@ -692,18 +903,37 @@ def _solve_pump_from_scratch(
         continuation_predictor="none", jvp_mode="aft",
         precond_reuse=1, precond_reuse_refresh_gmres=0,
     )
-    pump_state, pump_reports = HarmonicNewtonKrylovSolver(
-        pump_settings
-    ).solve_continuation(pump_problem, continuation_steps=4)
-    if not pump_reports[-1].converged:
-        final = pump_reports[-1]
+    solver = HarmonicNewtonKrylovSolver(pump_settings)
+    continuation_started = time.perf_counter()
+    pump_state, pump_reports, trace = solver.solve_adaptive_continuation(
+        pump_problem,
+        pump_problem.zeros(),
+        initial_step=0.25,
+        min_step=_derived_continuation_min_step(1.0),
+        growth=1.5,
+        shrink=0.5,
+        fallback_fixed_steps=4,
+        max_wall_s=float(getattr(args, "signal_continuation_deadline_s", 0.0)),
+    )
+    continuation_info = {
+        "method": "adaptive_secant",
+        "steps": len(trace.attempted_lambdas),
+        "reached_target": bool(
+            pump_reports
+            and pump_reports[-1].converged
+            and abs(pump_reports[-1].source_scale - 1.0) < 1e-12
+        ),
+        "runtime_s": time.perf_counter() - continuation_started,
+    }
+    if not pump_reports or not continuation_info["reached_target"]:
+        final = pump_reports[-1] if pump_reports else None
         raise RuntimeError(
             "pump continuation failed before the multitone solve: "
-            f"source_scale={final.source_scale}, "
-            f"coeff_rel={final.coeff_rel:.6g}, "
-            f"reason={final.failure_reason}"
+            f"source_scale={getattr(final, 'source_scale', None)}, "
+            f"coeff_rel={getattr(final, 'coeff_rel', None)}, "
+            f"reason={getattr(final, 'failure_reason', trace.failure_reason)}"
         )
-    return pump_state, pump_basis, pump_reports, pump_problem
+    return pump_state, pump_basis, pump_reports, pump_problem, continuation_info
 
 
 def _solve_and_persist_shared_pump(args: argparse.Namespace) -> Path:
@@ -727,7 +957,7 @@ def _solve_and_persist_shared_pump(args: argparse.Namespace) -> Path:
     pump_current_base, _ = _resolve_pump_current_a(args, default_current)
     pump_current = pump_current_base * float(args.pump_current_jc_scale)
     omega_p = 2.0 * math.pi * args.pump_freq_ghz * 1e9
-    pump_state, pump_basis, pump_reports, pump_problem = _solve_pump_from_scratch(
+    pump_state, pump_basis, pump_reports, pump_problem, continuation_info = _solve_pump_from_scratch(
         args, circuit, metadata, pump_port, pump_current, omega_p
     )
     solution_summary = summarize_solution(pump_problem, pump_state)
@@ -757,6 +987,10 @@ def _solve_compression(
     list[dict[str, object]],
 ]:
     circuit, metadata, circuit_source = _load_source(args)
+    omega_p = 2.0 * math.pi * args.pump_freq_ghz * 1e9
+    two_tone = _resolve_two_tone_configuration(args, omega_p)
+    if two_tone is not None:
+        args.signal_ghz = float(two_tone["f1_ghz"])
     dc_branch_flux = kinetic_dc_branch_flux(circuit, args.dc_current_a)
     pump_attenuation_db, pump_attenuation_source, attenuation_db, attenuation_source = _resolve_attenuations(args)
     source_port = int(args.source_port or 1)
@@ -770,7 +1004,6 @@ def _solve_compression(
     default_current = pump_sources[0].get("current_a") if pump_sources else None
     pump_current_base, pump_current_source = _resolve_pump_current_a(args, default_current)
     pump_current = pump_current_base * float(args.pump_current_jc_scale)
-    omega_p = 2.0 * math.pi * args.pump_freq_ghz * 1e9
     selected_preconditioner = resolve_multitone_preconditioner(
         args.multitone_preconditioner
     )
@@ -788,6 +1021,7 @@ def _solve_compression(
         precond_reuse=max(1, int(args.precond_reuse)),
         precond_reuse_refresh_gmres=max(0, int(args.precond_reuse_refresh_gmres)),
     )
+    continuation_info: dict[str, object]
     if args.pump_solution_dir is not None:
         pump_state, pump_basis = load_pump_basis_from_solution(
             args.pump_solution_dir,
@@ -795,27 +1029,70 @@ def _solve_compression(
         )
         pump_reports: list[object] = []
         pump_converged = True
+        continuation_info = {
+            "method": "supplied_solution",
+            "steps": 0,
+            "reached_target": True,
+            "runtime_s": 0.0,
+        }
     else:
-        pump_state, pump_basis, pump_reports, _pump_problem = _solve_pump_from_scratch(
+        pump_state, pump_basis, pump_reports, _pump_problem, continuation_info = _solve_pump_from_scratch(
             args, circuit, metadata, pump_port, pump_current, omega_p
         )
         pump_converged = True
-    omega_s = 2.0 * math.pi * args.signal_ghz * 1e9
-    delta = (omega_p / 2.0 if args.multitone_lattice == "half_pump" else omega_p) - omega_s
+    if args.force_single_tone:
+        pump_summary = (
+            summarize_solution(_pump_problem, pump_state)
+            if args.pump_solution_dir is None
+            else {}
+        )
+        return [], {"pump_only": pump_state}, {
+            "status": "VALID_SOLVED",
+            "single_tone_forced": True,
+            "multitone_skipped": True,
+            "pump_converged": pump_converged,
+            "pump_current_a": pump_current,
+            "pump_freq_ghz": args.pump_freq_ghz,
+            "pump_continuation_method": continuation_info["method"],
+            "pump_continuation_steps": continuation_info["steps"],
+            "pump_continuation_reached_target": continuation_info["reached_target"],
+            "pump_continuation_runtime_s": continuation_info["runtime_s"],
+            "pump_runtime_s": float(sum(getattr(report, "runtime_s", 0.0) for report in pump_reports)),
+            "pump_wall_runtime_s": continuation_info["runtime_s"],
+            "pump_coeff_rel": (
+                float(pump_reports[-1].coeff_rel) if pump_reports else None
+            ),
+            "pump_solution_dir": str(args.pump_solution_dir) if args.pump_solution_dir else None,
+            "pump_summary": pump_summary,
+        }, []
+    if two_tone is not None:
+        delta = float(two_tone["delta"])
+        reference_tone = ToneIndex(1, int(two_tone["q1"]))
+        second_tone = ToneIndex(1, int(two_tone["q2"]))
+    else:
+        omega_s = 2.0 * math.pi * args.signal_ghz * 1e9
+        delta = (
+            omega_p / 2.0 if args.multitone_lattice == "half_pump" else omega_p
+        ) - omega_s
+        reference_tone = basis_signal_tone = ToneIndex(1, -1)
+        second_tone = None
     basis = _build_multitone_basis(args, pump_basis.modes, omega_p, delta)
-    imd_products = (
-        enumerate_im_products(args.imd_max_order, omega_p, delta)
-        if args.imd_max_order
-        else []
-    )
+    imd_products = _imd_products_for(args, omega_p, delta, two_tone)
     imd_nan = {f"{product.label}_dbc": float("nan") for product in imd_products}
     pump_seed = promote_pump_solution(pump_state, pump_basis, basis)
     pump_source = MultiToneDrive(basis.pump_tone, circuit.port_to_index[pump_port], pump_current).to_coeffs(
         basis, circuit.node_count
     )
-    signal_unit = MultiToneDrive(basis.signal_tone, circuit.port_to_index[source_port], 1.0).to_coeffs(
-        basis, circuit.node_count
-    )
+    signal_unit_1 = MultiToneDrive(
+        reference_tone, circuit.port_to_index[source_port], 1.0
+    ).to_coeffs(basis, circuit.node_count)
+    if second_tone is None:
+        signal_unit_2 = np.zeros_like(signal_unit_1)
+    else:
+        signal_unit_2 = MultiToneDrive(
+            second_tone, circuit.port_to_index[source_port], 1.0
+        ).to_coeffs(basis, circuit.node_count)
+    signal_unit = signal_unit_1 + float(args.imd_tone2_amplitude_ratio) * signal_unit_2
     selected_backend = (
         "schur_cpu_mt"
         if args.multitone_backend == "auto" and args.circuit_dir is not None
@@ -891,14 +1168,14 @@ def _solve_compression(
         pump_off_state_full,
         basis,
         circuit,
-        signal_tone=basis.signal_tone,
+        signal_tone=reference_tone,
         source_port=source_port,
         out_port=out_port,
         source_current_a=float(currents[0]),
         z0_ohm=args.z0_ohm,
     )
     pump_off_gain_db = float(20.0 * np.log10(max(abs(pump_off_s21), 1e-300)))
-    signal_row = basis.index_of(basis.signal_tone)
+    signal_row = basis.index_of(reference_tone)
     # ``output_node`` indexes the full node set, so the reference voltage has to
     # be read off the reconstructed state.  The Schur backend solves on the
     # retained ports only, and indexing it directly is out of bounds for every
@@ -918,9 +1195,9 @@ def _solve_compression(
         pump_only_state, pump_only_reports, pump_only_trace = (
             HarmonicNewtonKrylovSolver(settings).solve_adaptive_continuation(
                 pump_only_problem,
-                None,
+                pump_seed_solve,
                 initial_step=0.25,
-                min_step=0.01,
+                min_step=_derived_continuation_min_step(1.0),
                 growth=1.5,
                 shrink=0.5,
                 fallback_fixed_steps=20,
@@ -954,6 +1231,27 @@ def _solve_compression(
     )
 
     pump_only_state_full = observable_state(pump_only_problem, pump_only_state)
+    perturbative_theory = None
+    theory_residuals = None
+    if args.imd_theory:
+        if two_tone is None:
+            raise ValueError("--imd-theory requires the two-tone IMD path")
+        if selected_backend != "full" or not isinstance(pump_only_problem, FullMultiToneProblem):
+            raise ValueError(
+                "--imd-theory currently requires the full-node multitone backend"
+            )
+        perturbative_theory = solve_pump_dressed_im3(
+            pump_only_problem,
+            pump_only_state_full,
+            signal_unit,
+        )
+        theory_residuals = {
+            "linear": perturbative_theory.linear_residual,
+            "second_order": perturbative_theory.second_order_residual,
+            "third_order": perturbative_theory.third_order_residual,
+            "fourth_order": perturbative_theory.fourth_order_residual,
+            "fifth_order": perturbative_theory.fifth_order_residual,
+        }
 
     def gain_vs_off(state_full: np.ndarray, signal_current_a: float) -> float:
         signal_voltage = (
@@ -982,11 +1280,26 @@ def _solve_compression(
             state_full,
             basis,
             circuit,
-            signal_tone=basis.signal_tone,
+            signal_tone=reference_tone,
             source_port=source_port,
             out_port=out_port,
             source_current_a=float(signal_current_a),
             z0_ohm=args.z0_ohm,
+        )
+        tone2_s21 = (
+            None
+            if two_tone is None
+            else tone_s21(
+                state_full,
+                basis,
+                circuit,
+                signal_tone=second_tone,
+                source_port=source_port,
+                out_port=out_port,
+                source_current_a=float(signal_current_a)
+                * float(args.imd_tone2_amplitude_ratio),
+                z0_ohm=args.z0_ohm,
+            )
         )
         pump_s21 = tone_s21(
             state_full,
@@ -998,15 +1311,19 @@ def _solve_compression(
             source_current_a=pump_current,
             z0_ohm=args.z0_ohm,
         )
-        idler_s21 = tone_s21(
-            state_full,
-            basis,
-            circuit,
-            signal_tone=basis.idler_tone,
-            source_port=source_port,
-            out_port=out_port,
-            source_current_a=float(signal_current_a),
-            z0_ohm=args.z0_ohm,
+        idler_s21 = (
+            complex(float("nan"), float("nan"))
+            if two_tone is not None
+            else tone_s21(
+                state_full,
+                basis,
+                circuit,
+                signal_tone=basis.idler_tone,
+                source_port=source_port,
+                out_port=out_port,
+                source_current_a=float(signal_current_a),
+                z0_ohm=args.z0_ohm,
+            )
         )
         gain_db = float(20.0 * np.log10(max(abs(signal_s21), 1e-300)))
         gain_vs_off_db = gain_vs_off(state_full, signal_current_a)
@@ -1015,8 +1332,14 @@ def _solve_compression(
             - 20.0 * np.log10(max(abs(pump_reference_s21), 1e-300))
         )
         gain_linear = float(10.0 ** (gain_vs_off_db / 10.0))
-        signal_power = port_available_power_w(
+        signal_power_per_tone = port_available_power_w(
             signal_current_a, args.z0_ohm, convention=args.power_convention
+        )
+        signal_power = (
+            signal_power_per_tone
+            * (1.0 + float(args.imd_tone2_amplitude_ratio) ** 2)
+            if two_tone is not None
+            else signal_power_per_tone
         )
         pump_power = port_available_power_w(
             pump_current, args.z0_ohm, convention=args.power_convention
@@ -1040,14 +1363,32 @@ def _solve_compression(
                 out_port=out_port,
                 z0_ohm=args.z0_ohm,
                 dc_branch_flux=dc_branch_flux,
+                reference_tone=reference_tone,
             )
             if imd_products
             else {}
         )
+        theory_imd = {}
+        if perturbative_theory is not None:
+            theory_imd = {
+                f"theory_{product.label}_dbc": perturbative_imd_dbc(
+                    perturbative_theory,
+                    basis,
+                    circuit,
+                    product.tone,
+                    order=product.order,
+                    reference_tone=reference_tone,
+                    signal_current_a=signal_current_a,
+                    out_port=out_port,
+                    z0_ohm=args.z0_ohm,
+                    dc_branch_flux=dc_branch_flux,
+                )
+                for product in imd_products
+            }
         residual_problem = FullMultiToneProblem(
             circuit,
             basis,
-            AffineSourcePath.signal_turn_on(
+            AffineSourcePath.signal_turn_on_pump_fixed(
                 pump_source, signal_unit * float(signal_current_a)
             ),
             dc_branch_flux=dc_branch_flux,
@@ -1059,6 +1400,7 @@ def _solve_compression(
         )
         return {
             "signal_s21": signal_s21,
+            "tone2_s21": tone2_s21,
             "pump_s21": pump_s21,
             "idler_s21": idler_s21,
             "gain_db": gain_db,
@@ -1068,6 +1410,7 @@ def _solve_compression(
             "balance": balance,
             "hb_residual_rel": hb_residual_rel,
             "imd": imd,
+            "theory_imd": theory_imd,
         }
     states: dict[str, np.ndarray] = {}
     states["pump_only"] = pump_only_state_full
@@ -1103,6 +1446,7 @@ def _solve_compression(
         if solved.status == "VALID_SOLVED":
             metrics = measure_state(state_full, float(current))
             signal_s21 = metrics["signal_s21"]
+            tone2_s21 = metrics["tone2_s21"]
             pump_s21 = metrics["pump_s21"]
             idler_s21 = metrics["idler_s21"]
             gain_db = float(metrics["gain_db"])
@@ -1123,7 +1467,9 @@ def _solve_compression(
         else:
             gain_db = float("nan")
             gain_vs_off_db = float("nan")
-            signal_s21 = pump_s21 = idler_s21 = complex(float("nan"), float("nan"))
+            signal_s21 = tone2_s21 = pump_s21 = idler_s21 = complex(
+                float("nan"), float("nan")
+            )
             pump_depletion_db = float("nan")
             depletion_model = float("nan")
             balance = {
@@ -1159,10 +1505,31 @@ def _solve_compression(
             if max_current_over_ic >= 1.0
             else "SMOOTH_COMPRESSION"
         )
+        tone1_power_dbm = _current_to_dbm(
+            float(current), args.z0_ohm, attenuation_db, args.power_convention
+        )
+        tone2_current = float(current) * float(args.imd_tone2_amplitude_ratio)
+        tone2_power_dbm = _current_to_dbm(
+            tone2_current, args.z0_ohm, attenuation_db, args.power_convention
+        )
+        total_signal_power_w = (
+            1.0e-3 * 10.0 ** (tone1_power_dbm / 10.0)
+            + 1.0e-3 * 10.0 ** (tone2_power_dbm / 10.0)
+            if two_tone is not None
+            else 1.0e-3 * 10.0 ** (tone1_power_dbm / 10.0)
+        )
         points.append({
             "signal_current_a": float(current),
-            "signal_power_dbm": _current_to_dbm(
-                float(current), args.z0_ohm, attenuation_db, args.power_convention
+            "signal_power_dbm": tone1_power_dbm,
+            "signal_power_dbm_definition": (
+                "tone_1_per_tone" if two_tone is not None else "single_tone"
+            ),
+            "tone1_power_dbm": tone1_power_dbm if two_tone is not None else None,
+            "tone2_power_dbm": tone2_power_dbm if two_tone is not None else None,
+            "total_signal_power_dbm": (
+                10.0 * math.log10(total_signal_power_w / 1.0e-3)
+                if two_tone is not None
+                else None
             ),
             "gain_db": gain_db,
             "gain_vs_off_db": gain_vs_off_db,
@@ -1205,6 +1572,18 @@ def _solve_compression(
             ],
             "signal_s21_real": float(np.real(signal_s21)),
             "signal_s21_imag": float(np.imag(signal_s21)),
+            "tone1_s21_db": float(20.0 * np.log10(max(abs(signal_s21), 1e-300))),
+            "tone2_s21_db": (
+                float(20.0 * np.log10(max(abs(tone2_s21), 1e-300)))
+                if two_tone is not None
+                else None
+            ),
+            "tone2_s21_real": (
+                float(np.real(tone2_s21)) if two_tone is not None else None
+            ),
+            "tone2_s21_imag": (
+                float(np.imag(tone2_s21)) if two_tone is not None else None
+            ),
             "pump_s21_real": float(np.real(pump_s21)),
             "pump_s21_imag": float(np.imag(pump_s21)),
             "idler_s21_real": float(np.real(idler_s21)),
@@ -1221,6 +1600,14 @@ def _solve_compression(
             "recovery_rung": solved.used_recovery,
             "last_converged_signal_current_a": solved.last_converged_signal_current_a,
             **(metrics.get("imd", imd_nan) if solved.status == "VALID_SOLVED" else imd_nan),
+            **(
+                metrics.get("theory_imd", {})
+                if solved.status == "VALID_SOLVED"
+                else {
+                    f"theory_{product.label}_dbc": float("nan")
+                    for product in imd_products
+                }
+            ),
         })
         if index == len(currents) - 1:
             states["last"] = state_full
@@ -1475,6 +1862,11 @@ def _solve_compression(
         "pump_current_source": pump_current_source,
         "pump_power_dbm": args.pump_power_dbm,
         "pump_converged": pump_converged,
+        "pump_continuation_method": continuation_info["method"],
+        "pump_continuation_steps": continuation_info["steps"],
+        "pump_continuation_reached_target": continuation_info["reached_target"],
+        "pump_continuation_runtime_s": continuation_info["runtime_s"],
+        "pump_runtime_s": float(sum(getattr(report, "runtime_s", 0.0) for report in pump_reports)),
         "pump_current_jc_scale": args.pump_current_jc_scale,
         "pump_solution_dir": str(args.pump_solution_dir) if args.pump_solution_dir else None,
         "source_port": source_port,
@@ -1620,6 +2012,23 @@ def _solve_compression(
         "recovery": args.recovery,
         "basis": basis.to_metadata(),
     }
+    summary["imd_two_tone"] = two_tone is not None
+    if two_tone is not None:
+        summary.update({
+            "imd_two_tone_q1": int(two_tone["q1"]),
+            "imd_two_tone_q2": int(two_tone["q2"]),
+            "imd_two_tone_delta_hz": float(two_tone["delta"] / (2.0 * math.pi)),
+            "imd_two_tone_frequency_1_ghz": float(two_tone["f1_ghz"]),
+            "imd_two_tone_frequency_2_ghz": float(two_tone["f2_ghz"]),
+            "imd_two_tone_amplitude_ratio_2_to_1": float(
+                args.imd_tone2_amplitude_ratio
+            ),
+            "imd_two_tone_per_tone_power_reference": True,
+            "imd_two_tone_total_signal_power_offset_db": 10.0 * math.log10(
+                1.0 + float(args.imd_tone2_amplitude_ratio) ** 2
+            ),
+            "imd_two_tone_placement_source": str(two_tone["placement_source"]),
+        })
     if args.imd_max_order:
         summary.update({
             "imd_max_order": int(args.imd_max_order),
@@ -1633,6 +2042,10 @@ def _solve_compression(
                     "tone": {"h": product.tone.h, "q": product.tone.q},
                     "frequency_hz": product.tone.omega(omega_p, delta) / (2.0 * math.pi),
                     "conjugated": product.conjugated,
+                    "family": product.family,
+                    "q1": product.q1,
+                    "q2": product.q2,
+                    "ordering": product.ordering,
                 }
                 for product in imd_products
             ],
@@ -1641,10 +2054,14 @@ def _solve_compression(
                 for tone in getattr(args, "_imd_tones_added", [])
             ],
             "imd_ratio_description": (
-                "Outgoing power ratio at one output port relative to the signal "
-                "tone; dBc is invariant under the source-power convention."
+                "Outgoing power ratio at one output port relative to tone 1 for "
+                "two-tone IMD, or the single signal tone otherwise; dBc is "
+                "invariant under the source-power convention."
             ),
         })
+    summary["imd_theory"] = bool(args.imd_theory)
+    if theory_residuals is not None:
+        summary["imd_theory_residuals"] = theory_residuals
     spatial_rows: list[dict[str, object]] = []
     if args.spatial_profiles:
         for label in ("zero_signal", "mid", "p1db"):
@@ -1708,12 +2125,14 @@ def _solve_compression(
 
 
 def _write_one_result(args: argparse.Namespace) -> dict[str, object]:
+    total_started = time.perf_counter()
     points, states, summary, spatial_rows = _solve_compression(args)
     summary.update({
         "multitone_basis": args.multitone_basis,
         "multitone_sidebands": args.multitone_sidebands,
         "n_signal_power": args.n_signal_power,
         "resource_budget_gb": args.resource_budget_gb,
+        "total_wall_runtime_s": time.perf_counter() - total_started,
     })
     write_compression_outputs(
         args.output_dir,
@@ -1778,6 +2197,7 @@ def _run_pump_current_sweep(args: argparse.Namespace) -> dict[str, object]:
     args.output_dir.mkdir(parents=True, exist_ok=True)
     rows: list[dict[str, object]] = []
     for index, current_a in enumerate(currents):
+        point_started = time.perf_counter()
         run_dir = _pump_output_dir(args.output_dir, index, current_a)
         run_args = argparse.Namespace(**vars(args))
         run_args.output_dir = run_dir
@@ -1786,7 +2206,7 @@ def _run_pump_current_sweep(args: argparse.Namespace) -> dict[str, object]:
         run_args.summary_json = None
         expected_current = current_a * float(args.pump_current_jc_scale)
 
-        if int(args.n_signal_freq) > 1:
+        if int(args.n_signal_freq) > 1 and not args.force_single_tone:
             frequency_summary_path = run_dir / "frequency_summary.json"
             existing = _resumable_summary(
                 frequency_summary_path,
@@ -1816,18 +2236,35 @@ def _run_pump_current_sweep(args: argparse.Namespace) -> dict[str, object]:
             expected_pump_current_a=expected_current,
         )
         if summary is None:
-            summary = _write_one_result(run_args)
-            summary.update(
-                {
-                    "signal_frequency_range_ghz": [
-                        run_args.signal_ghz,
-                        run_args.signal_ghz,
-                    ],
-                    "n_signal_freq": 1,
-                    "signal_workers": 1,
-                    "factor_backend": run_args.factor_backend,
+            try:
+                summary = _write_one_result(run_args)
+            except RuntimeError as error:
+                reason = str(error)
+                if not reason.startswith(
+                    "pump continuation failed before the multitone solve"
+                ):
+                    raise
+                run_dir.mkdir(parents=True, exist_ok=True)
+                summary = {
+                    "pump_current_a": expected_current,
+                    "signal_ghz": run_args.signal_ghz,
+                    "status": "PUMP_CONTINUATION_FAILED",
+                    "failure_reason": reason,
+                    "small_signal_gain_db": None,
+                    "small_signal_gain_vs_off_db": None,
+                    "multitone_basis": run_args.multitone_basis,
+                    "multitone_sidebands": run_args.multitone_sidebands,
+                    "total_wall_runtime_s": time.perf_counter() - point_started,
                 }
-            )
+            summary.update({
+                "signal_frequency_range_ghz": [
+                    run_args.signal_ghz,
+                    run_args.signal_ghz,
+                ],
+                "n_signal_freq": 1,
+                "signal_workers": 1,
+                "factor_backend": run_args.factor_backend,
+            })
             summary_path.write_text(
                 json.dumps(summary, indent=2, default=str), encoding="utf-8"
             )
@@ -1994,7 +2431,12 @@ def _estimate_worker_footprint(
     # and silently cost the run every worker but one. Pick the sweep frequency
     # furthest from the pump instead; it is a real frequency the sweep will
     # solve, so the estimate stays representative.
-    signal_ghz = args.signal_ghz
+    two_tone = _resolve_two_tone_configuration(args, omega_p)
+    signal_ghz = (
+        float(two_tone["f1_ghz"])
+        if two_tone is not None
+        else args.signal_ghz
+    )
     if signal_ghz is None:
         candidates = np.linspace(
             float(args.signal_ghz_min),
@@ -2004,8 +2446,14 @@ def _estimate_worker_footprint(
         signal_ghz = float(
             candidates[int(np.argmax(np.abs(candidates - args.pump_freq_ghz)))]
         )
-    omega_s = 2.0 * math.pi * float(signal_ghz) * 1e9
-    delta = (omega_p / 2.0 if args.multitone_lattice == "half_pump" else omega_p) - omega_s
+    delta = (
+        float(two_tone["delta"])
+        if two_tone is not None
+        else (
+            omega_p / 2.0 if args.multitone_lattice == "half_pump" else omega_p
+        )
+        - 2.0 * math.pi * float(signal_ghz) * 1e9
+    )
     if delta == 0.0:
         raise ValueError(
             f"signal frequency {signal_ghz} GHz coincides with the pump; "
@@ -2143,6 +2591,23 @@ def main(argv: list[str] | None = None) -> int:
         or args.imd_max_order % 2 == 0
     ):
         parser.error("--imd-max-order must be 0 or one of 3, 5, 7, 9, 11, 13, 15")
+    two_tone_flags = (
+        args.imd_two_tone_spacing_hz is not None,
+        args.imd_two_tone_frequencies_ghz is not None,
+        args.imd_tone_indices is not None,
+    )
+    if any(two_tone_flags):
+        has_spacing = args.imd_two_tone_spacing_hz is not None
+        has_frequencies = args.imd_two_tone_frequencies_ghz is not None
+        if args.imd_tone_indices is None or has_spacing == has_frequencies:
+            parser.error(
+                "two-tone IMD requires --imd-tone-indices and exactly one of "
+                "--imd-two-tone-spacing-hz/--imd-two-tone-frequencies-ghz"
+            )
+    if args.imd_tone2_amplitude_ratio <= 0.0 or not np.isfinite(
+        args.imd_tone2_amplitude_ratio
+    ):
+        parser.error("--imd-tone2-amplitude-ratio must be finite and positive")
     if (args.signal_power_min_dbm is None) != (args.signal_power_max_dbm is None):
         parser.error("--signal-power-min-dbm and --signal-power-max-dbm must be given together")
     if args.signal_power_min_dbm is not None and (
@@ -2151,8 +2616,24 @@ def main(argv: list[str] | None = None) -> int:
         parser.error(
             "--signal-power-min/max-dbm and --signal-current-min/max-a are mutually exclusive"
         )
-    if args.n_signal_freq == 1 and args.signal_ghz is None:
+    two_tone_requested = any(two_tone_flags)
+    if args.force_single_tone and two_tone_requested:
+        parser.error("--force-single-tone cannot be combined with two-tone IMD")
+    if (
+        args.n_signal_freq == 1
+        and args.signal_ghz is None
+        and not two_tone_requested
+        and not args.force_single_tone
+    ):
         parser.error("--signal-ghz is required for a single-frequency run")
+    if two_tone_requested and args.n_signal_freq != 1:
+        parser.error("two-tone IMD is supported only for one signal-frequency run")
+    if two_tone_requested:
+        try:
+            q1, q2 = _parse_two_tone_indices(args.imd_tone_indices)
+            enumerate_two_tone_im_products(args.imd_max_order, q1, q2)
+        except ValueError as error:
+            parser.error(str(error))
     args.factor_backend = _select_factor_backend(args, max(args.n_signal_freq, 1))
     # The preconditioner is constructed deep inside the problem, and frequency
     # workers are separate processes, so the choice travels as an environment
@@ -2167,7 +2648,7 @@ def main(argv: list[str] | None = None) -> int:
                 json.dumps(summary, indent=2, default=str), encoding="utf-8"
             )
         return 0
-    if args.n_signal_freq > 1:
+    if args.n_signal_freq > 1 and not args.force_single_tone:
         summary = _run_frequency_sweep(args)
         if args.summary_json:
             args.summary_json.write_text(json.dumps(summary, indent=2), encoding="utf-8")

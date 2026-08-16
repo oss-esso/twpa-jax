@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
+
+import numpy as np
 
 import pytest
 
+from twpa_solver.multitone.basis import ToneIndex
 from twpa_solver.multitone.resources import ResourceLimitExceeded
 
 from scripts import run_compression
@@ -17,10 +21,45 @@ from scripts.run_compression import (
     _resolve_attenuation,
     _resolve_pump_current_a,
     _resolve_signal_current_bracket_a,
+    _resolve_two_tone_configuration,
     _small_signal_floor_delta_db,
     build_parser,
     main,
 )
+
+
+def test_pump_current_sweep_records_failure_and_continues(tmp_path, monkeypatch):
+    calls = []
+
+    def fake_write(args):
+        calls.append(args.pump_current_a)
+        if args.pump_current_a == 1.0e-6:
+            raise RuntimeError("pump continuation failed before the multitone solve")
+        args.output_dir.mkdir(parents=True, exist_ok=True)
+        return {
+            "pump_current_a": args.pump_current_a,
+            "signal_ghz": args.signal_ghz,
+            "status": "VALID_SOLVED",
+            "small_signal_gain_db": 1.0,
+        }
+
+    monkeypatch.setattr(run_compression, "_write_one_result", fake_write)
+    args = SimpleNamespace(
+        pump_current_list=[1.0e-6, 2.0e-6], output_dir=tmp_path,
+        pump_current_jc_scale=1.0, n_signal_freq=1,
+        force_single_tone=False, signal_ghz=4.5,
+        signal_ghz_min=None, signal_ghz_max=None, factor_backend="pardiso",
+        multitone_basis="matched", multitone_sidebands=6,
+    )
+    summary = run_compression._run_pump_current_sweep(args)
+    assert calls == [1.0e-6, 2.0e-6]
+    assert [row["status"] for row in summary["results"]] == [
+        "PUMP_CONTINUATION_FAILED", "VALID_SOLVED"
+    ]
+    failure = json.loads(
+        (tmp_path / "pump_000_1e-06a" / "compression_summary.json").read_text()
+    )
+    assert failure["failure_reason"].startswith("pump continuation failed")
 
 
 def test_pump_power_dbm_rejects_explicit_current() -> None:
@@ -54,6 +93,24 @@ def test_imd_order_three_extends_matched_basis_by_one_tone() -> None:
     extended = _build_multitone_basis(imd_args, list(range(1, 20, 2)), 2.0 * 3.141592653589793 * 7e9, 2.0 * 3.141592653589793 * 1e9)
     assert extended.n_tones == plain.n_tones + 1
     assert len(imd_args._imd_tones_added) == 1
+
+
+def test_two_tone_lattice_requires_and_carries_all_products() -> None:
+    args = build_parser().parse_args(
+        [
+            "--output-dir", "unused", "--pump-freq-ghz", "7.0",
+            "--imd-max-order", "5", "--imd-tone-indices", "5,7",
+            "--imd-two-tone-spacing-hz", "1e8", "--multitone-basis", "lattice",
+            "--multitone-sidebands", "11",
+        ]
+    )
+    omega_p = 2.0 * 3.141592653589793 * 7.0e9
+    config = _resolve_two_tone_configuration(args, omega_p)
+    assert config is not None
+    basis = _build_multitone_basis(args, [1, 3], omega_p, config["delta"])
+    assert all(
+        basis.index_of(ToneIndex(1, q)) >= 0 for q in (5, 7, 3, 9, 1, 11)
+    )
 
 
 def test_resolve_pump_current_prefers_explicit_current_over_power_and_default() -> None:
@@ -204,6 +261,96 @@ def test_multitone_preconditioner_defaults_exact_and_accepts_sector() -> None:
     assert sector.multitone_preconditioner == "floquet_sector"
     assert default.signal_ghz == 4.5
     assert default.p1db_power_tol_db == pytest.approx(0.1)
+
+
+def test_force_single_tone_flag_is_explicit_and_off_by_default() -> None:
+    parser = build_parser()
+    default = parser.parse_args(["--output-dir", "unused", "--signal-ghz", "4.5"])
+    forced = parser.parse_args(
+        ["--output-dir", "unused", "--signal-ghz", "4.5", "--force-single-tone"]
+    )
+    assert default.force_single_tone is False
+    assert forced.force_single_tone is True
+
+
+def test_force_single_tone_short_circuits_multitone_basis(monkeypatch) -> None:
+    args = build_parser().parse_args(
+        [
+            "--output-dir", "unused", "--fixture", "jpa",
+            "--signal-ghz", "4.5", "--pump-current-a", "1e-6",
+            "--force-single-tone",
+        ]
+    )
+    circuit = SimpleNamespace(port_to_index={1: 0})
+    metadata = {"pump_sources": [{"current_a": 1e-6}]}
+    monkeypatch.setattr(
+        run_compression,
+        "_load_source",
+        lambda _args: (circuit, metadata, "jpa"),
+    )
+    monkeypatch.setattr(
+        run_compression,
+        "kinetic_dc_branch_flux",
+        lambda _circuit, _current: np.zeros(1),
+    )
+    monkeypatch.setattr(
+        run_compression,
+        "_solve_pump_from_scratch",
+        lambda *_args: (
+            np.zeros((1, 1), dtype=np.complex128),
+            object(), [], object(),
+            {"method": "test", "steps": 1, "reached_target": True, "runtime_s": 0.0},
+        ),
+    )
+    monkeypatch.setattr(run_compression, "summarize_solution", lambda *_args: {})
+
+    def fail_if_entered(*_args):
+        raise AssertionError("multitone basis was entered despite --force-single-tone")
+
+    monkeypatch.setattr(run_compression, "_build_multitone_basis", fail_if_entered)
+    _rows, states, summary, _imd = run_compression._solve_compression(args)
+
+    assert _rows == []
+    assert "pump_only" in states
+    assert summary["single_tone_forced"] is True
+    assert summary["multitone_skipped"] is True
+
+
+@pytest.mark.slow
+def test_jtwpa_hard_point_fixed_four_step_fails_adaptive_passes() -> None:
+    args = build_parser().parse_args(
+        [
+            "--output-dir", "unused",
+            "--circuit-dir", "outputs/jc_doc_python_designs/jc_jtwpa",
+            "--pump-freq-ghz", "7.12",
+            "--signal-ghz", "6.62",
+            "--pump-current-a", "4.603781e-06",
+            "--source-port", "1", "--pump-port", "1", "--out-port", "2",
+            "--attenuation-db", "0", "--multitone-sidebands", "10",
+        ]
+    )
+    circuit, metadata, _ = run_compression._load_source(args)
+    pump_current = args.pump_current_a * args.pump_current_jc_scale
+    pump_state, _, reports, problem, info = run_compression._solve_pump_from_scratch(
+        args, circuit, metadata, 1, pump_current, 2.0 * 3.141592653589793 * 7.12e9,
+    )
+    fixed_solver = run_compression.HarmonicNewtonKrylovSolver(
+        run_compression.NewtonKrylovSettings(
+            newton_tol=1e-10, max_newton=20, gmres_rtol=1e-8, gmres_atol=0.0,
+            gmres_restart=20, gmres_maxiter=40, min_alpha=1.0 / 1024.0,
+            preconditioner="real_coupled", compute_time_residual=False,
+            verbose=False, continuation_predictor="none", jvp_mode="aft",
+            precond_reuse=1, precond_reuse_refresh_gmres=0,
+        )
+    )
+    _, fixed_reports = fixed_solver.solve_continuation(
+        problem, continuation_steps=4,
+    )
+
+    assert fixed_reports[-1].converged is False
+    assert reports[-1].converged is True
+    assert info["reached_target"] is True
+    assert pump_state.shape == problem.zeros().shape
 
 
 def test_signal_frequency_is_required() -> None:

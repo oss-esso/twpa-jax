@@ -58,6 +58,16 @@ def test_depletion_only_gain_is_converted_to_db() -> None:
     )
 
 
+def test_pump_fixed_signal_path_starts_from_the_pump_state() -> None:
+    pump = np.array([[1.0 + 0.0j]])
+    signal = np.array([[0.25 + 0.0j]])
+
+    path = AffineSourcePath.signal_turn_on_pump_fixed(pump, signal)
+
+    np.testing.assert_allclose(path.source(0.0), pump)
+    np.testing.assert_allclose(path.source(1.0), pump + signal)
+
+
 def test_spatial_depletion_null_matches_small_signal_profile() -> None:
     rows = [
         {
