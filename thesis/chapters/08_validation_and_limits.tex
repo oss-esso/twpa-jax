@@ -107,6 +107,309 @@ at a much weaker operating point. The production basis has \emph{not} passed a
 \SI{0.2}{\dB} convergence gate and must not be described as having done so.
 \end{caveat}
 
+\section{The domain of validity of the harmonic-balance ansatz}
+\label{sec:ansatz-validity}
+
+Every check so far asks whether the solver solves its equations correctly. This
+section asks a prior question: over what range of operating points is the
+harmonic-balance \emph{ansatz} --- amplitudes on a fixed frequency lattice ---
+capable of representing the waveform at all. No amount of Newton convergence
+answers that, because a converged solution on an inadequate lattice is
+converged to the wrong problem.
+
+\subsection{The instrument}
+
+The measurement needs a reference that assumes no lattice. The time-domain
+kernel of \cref{chap:numerics} is such a reference: it integrates the node
+equations directly, so its spectrum is whatever the circuit produces. Given a
+steady-state trace, define
+
+\begin{definition}[on-lattice fraction]
+For a pumped, signal-driven circuit with tone lattice
+$\omega_{(h,q)} = h\wp + q\ws$ (\cref{eq:tone-frequency}), the \emph{on-lattice
+fraction} is the share of in-band spectral power lying within one analysis
+window of some lattice node:
+\begin{equation}
+  \Lambda = \frac{\sum_{\,\omega \,\in\, \mathcal{W}} P(\omega)}
+                 {\sum_{\omega} P(\omega)},
+  \qquad
+  \mathcal{W} = \Bigl\{\omega : \min_{h,q}\,
+                 \bigl|\omega - \omega_{(h,q)}\bigr| \le w \Bigr\}.
+  \label{eq:on-lattice-fraction}
+\end{equation}
+\end{definition}
+
+$\Lambda$ is an upper bound on any harmonic-balance result at that operating
+point, and it requires no calibration: it is a ratio of powers within one
+spectrum, so the port convention, the line-loss model and the absolute power
+scale all cancel.
+
+Two refinements separate the ways the bound can fail. Admitting half-integer and
+third-integer pump nodes gives $\Lambda_{1/2}$ and $\Lambda_{1/3}$: a
+period-doubled state would lift $\Lambda_{1/2}$ close to unity, so if it does
+not, a period-2 basis cannot recover the missing power. And the residue
+$1-\Lambda$ is characterised by the share of off-lattice power held by its
+twenty strongest bins, and by a scan over one extra generator $f_a$ asking how
+much of the residue falls on $n\wp + m\ws + k\,\omega_a$. Discrete residue
+concentrates and fits a generator --- the signature of a torus, representable by
+a three-frequency balance. A raised continuum does neither and is representable
+by nothing.
+
+The measurement is \code{scripts/chaos/measure\_ansatz\_validity.py}; the
+campaign it reduces covers four devices and \num{68} operating points.
+
+\subsection{Result: the ansatz is exact where the device is useful}
+
+\begin{measured}[on-lattice fraction below the transition]
+\begin{center}
+\begin{tabular}{@{}l l r r@{}}
+\toprule
+Device & Control range & $\Lambda$ & Gain [\si{\dB}] \\
+\midrule
+\code{jc\_jtwpa}     & $-30.5 \to \SI{-28.2}{dBm}$ & $1.0000 \to 0.9233$ & $13.9 \to 36.1$ \\
+\code{jc\_fqjtwpa}   & $-33.7 \to \SI{-31.5}{dBm}$ & $1.0000 \to 0.9346$ & $27.1 \to 31.0$ \\
+\code{ipm\_2c\_fixed}& $0.450 \to 0.575\,I_{\mathrm{bound}}$ & $1.0000$ & $8.2 \to 13.2$ \\
+\code{guarcello}     & $-70 \to \SI{-54}{dBm}$ & $1.0000$ & $0.02 \to 8.5$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+The off-lattice floor over these ranges sits \num{112} to \SI{226}{\dB} below the
+pump.
+\end{measured}
+
+Across every device, throughout the amplifying regime, the waveform is on the
+production tone lattice to four decimal places. Whatever else limits the results
+of \cref{chap:saturation}, the choice of ansatz does not.
+
+\subsection{Result: the transition is not a period doubling}
+
+Above a sharply defined threshold the two travelling-wave devices lose the
+lattice entirely, within a single \SI{0.4}{dB} step of pump power.
+
+\begin{measured}[at and above the transition]
+\begin{center}
+\begin{tabular}{@{}l r r r r@{}}
+\toprule
+Lattice admitted & \code{jc\_jtwpa} & \code{jc\_fqjtwpa} & \code{ipm\_2c\_fixed} & \code{guarcello} \\
+\midrule
+$n\wp + m\ws$              & $0.056$ & $0.051$ & $0.76$--$0.91$ & $0.90$--$0.98$ \\
+$+$ half-integers          & $0.104$ & $0.095$ & $+0.005$ & $+0.004$ \\
+$+$ thirds                 & $0.151$ & $0.159$ & $+0.008$ & $+0.006$ \\
+\midrule
+Top-20 share of residue    & $0.024$ & $0.032$ & $0.36$--$0.72$ & $0.27$ \\
+Best single generator      & $0.262$ & $0.268$ & $0.52$--$0.78$ & $0.475$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+\end{measured}
+
+Admitting half-integer pump nodes recovers \num{4.8} and \num{4.5} percentage
+points on the two travelling-wave devices, and under one point on the other two.
+A period-doubled state would have produced the opposite result.
+
+\begin{caveat}[no period-\emph{N} ansatz is justified by this evidence]
+The dormant period-doubling scaffolding of \cref{chap:saturation} ---
+\code{build\_half\_pump\_basis}, the period-doubled pump basis, its branch
+continuation and its small-signal solve --- stays dormant. The measurement above
+is the direct test of the hypothesis those modules exist to serve, and it fails
+it. Enabling them would require a tracked Floquet multiplier crossing, not a
+loss of convergence.
+\end{caveat}
+
+Nor is the collapsed state a torus. Its twenty strongest off-lattice bins hold
+\SI{2.4}{\percent} of the off-lattice power, and the best single extra generator
+explains \SI{26}{\percent} --- both consistent with a continuum, whose floor sits
+only $13$ to \SI{18}{\dB} below the pump. This is the regime in which harmonic
+balance of any order has nothing to offer, and the time-domain kernel is the
+only available instrument.
+
+\subsection{Result: a torus exists, and the window is narrow}
+
+Between the two regimes there is a band in which the residue is small and
+\emph{discrete}.
+
+\begin{measured}[\code{jc\_jtwpa}, approaching the transition]
+\begin{center}
+\begin{tabular}{@{}r r r r r@{}}
+\toprule
+$P_p$ [\si{dBm}] & Gain [\si{\dB}] & $1-\Lambda$ & Top-20 share & Generator fit \\
+\midrule
+$-29.3$ & $27.4$ & $0.009$ & $0.948$ & $0.999$ \\
+$-28.9$ & $31.4$ & $0.027$ & $0.869$ & $0.999$ \\
+$-28.6$ & $34.1$ & $0.044$ & $0.612$ & $0.872$ \\
+$-28.2$ & $36.1$ & $0.077$ & $0.371$ & $0.627$ \\
+$-27.8$ & $-6.0$ & $0.944$ & $0.024$ & $0.262$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+\end{measured}
+
+A second incommensurate frequency is born roughly \SI{1.1}{\dB} of pump power
+before the collapse, and never carries more than \SI{7.7}{\percent} of the power
+before the continuum replaces it. A quasi-periodic formulation --- the existing
+two-frequency lattice with the second frequency promoted from a prescribed
+detuning to an unknown, closed by an auxiliary-generator condition --- would
+extend the representable range by about that much and no further. That is a real
+extension with a measured, and modest, size.
+
+\subsection{An unresolved gain disagreement, and how it was narrowed}
+\label{sec:gain-gap}
+
+The same comparison that validates the ansatz exposes a disagreement in the
+quantity the solver exists to compute. At matched operating points, harmonic
+balance and the time-domain kernel do not report the same gain.
+
+The raw discrepancy is large, and four candidate explanations were tested. Three
+are settled.
+
+\paragraph{The analysis window is not the cause.} The campaign fits the signal
+tone over the last \num{100} pump periods. Re-extracting the identical traces
+over \num{200}, \num{400} and \num{800} periods moves the result by at most
+\SI{0.5}{\dB} throughout the amplifying regime.
+
+\paragraph{Sideband truncation is not the cause.} At the matched point, the
+multitone small-signal gain is converged in $S$: \SI{0.012}{\dB} between $S=10$
+and $S=12$ (\cref{sec:jc-retraction}).
+
+\paragraph{The probe was partly compressing, and the kernel has a signal-tone
+floor.} The campaign drove a probe of \SI{3e-8}{\ampere} against a pump of
+\SI{3.9e-6}{\ampere}. Lowering the probe by successive decades reveals both a
+real compression and a hard measurement floor:
+
+\begin{measured}[\code{jc\_jtwpa}, $f_p=\SI{7.12}{\giga\hertz}$: output amplitude at $\ws$]
+\begin{center}
+\begin{tabular}{@{}r r r r l@{}}
+\toprule
+Probe [\si{\ampere}] & Drive [\si{\volt}] & \multicolumn{1}{c}{$\SI{-30.1}{dBm}$} & \multicolumn{1}{c}{$\SI{-29.7}{dBm}$} & Behaviour \\
+\midrule
+\num{3e-8}  & \num{1.50e-6} & \num{6.07e-6} & \num{1.10e-5} & signal \\
+\num{3e-9}  & \num{1.50e-7} & \num{7.46e-7} & \num{1.47e-6} & signal $+$ floor \\
+\num{3e-10} & \num{1.50e-8} & \num{2.73e-7} & \num{3.52e-7} & floor-dominated \\
+\num{3e-11} & \num{1.50e-9} & \num{2.34e-7} & \num{2.57e-7} & floor \\
+\num{3e-12} & \num{1.50e-10} & \num{2.30e-7} & \num{2.49e-7} & floor \\
+\bottomrule
+\end{tabular}
+\end{center}
+Over four decades of drive the output stops responding below
+\SI{3e-10}{\ampere} and settles at \num{2.3e-7} to \SI{2.5e-7}{\volt}, moving
+\SI{1.6}{} to \SI{3.4}{\percent} across the last factor of ten. The
+\SI{3e-12}{\ampere} probe accordingly reports a ``gain'' of \SI{63.7}{} and
+\SI{64.4}{\dB}. That level does \emph{not} fall as the analysis window
+lengthens, so it is not window leakage: it is undamped content at the signal
+frequency, consistent with the ramp transient that this kernel's
+non-\hbox{$L$-stable} integrator never removes (\cref{chap:numerics}). It is
+slightly higher at the higher pump power, as parametrically amplified residue
+should be.
+\end{measured}
+
+Two consequences. Probes at or below \SI{3e-10}{\ampere} measure the floor and
+their gains --- which rise without bound as the probe shrinks --- are spurious.
+And after subtracting the floor in quadrature, the \SI{3e-8}{\ampere} probe is
+compressed by \SI{1.2}{\dB} at \SI{-30.1}{dBm} and \SI{2.3}{\dB} at
+\SI{-29.7}{dBm}.
+
+\paragraph{The reference column was not converged in $S$.} The harmonic-balance
+column this comparison was first made against inherits \code{--sidebands 6}, the
+gain-map default, which nothing in that driver overrides. Its numbers are
+therefore $S=6$, roughly \SI{1.4}{\dB} below the converged value. Re-solving at
+the \emph{same} pump current confirms both facts at once:
+
+\begin{measured}[multitone versus Floquet at $I_p = \SI{3.8806468570637416e-6}{\ampere}$]
+\begin{center}
+\begin{tabular}{@{}l r@{}}
+\toprule
+Path & Gain [\si{\dB}] \\
+\midrule
+Floquet column, $S=6$      & $29.140947$ \\
+Multitone, $S=6$           & $29.141$ \\
+Multitone, $S=10$          & $30.542$ \\
+Multitone, $S=12$          & $30.554$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+Same-$S$ parity holds to \SI{0.0002}{\dB}, and the pump utilisation agrees to
+eleven significant figures ($0.6167509694508315$ against $0.6167509694519268$).
+\end{measured}
+
+Same-$S$ multitone/Floquet parity is therefore intact, as the unit gate at
+$S=10$ on the JPA fixture already asserted to \SI{1e-4}{\dB}. What the reference
+column measures is a $S=6$ truncation, and comparing it against a converged
+multitone solve is not a parity test.
+
+Correcting for that, and comparing at the time-domain run's \emph{own} achieved
+on-chip pump current so that no power convention enters:
+
+\paragraph{The cause was the kernel's timestep.} The one candidate that could
+not be excluded by inspection was the time-domain step itself, which for this
+device has \emph{no} independent validation: the linear-limit check of
+\cref{chap:numerics} is degenerate on \code{jc\_jtwpa}, because setting $I_c=0$
+removes its only inductive path, so both sides return exactly zero. Halving the
+step settles it.
+
+\begin{measured}[gain versus timestep, at a \SI{3e-9}{\ampere} probe]
+\begin{center}
+\begin{tabular}{@{}r r r r r r@{}}
+\toprule
+$P_p$ [\si{dBm}] & $I_p$ [\si{\ampere}] & $\Delta\theta=0.01$ & $\Delta\theta=0.005$ & Model $S{=}12$ & Residual \\
+\midrule
+$-30.1$ & \num{3.701475e-6} & $19.996$ & $24.916$ & $27.743$ & \SI{2.83}{\dB} \\
+$-29.7$ & \num{3.873843e-6} & $25.891$ & $29.585$ & $30.440$ & \SI{0.86}{\dB} \\
+\bottomrule
+\end{tabular}
+\end{center}
+All gains are \code{gain\_vs\_off\_db}, a pump-on/pump-off ratio, and are
+therefore invariant under the port-power convention and the line-loss model.
+Halving the step moves the time domain \SI{+4.9}{} and \SI{+3.7}{\dB}, toward
+the model in both cases, cutting the disagreement by factors of \num{2.7} and
+\num{5.3}. Junction utilisation moves by less than \SI{0.5}{\percent} over the
+same refinement ($0.5856 \to 0.5883$ and $0.6114 \to 0.6125$).
+\end{measured}
+
+That last line is the diagnostic point. The pump state was never in question ---
+it agreed with harmonic balance to better than \SI{1}{\percent} at both steps.
+What was under-resolved is the small-signal response, which is exactly where the
+utilisation agreement had already localised the fault.
+
+\begin{caveat}[the timestep is not yet converged]
+The residual disagreement is still falling with the step and the sequence has
+only two points, so no convergence order can be fitted and the remaining
+\SI{0.9}{}--\SI{2.8}{\dB} must not be reported as a physical discrepancy. The
+precedent on the one device where the linear-limit check does apply is that the
+required step was four times finer than the default; a third point at
+$\Delta\theta = 0.0025$ is required before any residual gap is claimed.
+
+Two corrections follow for anyone reading earlier drafts. A \SI{4.8}{}--%
+\SI{8.4}{\dB} gap ``with the model reading high'' was reported here on the
+$\Delta\theta = 0.01$ data and is withdrawn: most of it was discretisation. And
+the floor-corrected time-domain values that gap was computed from carried a
+\SI{\pm1.4}{\dB} quadrature assumption that is now moot, since the timestep
+effect is several times larger than the correction it was competing with.
+\end{caveat}
+
+A separate inconsistency surfaced by the same comparison: the recorded pump
+utilisation for FQJTWPA runs \num{0.086}--\num{0.151} across its whole converged
+column while the time domain reports \num{0.62}--\num{0.89} at the same points,
+and the harmonic-balance sequence is not even monotone in pump power. The JTWPA
+column, checked above, shows no such problem. The FQJTWPA figure is not usable
+as a boundary diagnostic until that is explained.
+
+\subsection{What this section does and does not establish}
+
+\begin{caveat}[an independent implementation, not an independent measurement]
+The time-domain kernel and the harmonic-balance solver share this repository's
+circuit matrices, builders and loss models. They do not share a frequency
+ansatz, a time discretisation or a solution method, so the comparison is
+informative about the ansatz specifically. It remains cross-code agreement in
+the sense of \cref{sec:jc-retraction} and is \emph{not} external physical
+validation.
+\end{caveat}
+
+The kernel's own timestep is verified per device against an analytic linear
+limit (\cref{chap:numerics}); \code{ipm\_2c\_fixed} passes at
+\SI{0.76}{\percent}. That check is degenerate on the two \code{jc\_*} devices,
+which therefore carry no independent linear validation of their own --- a gap
+this section inherits rather than closes.
+
 \section{What has been retracted}
 
 \subsection{Cross-code agreement is not validation}
@@ -139,10 +442,36 @@ Gain [\si{\dB}] & $30.7152$ & $24.2021$ & $26.5563$ & $27.5410$ \\
 \end{tabular}
 \end{center}
 Without an external reference, $S=10$ cannot be selected from that sequence by
-agreement. Selecting it requires a self-convergence argument --- $S=10$ against
-$S=12$ and $S=14$ --- which has never been run. Non-monotonicity means $S=10$
-may still be climbing. The 2c device never had a cross-code reference at all and
-inherited $S=10$ by analogy.
+agreement. Selecting it requires a self-convergence argument. Non-monotonicity
+means $S=10$ may still be climbing. The 2c device never had a cross-code
+reference at all and inherited $S=10$ by analogy.
+\end{caveat}
+
+That argument has since been run for both devices, and it succeeds. For 2c, at
+$f_p = \SI{7.100}{\giga\hertz}$ and three signal frequencies, $S=10$, $12$ and
+$14$ agree on both $G_0$ and $P_{1\mathrm{dB}}$ to below \SI{1e-6}{\dB}. For
+JTWPA, at $f_p = \SI{7.12}{\giga\hertz}$ and
+$I_p = \SI{3.873843e-6}{\ampere}$:
+
+\begin{measured}[JTWPA small-signal gain versus sideband count]
+\begin{center}
+\begin{tabular}{@{}r r r r r r@{}}
+\toprule
+$S$ & 4 & 6 & 8 & 10 & 12 \\
+\midrule
+Gain [\si{\dB}] & $27.539$ & $29.067$ & $30.300$ & $30.428$ & $30.440$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+Monotone throughout, with $S=10 \to S=12$ moving \SI{0.012}{\dB}.
+\end{measured}
+
+\begin{caveat}[what the sequence above does and does not settle]
+It is measured at one operating point on one device, with the pump basis held
+at its production value. It establishes that $S=10$ is converged \emph{there},
+which is what the results of \cref{chap:saturation} require. It does not explain
+the non-monotone sequence quoted above, which was measured at a different
+operating point and remains unexplained.
 
 Same-$S$ multitone/Floquet parity remains a valid internal check and should
 still pass.

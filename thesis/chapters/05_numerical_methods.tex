@@ -386,6 +386,54 @@ non-converged point. The non-converged waveform does not sustain the gain, which
 is what one expects near a real transition rather than a mere solver miss.
 \end{caveat}
 
+\subsection{The ladder is not wired into every driver}
+\label{sec:ladder-not-wired}
+
+The recovery machinery above lives in the gain-map driver. The compression
+driver solves its pump with a fixed four-step natural-parameter ladder and
+raises when the last step stalls, with no adaptive fallback. The difference is
+not cosmetic.
+
+At the \code{jc\_jtwpa} operating point $f_p = \SI{7.12}{\giga\hertz}$,
+$I_p = \SI{4.603781e-6}{\ampere}$, a time-domain reference shows a clean
+period-1 waveform whose on-lattice fraction is $0.9233$
+(\cref{sec:ansatz-validity}) --- a solution demonstrably exists. Driving the
+identical problem, basis and Newton settings through different continuation
+strategies:
+
+\begin{measured}[continuation strategy at a point where a solution exists]
+\begin{center}
+\begin{tabular}{@{}l l r l r@{}}
+\toprule
+Strategy & Outcome & $\lambda$ reached & Final $\|\cdot\|_{\mathrm{rel}}$ & Time [\si{\second}] \\
+\midrule
+Fixed ladder, 4 steps  & stalled & $1.0000$ & \num{1.762e-1} & $11.7$ \\
+Fixed ladder, 8 steps  & stalled & $0.8750$ & \num{3.869e-2} & $20.9$ \\
+Fixed ladder, 16 steps & stalled & $0.9375$ & \num{1.889e-2} & $38.0$ \\
+Fixed ladder, 32 steps & stalled & $0.9375$ & \num{2.144e-2} & $62.3$ \\
+\textbf{Adaptive}      & \textbf{reached} & $\mathbf{1.0000}$ & \num{8.420e-12} & $94.1$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+The adaptive run required accepted steps as small as $\Delta\lambda = 0.004454$.
+\end{measured}
+
+Two things follow. Refining a \emph{fixed} ladder does not help --- 32 steps
+does no better than 8, because the difficulty is concentrated in a short
+interval that uniform stepping cannot resolve. And the adaptive fallback that
+the compression driver \emph{does} use, further down its own signal path, is
+configured with a minimum step of $0.01$, more than twice the smallest step this
+point needed; it is structurally unable to cross this boundary regardless of how
+long it is given.
+
+\begin{caveat}[a convergence failure that was read as physics]
+This point was previously recorded as the operating boundary of the device. It
+is a property of the ladder. The general lesson of the terminology caveat above
+applies to the solver's own drivers, not only to its users: before a
+non-convergence is reported as a boundary, the recovery machinery that exists
+must actually have been applied to it.
+\end{caveat}
+
 \section{Hardware and reproducibility}
 \label{sec:hardware}
 
