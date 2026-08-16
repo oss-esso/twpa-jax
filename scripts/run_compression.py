@@ -30,6 +30,11 @@ from twpa_solver.multitone.basis import (
     build_sideband_matched_basis,
     build_three_tone_basis,
 )
+from twpa_solver.multitone.imd import (
+    enumerate_im_products,
+    extend_basis_with_im_tones,
+    required_new_tones,
+)
 from twpa_solver.multitone.compression import solve_signal_power_point
 from twpa_solver.multitone.compression_curve import (
     build_compression_curve,
@@ -38,6 +43,7 @@ from twpa_solver.multitone.compression_curve import (
     refine_p1db,
 )
 from twpa_solver.multitone.observables import (
+    imd_products_dbc,
     power_balance,
     spatial_profile_summary,
     spatial_profiles,
@@ -140,6 +146,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="Use the physical-pump lattice or a half-pump fundamental lattice.",
     )
     parser.add_argument("--multitone-sidebands", type=int, default=2)
+    parser.add_argument(
+        "--imd-max-order",
+        type=int,
+        default=0,
+        help=(
+            "Emit intermodulation products through odd order 3, 5, 7, 9, 11, 13, or 15. "
+            "0 disables IMD and leaves the basis unchanged."
+        ),
+    )
     parser.add_argument("--resource-budget-gb", type=float, default=8.0)
     parser.add_argument(
         "--multitone-backend",
@@ -533,6 +548,18 @@ def _build_multitone_basis(
         )
     else:
         basis = build_three_tone_basis(omega_p, delta)
+    imd_order = int(getattr(args, "imd_max_order", 0))
+    if imd_order:
+        products = enumerate_im_products(imd_order, omega_p, delta)
+        added = required_new_tones(products, basis)
+        basis = extend_basis_with_im_tones(basis, products)
+        args._imd_tones_added = added
+        logger.info(
+            "IMD basis extension: order=%d added=%d n_tones=%d n_p=%d n_delta=%d",
+            imd_order, len(added), basis.n_tones, basis.n_p, basis.n_delta,
+        )
+    else:
+        args._imd_tones_added = []
     scale = basis.pump_tone.h
     represented_modes = {tone.h // scale for tone in basis.tones if tone.q == 0 and tone.h % scale == 0}
     missing_modes = sorted(set(pump_modes) - represented_modes)
@@ -776,6 +803,12 @@ def _solve_compression(
     omega_s = 2.0 * math.pi * args.signal_ghz * 1e9
     delta = (omega_p / 2.0 if args.multitone_lattice == "half_pump" else omega_p) - omega_s
     basis = _build_multitone_basis(args, pump_basis.modes, omega_p, delta)
+    imd_products = (
+        enumerate_im_products(args.imd_max_order, omega_p, delta)
+        if args.imd_max_order
+        else []
+    )
+    imd_nan = {f"{product.label}_dbc": float("nan") for product in imd_products}
     pump_seed = promote_pump_solution(pump_state, pump_basis, basis)
     pump_source = MultiToneDrive(basis.pump_tone, circuit.port_to_index[pump_port], pump_current).to_coeffs(
         basis, circuit.node_count
@@ -998,6 +1031,19 @@ def _solve_compression(
             reference_X_full=pump_only_state_full,
             z0_ohm=args.z0_ohm,
         )
+        imd = (
+            imd_products_dbc(
+                state_full,
+                basis,
+                circuit,
+                imd_products,
+                out_port=out_port,
+                z0_ohm=args.z0_ohm,
+                dc_branch_flux=dc_branch_flux,
+            )
+            if imd_products
+            else {}
+        )
         residual_problem = FullMultiToneProblem(
             circuit,
             basis,
@@ -1021,8 +1067,10 @@ def _solve_compression(
             "depletion_model": depletion_model,
             "balance": balance,
             "hb_residual_rel": hb_residual_rel,
+            "imd": imd,
         }
     states: dict[str, np.ndarray] = {}
+    states["pump_only"] = pump_only_state_full
     state_by_current: dict[float, np.ndarray] = {}
     full_state_by_current: dict[float, np.ndarray] = {}
     points: list[dict[str, float]] = []
@@ -1098,6 +1146,7 @@ def _solve_compression(
                 "pump_reference_outgoing_power_w": float("nan"),
                 "pump_depletion_all_port_db": float("nan"),
             }
+            imd = dict(imd_nan)
             hb_residual_rel = float("nan")
         branch_flux = (circuit.Bphi.T @ state_full.T).T
         total_current = make_branch_law(circuit).current(branch_flux + dc_branch_flux[None, :])
@@ -1171,6 +1220,7 @@ def _solve_compression(
             "compression_status": compression_status,
             "recovery_rung": solved.used_recovery,
             "last_converged_signal_current_a": solved.last_converged_signal_current_a,
+            **(metrics.get("imd", imd_nan) if solved.status == "VALID_SOLVED" else imd_nan),
         })
         if index == len(currents) - 1:
             states["last"] = state_full
@@ -1570,6 +1620,31 @@ def _solve_compression(
         "recovery": args.recovery,
         "basis": basis.to_metadata(),
     }
+    if args.imd_max_order:
+        summary.update({
+            "imd_max_order": int(args.imd_max_order),
+            "imd_products": [
+                {
+                    "label": product.label,
+                    "order": product.order,
+                    "m": product.m,
+                    "n": product.n,
+                    "raw_tone": {"h": product.raw.h, "q": product.raw.q},
+                    "tone": {"h": product.tone.h, "q": product.tone.q},
+                    "frequency_hz": product.tone.omega(omega_p, delta) / (2.0 * math.pi),
+                    "conjugated": product.conjugated,
+                }
+                for product in imd_products
+            ],
+            "imd_tones_added": [
+                {"h": tone.h, "q": tone.q}
+                for tone in getattr(args, "_imd_tones_added", [])
+            ],
+            "imd_ratio_description": (
+                "Outgoing power ratio at one output port relative to the signal "
+                "tone; dBc is invariant under the source-power convention."
+            ),
+        })
     spatial_rows: list[dict[str, object]] = []
     if args.spatial_profiles:
         for label in ("zero_signal", "mid", "p1db"):
@@ -2062,6 +2137,12 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--pump-power-dbm and --pump-current-a are mutually exclusive")
     if args.pump_power_dbm is not None and args.pump_current_list:
         parser.error("--pump-power-dbm and --pump-current-list are mutually exclusive")
+    if args.imd_max_order != 0 and (
+        args.imd_max_order < 3
+        or args.imd_max_order > 15
+        or args.imd_max_order % 2 == 0
+    ):
+        parser.error("--imd-max-order must be 0 or one of 3, 5, 7, 9, 11, 13, 15")
     if (args.signal_power_min_dbm is None) != (args.signal_power_max_dbm is None):
         parser.error("--signal-power-min-dbm and --signal-power-max-dbm must be given together")
     if args.signal_power_min_dbm is not None and (
