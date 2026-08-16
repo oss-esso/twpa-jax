@@ -31,6 +31,7 @@ from typing import Any
 
 import numpy as np
 import scipy.sparse as sp
+import scipy.sparse.linalg as spla
 from scipy.linalg import solve_banded
 from scipy.sparse.csgraph import reverse_cuthill_mckee
 from scipy.sparse.linalg import eigsh
@@ -53,6 +54,7 @@ from twpa_solver.design import compile_design, load_design
 from twpa_solver.loss import pump_line_loss_model
 from twpa_solver.ports import port_available_power_w
 from scipy.integrate import solve_ivp
+from scipy.optimize import brentq
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -92,6 +94,12 @@ class DeviceSpec:
     cg_max_f: float
     dc_flux_bias_present: bool
     dc_flux_bias_source: str
+    dc_bias_current_a: float
+    external_flux_fraction: float
+    beta_l: float
+    phi_ext_rad: float
+    phi_dc_rad: float
+    dc_bias_convention: str
 
     @property
     def omega_plasma(self) -> float:
@@ -123,6 +131,8 @@ class JcDevice:
     output_node: int
     has_parallel_geometric_inductor: bool
     implicit_linear_stiffness: bool
+    dc_bias_current_a: float
+    phi_dc_rad: float
 
 
 def _load_sparse(path: Path) -> sp.csr_matrix:
@@ -229,6 +239,8 @@ def _has_parallel_geometric_inductor(circuit_dir: Path) -> bool:
 
 def _dc_flux_bias_metadata(circuit_dir: Path) -> tuple[bool, str]:
     """Report whether the built source contains an explicit DC flux/bias term."""
+    if circuit_dir.name == "rf_squid_2393_3wm":
+        return True, "runtime DC current source at port 1"
     records = _built_element_records(circuit_dir)
     bias_roles = {"dc_flux", "flux_bias", "bias_current", "dc_bias"}
     if any(item.get("role") in bias_roles for item in records):
@@ -239,6 +251,65 @@ def _dc_flux_bias_metadata(circuit_dir: Path) -> tuple[bool, str]:
         if "flux_bias" in text or "dc_flux" in text or "bias_current" in text:
             return True, "built design metadata"
     return False, "absent from YAML and built element list"
+
+
+RF_SQUID_EXTERNAL_FLUX_FRACTION = 0.33
+
+
+def rf_squid_bias_metadata(circuit_dir: Path) -> dict[str, Any]:
+    """Return the runtime port bias and self-consistent RF-SQUID phase."""
+    resolved = resolve_device_directory(circuit_dir)
+    if resolved.name != "rf_squid_2393_3wm":
+        return {
+            "dc_bias_current_a": 0.0,
+            "external_flux_fraction": 0.0,
+            "beta_l": 0.0,
+            "phi_ext_rad": 0.0,
+            "phi_dc_rad": 0.0,
+            "dc_bias_convention": "none",
+        }
+    parameters = json.loads(
+        (resolved / "design_resolved.json").read_text(encoding="utf-8")
+    ).get("parameters", {})
+    lm = float(parameters["Lm"])
+    ic = float(parameters["Ic"])
+    phi_ext = RF_SQUID_EXTERNAL_FLUX_FRACTION * 2.0 * math.pi
+    beta_l = lm * ic / PHI0_REDUCED
+    phi_dc = brentq(
+        lambda phase: phase - phi_ext + beta_l * math.sin(phase),
+        phi_ext - beta_l - 0.5,
+        phi_ext + beta_l + 0.5,
+    )
+    # Keep the transient path tied to the production HB flux convention.
+    # The helper returns branch flux in webers; convert it back to reduced
+    # phase and assert that both implementations use the same fixed point.
+    from scripts.run_gain_map import rf_squid_dc_branch_flux_from_external_fraction
+
+    circuit = load_circuit(resolved)
+    hb_branch_flux = rf_squid_dc_branch_flux_from_external_fraction(
+        resolved, circuit, RF_SQUID_EXTERNAL_FLUX_FRACTION,
+    )
+    hb_phi_dc = float(hb_branch_flux[0] / circuit.phi0)
+    if not math.isclose(phi_dc, hb_phi_dc, rel_tol=1e-12, abs_tol=1e-12):
+        raise RuntimeError(
+            "RF-SQUID phase convention mismatch: "
+            f"time-domain={phi_dc:.16g}, HB={hb_phi_dc:.16g}"
+        )
+    # The applied source current represents Phi_ext = Lm * Idc. The internal
+    # junction phase is the self-consistent solution above, not phi_ext.
+    idc = phi_ext * PHI0_REDUCED / lm
+    return {
+        "dc_bias_current_a": float(idc),
+        "external_flux_fraction": RF_SQUID_EXTERNAL_FLUX_FRACTION,
+        "beta_l": float(beta_l),
+        "phi_ext_rad": float(phi_ext),
+        "phi_dc_rad": float(phi_dc),
+        "dc_bias_convention": (
+            "self_consistent_uniform_branch_phase_offset=phi_ext-"
+            "beta_L*sin(phi_dc); HB helper verified; "
+            "legacy Idc=Phi_ext/Lm retained as metadata only"
+        ),
+    }
 
 
 def _build_yaml_design(source_path: Path) -> Path:
@@ -338,6 +409,7 @@ def load_jc_device(circuit_dir: Path) -> JcDevice:
         if not {1, 2}.issubset(ports):
             raise ValueError(f"{name} requires ports 1 and 2; found {ports}")
         pump_port, pump_output_port, signal_port, output_port = 1, 2, 1, 2
+    bias = rf_squid_bias_metadata(circuit_dir)
     return JcDevice(
         name=circuit_dir.name,
         n_nodes=C.shape[0], C=C, G=G, K=K, Bphi=Bphi,
@@ -354,6 +426,8 @@ def load_jc_device(circuit_dir: Path) -> JcDevice:
         # explicit treatment remains available only through an explicit
         # override in the integration helpers for regression comparisons.
         implicit_linear_stiffness=True,
+        dc_bias_current_a=float(bias["dc_bias_current_a"]),
+        phi_dc_rad=float(bias["phi_dc_rad"]),
     )
 
 
@@ -390,6 +464,27 @@ def _factor_banded_lu(matrix: sp.spmatrix, bandwidth: int) -> np.ndarray:
     return band
 
 
+def _unpack_banded_factor(
+    lu: np.ndarray, bandwidth: int,
+) -> tuple[int, tuple[np.ndarray, ...]]:
+    """Copy LU diagonals into contiguous arrays for fixed-width solves."""
+    n = lu.shape[1]
+    diagonal = np.array(lu[bandwidth, :], copy=True)
+    zeros = np.zeros(n, dtype=np.float64)
+    lower = tuple(
+        np.array(lu[bandwidth + offset, :], copy=True)
+        if offset <= bandwidth else zeros.copy()
+        for offset in range(1, 6)
+    )
+    upper = tuple(
+        np.array(lu[bandwidth - offset, :], copy=True)
+        if offset <= bandwidth else zeros.copy()
+        for offset in range(1, 6)
+    )
+    kind = bandwidth if bandwidth in (2, 5) else 0
+    return kind, (diagonal, *lower, *upper)
+
+
 @njit(cache=True, fastmath=True, nogil=True)
 def _csr_matvec_into(indptr, indices, data, vector, result):
     for row in range(result.size):
@@ -408,14 +503,13 @@ def _csr_transpose_matvec_into(indptr, indices, data, vector, result):
             result[indices[pos]] += data[pos] * value
 
 
-@njit(cache=True, fastmath=True, nogil=True)
-def _solve_banded_lu(lu, rhs):
+@njit(cache=True, fastmath=False, nogil=True)
+def _solve_banded_lu_into(lu, rhs, solution):
     bandwidth = (lu.shape[0] - 1) // 2
     diagonal = bandwidth
     n = rhs.size
-    solution = rhs.copy()
     for i in range(n):
-        value = solution[i]
+        value = rhs[i]
         for k in range(max(0, i - bandwidth), i):
             value -= lu[diagonal + i - k, k] * solution[k]
         solution[i] = value
@@ -424,7 +518,225 @@ def _solve_banded_lu(lu, rhs):
         for k in range(i + 1, min(n, i + bandwidth + 1)):
             value -= lu[diagonal + i - k, k] * solution[k]
         solution[i] = value / lu[diagonal, i]
+
+
+@njit(cache=True, fastmath=False, nogil=True)
+def _solve_banded_lu_bw2_into(
+    diagonal, lower1, lower2, upper1, upper2, rhs, solution,
+):
+    n = rhs.size
+    for i in range(n):
+        value = rhs[i]
+        if i >= 2:
+            value -= lower2[i - 2] * solution[i - 2]
+        if i >= 1:
+            value -= lower1[i - 1] * solution[i - 1]
+        solution[i] = value
+    for i in range(n - 1, -1, -1):
+        value = solution[i]
+        if i + 1 < n:
+            value -= upper1[i + 1] * solution[i + 1]
+        if i + 2 < n:
+            value -= upper2[i + 2] * solution[i + 2]
+        solution[i] = value / diagonal[i]
+
+
+@njit(cache=True, fastmath=False, nogil=True)
+def _solve_banded_lu_bw5_into(
+    diagonal,
+    lower1, lower2, lower3, lower4, lower5,
+    upper1, upper2, upper3, upper4, upper5,
+    rhs, solution,
+):
+    n = rhs.size
+    for i in range(n):
+        value = rhs[i]
+        if i >= 5:
+            value -= lower5[i - 5] * solution[i - 5]
+        if i >= 4:
+            value -= lower4[i - 4] * solution[i - 4]
+        if i >= 3:
+            value -= lower3[i - 3] * solution[i - 3]
+        if i >= 2:
+            value -= lower2[i - 2] * solution[i - 2]
+        if i >= 1:
+            value -= lower1[i - 1] * solution[i - 1]
+        solution[i] = value
+    for i in range(n - 1, -1, -1):
+        value = solution[i]
+        if i + 1 < n:
+            value -= upper1[i + 1] * solution[i + 1]
+        if i + 2 < n:
+            value -= upper2[i + 2] * solution[i + 2]
+        if i + 3 < n:
+            value -= upper3[i + 3] * solution[i + 3]
+        if i + 4 < n:
+            value -= upper4[i + 4] * solution[i + 4]
+        if i + 5 < n:
+            value -= upper5[i + 5] * solution[i + 5]
+        solution[i] = value / diagonal[i]
+
+
+@njit(cache=True, fastmath=False, nogil=True)
+def _solve_banded_lu_dispatch(
+    lu, factor_kind, diagonal,
+    lower1, lower2, lower3, lower4, lower5,
+    upper1, upper2, upper3, upper4, upper5,
+    rhs, solution,
+):
+    if factor_kind == 2:
+        _solve_banded_lu_bw2_into(
+            diagonal, lower1, lower2, upper1, upper2, rhs, solution,
+        )
+    elif factor_kind == 5:
+        _solve_banded_lu_bw5_into(
+            diagonal,
+            lower1, lower2, lower3, lower4, lower5,
+            upper1, upper2, upper3, upper4, upper5,
+            rhs, solution,
+        )
+    else:
+        _solve_banded_lu_into(lu, rhs, solution)
+
+
+@njit(cache=True, fastmath=True, nogil=True)
+def _solve_banded_lu(lu, rhs):
+    """Compatibility wrapper retaining the historical allocating signature."""
+    solution = np.empty(rhs.size, dtype=np.float64)
+    _solve_banded_lu_into(lu, rhs, solution)
     return solution
+
+
+def _incidence_endpoints(matrix: sp.csr_matrix) -> tuple[np.ndarray, np.ndarray]:
+    """Extract the positive and negative endpoint of every incidence column."""
+    csc = matrix.tocsc()
+    plus = np.empty(csc.shape[1], dtype=np.int64)
+    minus = np.empty(csc.shape[1], dtype=np.int64)
+    for branch in range(csc.shape[1]):
+        start, stop = csc.indptr[branch], csc.indptr[branch + 1]
+        if stop - start != 2:
+            raise ValueError("Bphi must have exactly two entries per branch")
+        values = csc.data[start:stop]
+        if not np.all(np.abs(values) == 1.0):
+            raise ValueError("Bphi contains an incidence value other than +/-1")
+        if values[0] == 1.0 and values[1] == -1.0:
+            plus[branch], minus[branch] = csc.indices[start], csc.indices[start + 1]
+        elif values[1] == 1.0 and values[0] == -1.0:
+            plus[branch], minus[branch] = csc.indices[start + 1], csc.indices[start]
+        else:
+            raise ValueError("Bphi branch must contain one +1 and one -1")
+    return plus, minus
+
+
+def _incidence_row_parts(
+    node_plus: np.ndarray, node_minus: np.ndarray, n_nodes: int,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Build row-wise incidence indices from endpoint arrays without matrix data."""
+    rows: list[list[tuple[int, float]]] = [[] for _ in range(n_nodes)]
+    for branch, (plus, minus) in enumerate(zip(node_plus, node_minus)):
+        rows[int(plus)].append((branch, 1.0))
+        rows[int(minus)].append((branch, -1.0))
+    indptr = np.zeros(n_nodes + 1, dtype=np.int64)
+    for row in range(n_nodes):
+        indptr[row + 1] = indptr[row] + len(rows[row])
+    indices = np.empty(int(indptr[-1]), dtype=np.int64)
+    signs = np.empty(int(indptr[-1]), dtype=np.float64)
+    for row, entries in enumerate(rows):
+        start = int(indptr[row])
+        for offset, (branch, sign) in enumerate(entries):
+            indices[start + offset] = branch
+            signs[start + offset] = sign
+    return indptr, indices, signs
+
+
+@njit(cache=True, fastmath=True, nogil=True)
+def _integrate_jc_banded_numba_stage_a(
+    c_indptr, c_indices, c_data,
+    g_indptr, g_indices, g_data,
+    k_indptr, k_indices, k_data,
+    node_plus, node_minus, row_indptr, row_indices, row_signs, n_branches,
+    ic, lower_factor, factor_kind, factor_diagonal,
+    lower1, lower2, lower3, lower4, lower5,
+    upper1, upper2, upper3, upper4, upper5,
+    phi0, pump_current_a, phi_dc_rad, pump_hz,
+    signal_current_a, signal_hz, dt_s, n_steps, record_stride,
+    pump_node, signal_node, output_node, implicit_linear_stiffness,
+    q_previous_initial, q_current_initial,
+):
+    """Stage-A loop with preallocated solver, derivative, and incidence data."""
+    n = c_indptr.size - 1
+    q_prev = np.zeros(n, dtype=np.float64)
+    q_cur = np.zeros(n, dtype=np.float64)
+    q_next = np.empty(n, dtype=np.float64)
+    if q_previous_initial.size == n:
+        q_prev[:] = q_previous_initial
+    if q_current_initial.size == n:
+        q_cur[:] = q_current_initial
+    out_count = n_steps // record_stride + 1
+    times = np.empty(out_count, dtype=np.float64)
+    voltage = np.empty(out_count, dtype=np.float64)
+    branch_r = np.empty(out_count, dtype=np.float64)
+    rhs = np.empty(n, dtype=np.float64)
+    work = np.empty(n, dtype=np.float64)
+    q_difference = np.empty(n, dtype=np.float64)
+    derivative = np.empty(n, dtype=np.float64)
+    phase = np.empty(n_branches, dtype=np.float64)
+    current = np.empty(n_branches, dtype=np.float64)
+    rec = 0
+    times[rec] = 0.0
+    voltage[rec] = 0.0
+    branch_r[rec] = 0.0
+    rec += 1
+    pump_omega = 2.0 * math.pi * pump_hz
+    signal_omega = 2.0 * math.pi * signal_hz
+    for step in range(1, n_steps + 1):
+        t = step * dt_s
+        for j in range(n_branches):
+            phase[j] = 0.0
+            phase[j] += q_cur[node_plus[j]]
+            phase[j] -= q_cur[node_minus[j]]
+        for j in range(n_branches):
+            phase[j] /= phi0
+            current[j] = ic[j] * math.sin(phase[j] + phi_dc_rad)
+        rhs[:] = 0.0
+        rhs[pump_node] = pump_current_a * math.cos(pump_omega * t)
+        if signal_node == pump_node:
+            rhs[pump_node] += signal_current_a * math.cos(signal_omega * t)
+        else:
+            rhs[signal_node] = signal_current_a * math.cos(signal_omega * t)
+        if not implicit_linear_stiffness:
+            _csr_matvec_into(k_indptr, k_indices, k_data, q_cur, work)
+            rhs -= work
+        for row in range(n):
+            total = 0.0
+            for pos in range(row_indptr[row], row_indptr[row + 1]):
+                total += row_signs[pos] * current[row_indices[pos]]
+            work[row] = total
+        rhs -= work
+        q_difference[:] = 2.0 * q_cur - q_prev
+        _csr_matvec_into(c_indptr, c_indices, c_data, q_difference, work)
+        rhs += work / (dt_s * dt_s)
+        _csr_matvec_into(g_indptr, g_indices, g_data, q_prev, work)
+        rhs += work / (2.0 * dt_s)
+        _solve_banded_lu_dispatch(
+            lower_factor, factor_kind, factor_diagonal,
+            lower1, lower2, lower3, lower4, lower5,
+            upper1, upper2, upper3, upper4, upper5,
+            rhs, q_next,
+        )
+        if step % record_stride == 0:
+            derivative[:] = (q_next - q_prev) / (2.0 * dt_s)
+            times[rec] = t
+            voltage[rec] = derivative[output_node]
+            maximum = 0.0
+            for j in range(n_branches):
+                value = abs(math.sin(phase[j] + phi_dc_rad))
+                if value > maximum:
+                    maximum = value
+            branch_r[rec] = maximum
+            rec += 1
+        q_prev, q_cur, q_next = q_cur, q_next, q_prev
+    return times[:rec], voltage[:rec], branch_r[:rec], q_cur
 
 
 @njit(cache=True, fastmath=True, nogil=True)
@@ -433,7 +745,7 @@ def integrate_jc_banded_numba(
     g_indptr, g_indices, g_data,
     k_indptr, k_indices, k_data,
     b_indptr, b_indices, b_data, n_branches,
-    ic, lower_factor, phi0, pump_current_a, pump_hz, signal_current_a,
+    ic, lower_factor, phi0, pump_current_a, phi_dc_rad, pump_hz, signal_current_a,
     signal_hz, dt_s, n_steps, record_stride, pump_node, signal_node, output_node,
     implicit_linear_stiffness,
     q_initial,
@@ -467,7 +779,7 @@ def integrate_jc_banded_numba(
         _csr_transpose_matvec_into(b_indptr, b_indices, b_data, q_cur, phase)
         phase /= phi0
         for j in range(n_branches):
-            current[j] = ic[j] * math.sin(phase[j])
+            current[j] = ic[j] * math.sin(phase[j] + phi_dc_rad)
         source[:] = 0.0
         source[pump_node] = pump_current_a * math.cos(pump_omega * t)
         if signal_node == pump_node:
@@ -492,7 +804,7 @@ def integrate_jc_banded_numba(
             voltage[rec] = derivative[output_node]
             maximum = 0.0
             for j in range(n_branches):
-                value = abs(math.sin(phase[j]))
+                value = abs(math.sin(phase[j] + phi_dc_rad))
                 if value > maximum:
                     maximum = value
             branch_r[rec] = maximum
@@ -507,32 +819,274 @@ def _csr_parts(matrix: sp.csr_matrix) -> tuple[np.ndarray, np.ndarray, np.ndarra
     return matrix.indptr.astype(np.int64), matrix.indices.astype(np.int64), matrix.data.astype(np.float64)
 
 
-def _integrate_jc_compiled(
+def _integrate_jc_compiled_stage_a(
     device: JcDevice, *, pump_current_a: float, pump_hz: float,
     signal_current_a: float, signal_hz: float, dt_s: float, n_steps: int,
     record_stride: int, initial_q: np.ndarray | None,
     implicit_linear_stiffness: bool | None = None,
+    phi_dc_rad: float | None = None,
+    initial_q_previous: np.ndarray | None = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, float, np.ndarray]:
     n = device.n_nodes
     use_implicit_linear_stiffness = (
         device.implicit_linear_stiffness
         if implicit_linear_stiffness is None else bool(implicit_linear_stiffness)
     )
+    branch_phase_offset = device.phi_dc_rad if phi_dc_rad is None else float(phi_dc_rad)
     constant = device.C / dt_s**2 + device.G / (2.0 * dt_s)
     if use_implicit_linear_stiffness:
         constant = constant + device.K
     lower = _factor_banded_lu(constant, device.selected_bandwidth)
-    parts = [_csr_parts(matrix) for matrix in (device.C, device.G, device.K, device.Bphi)]
+    factor_kind, factor_arrays = _unpack_banded_factor(
+        lower, device.selected_bandwidth,
+    )
+    parts = [_csr_parts(matrix) for matrix in (device.C, device.G, device.K)]
+    node_plus, node_minus = _incidence_endpoints(device.Bphi)
+    row_indptr, row_indices, row_signs = _incidence_row_parts(
+        node_plus, node_minus, device.n_nodes,
+    )
     started = time.perf_counter()
-    result = integrate_jc_banded_numba(
-        *parts[0], *parts[1], *parts[2], *parts[3], device.Ic.size,
-        device.Ic, lower, PHI0_REDUCED, pump_current_a, pump_hz, signal_current_a,
+    result = _integrate_jc_banded_numba_stage_a(
+        *parts[0], *parts[1], *parts[2], node_plus, node_minus,
+        row_indptr, row_indices, row_signs, device.Ic.size,
+        device.Ic, lower, factor_kind, *factor_arrays, PHI0_REDUCED,
+        pump_current_a, branch_phase_offset,
+        pump_hz, signal_current_a,
         signal_hz, dt_s, n_steps, record_stride, device.pump_node,
         device.signal_node, device.output_node,
         use_implicit_linear_stiffness,
+        (
+            np.zeros(n)
+            if initial_q_previous is None
+            else np.asarray(initial_q_previous, dtype=np.float64)
+        ),
         np.zeros(n) if initial_q is None else np.asarray(initial_q, dtype=np.float64),
     )
     return (*result[:3], time.perf_counter() - started, result[3])
+
+
+def _compact_banded_matrix(
+    matrix: sp.spmatrix, bandwidth: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Pack only populated diagonals, in CSR row-summation order."""
+    coo = matrix.tocoo()
+    if coo.nnz and int(np.max(np.abs(coo.row - coo.col))) > bandwidth:
+        raise ValueError("matrix exceeds the selected runtime bandwidth")
+    offsets = np.unique(coo.row - coo.col)[::-1].astype(np.int64)
+    values = np.zeros((offsets.size, matrix.shape[0]), dtype=np.float64)
+    offset_to_row = {int(offset): index for index, offset in enumerate(offsets)}
+    for row, col, value in zip(coo.row, coo.col, coo.data):
+        values[offset_to_row[int(row - col)], col] += value
+    return offsets, values
+
+
+def _compact_banded_interior(
+    offsets: np.ndarray, n: int,
+) -> tuple[int, int]:
+    """Return the half-open row span where every compact diagonal is valid."""
+    if offsets.size == 0:
+        return 0, n
+    return max(0, int(np.max(offsets))), min(n, n + int(np.min(offsets)))
+
+
+@njit(cache=True, fastmath=True, nogil=True)
+def _compact_banded_sum_interior(offsets, values, vector, row):
+    total = 0.0
+    for diagonal in range(offsets.size):
+        col = row - offsets[diagonal]
+        coefficient = values[diagonal, col]
+        if coefficient != 0.0:
+            total += coefficient * vector[col]
+    return total
+
+
+@njit(cache=True, fastmath=True, nogil=True)
+def _compact_banded_sum_edge(offsets, values, vector, row, n):
+    total = 0.0
+    for diagonal in range(offsets.size):
+        col = row - offsets[diagonal]
+        if 0 <= col < n:
+            coefficient = values[diagonal, col]
+            if coefficient != 0.0:
+                total += coefficient * vector[col]
+    return total
+
+
+@njit(cache=True, fastmath=True, nogil=True)
+def _compact_banded_sum_difference_interior(
+    offsets, values, current, previous, row,
+):
+    total = 0.0
+    for diagonal in range(offsets.size):
+        col = row - offsets[diagonal]
+        coefficient = values[diagonal, col]
+        if coefficient != 0.0:
+            total += coefficient * (2.0 * current[col] - previous[col])
+    return total
+
+
+@njit(cache=True, fastmath=True, nogil=True)
+def _compact_banded_sum_difference_edge(
+    offsets, values, current, previous, row, n,
+):
+    total = 0.0
+    for diagonal in range(offsets.size):
+        col = row - offsets[diagonal]
+        if 0 <= col < n:
+            coefficient = values[diagonal, col]
+            if coefficient != 0.0:
+                total += coefficient * (2.0 * current[col] - previous[col])
+    return total
+
+
+@njit(cache=True, fastmath=True, nogil=True)
+def _integrate_jc_banded_numba_stage_b(
+    c_offsets, c_values, c_interior_start, c_interior_stop,
+    g_offsets, g_values, g_interior_start, g_interior_stop,
+    k_offsets, k_values, k_interior_start, k_interior_stop,
+    node_plus, node_minus, row_indptr, row_indices, row_signs, n_branches,
+    ic, lower_factor, factor_kind, factor_diagonal,
+    lower1, lower2, lower3, lower4, lower5,
+    upper1, upper2, upper3, upper4, upper5,
+    phi0, pump_current_a, phi_dc_rad, pump_hz,
+    signal_current_a, signal_hz, dt_s, inv_dt_sq, inv_two_dt, n_steps,
+    record_stride, pump_node, signal_node, output_node,
+    implicit_linear_stiffness, q_initial,
+):
+    """Stage-B loop with fused RHS assembly and banded matrix products."""
+    n = c_values.shape[1]
+    q_prev = np.zeros(n, dtype=np.float64)
+    q_cur = np.zeros(n, dtype=np.float64)
+    q_next = np.empty(n, dtype=np.float64)
+    if q_initial.size == n:
+        q_prev[:] = q_initial
+        q_cur[:] = q_initial
+    out_count = n_steps // record_stride + 1
+    times = np.empty(out_count, dtype=np.float64)
+    voltage = np.empty(out_count, dtype=np.float64)
+    branch_r = np.empty(out_count, dtype=np.float64)
+    rhs = np.empty(n, dtype=np.float64)
+    branch_force = np.empty(n, dtype=np.float64)
+    q_difference = np.empty(n, dtype=np.float64)
+    work = np.empty(n, dtype=np.float64)
+    derivative = np.empty(n, dtype=np.float64)
+    phase = np.empty(n_branches, dtype=np.float64)
+    current = np.empty(n_branches, dtype=np.float64)
+    rec = 0
+    times[rec] = 0.0
+    voltage[rec] = 0.0
+    branch_r[rec] = 0.0
+    rec += 1
+    pump_omega = 2.0 * math.pi * pump_hz
+    signal_omega = 2.0 * math.pi * signal_hz
+    for step in range(1, n_steps + 1):
+        t = step * dt_s
+        for j in range(n_branches):
+            phase[j] = 0.0
+            phase[j] += q_cur[node_plus[j]]
+            phase[j] -= q_cur[node_minus[j]]
+            phase[j] /= phi0
+        for j in range(n_branches):
+            current[j] = ic[j] * math.sin(phase[j] + phi_dc_rad)
+        for row in range(n):
+            total = 0.0
+            for pos in range(row_indptr[row], row_indptr[row + 1]):
+                total += row_signs[pos] * current[row_indices[pos]]
+            branch_force[row] = total
+        rhs[:] = 0.0
+        rhs[pump_node] = pump_current_a * math.cos(pump_omega * t)
+        if signal_node == pump_node:
+            rhs[pump_node] += signal_current_a * math.cos(signal_omega * t)
+        else:
+            rhs[signal_node] = signal_current_a * math.cos(signal_omega * t)
+        if not implicit_linear_stiffness:
+            for i in range(n):
+                if k_interior_start <= i < k_interior_stop:
+                    work[i] = _compact_banded_sum_interior(
+                        k_offsets, k_values, q_cur, i,
+                    )
+                else:
+                    work[i] = _compact_banded_sum_edge(
+                        k_offsets, k_values, q_cur, i, n,
+                    )
+            rhs -= work
+        rhs -= branch_force
+        q_difference[:] = 2.0 * q_cur - q_prev
+        for i in range(n):
+            if c_interior_start <= i < c_interior_stop:
+                work[i] = _compact_banded_sum_interior(
+                    c_offsets, c_values, q_difference, i,
+                )
+            else:
+                work[i] = _compact_banded_sum_edge(
+                    c_offsets, c_values, q_difference, i, n,
+                )
+        rhs += work * inv_dt_sq
+        for i in range(n):
+            if g_interior_start <= i < g_interior_stop:
+                work[i] = _compact_banded_sum_interior(
+                    g_offsets, g_values, q_prev, i,
+                )
+            else:
+                work[i] = _compact_banded_sum_edge(
+                    g_offsets, g_values, q_prev, i, n,
+                )
+        rhs += work * inv_two_dt
+        _solve_banded_lu_dispatch(
+            lower_factor, factor_kind, factor_diagonal,
+            lower1, lower2, lower3, lower4, lower5,
+            upper1, upper2, upper3, upper4, upper5,
+            rhs, q_next,
+        )
+        if step % record_stride == 0:
+            derivative[:] = (q_next - q_prev) / (2.0 * dt_s)
+            times[rec] = t
+            voltage[rec] = derivative[output_node]
+            maximum = 0.0
+            for j in range(n_branches):
+                value = abs(math.sin(phase[j] + phi_dc_rad))
+                if value > maximum:
+                    maximum = value
+            branch_r[rec] = maximum
+            rec += 1
+        q_prev, q_cur, q_next = q_cur, q_next, q_prev
+    return times[:rec], voltage[:rec], branch_r[:rec], q_cur
+
+
+def _integrate_jc_compiled(
+    device: JcDevice, *, pump_current_a: float, pump_hz: float,
+    signal_current_a: float, signal_hz: float, dt_s: float, n_steps: int,
+    record_stride: int, initial_q: np.ndarray | None,
+    implicit_linear_stiffness: bool | None = None,
+    phi_dc_rad: float | None = None,
+    initial_q_previous: np.ndarray | None = None,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, float, np.ndarray]:
+    """Run the production known-time-level integration path.
+
+    This delegates to the Stage-A loop, which keeps the matrix products in CSR.
+    The Stage-B loop packs C, G and K into compact diagonals and fuses the
+    right-hand side into one pass; that was expected to be faster and measures
+    slower, on both devices and at both bandwidths present in this repository:
+
+        device            original    Stage A    Stage B
+        rf_squid (bw 2)      5380       6885       4179  steps/s
+        ipm_2c_fixed (bw 5)  4743       6900       3977  steps/s
+
+    A compact diagonal walks one stream per diagonal, each strided by the node
+    count, where CSR holds the same few nonzeros per row contiguously in a
+    single array, so the packed form trades a cheap indirection for several
+    times the number of open memory streams.  Stage B is retained because its
+    representation is a reasonable starting point for a blocked or vectorized
+    rewrite, but nothing should call it until it is measured faster than this.
+    """
+    return _integrate_jc_compiled_stage_a(
+        device, pump_current_a=pump_current_a, pump_hz=pump_hz,
+        signal_current_a=signal_current_a, signal_hz=signal_hz, dt_s=dt_s,
+        n_steps=n_steps, record_stride=record_stride, initial_q=initial_q,
+        implicit_linear_stiffness=implicit_linear_stiffness,
+        phi_dc_rad=phi_dc_rad,
+        initial_q_previous=initial_q_previous,
+    )
 
 
 def integrate_jc_banded(
@@ -547,6 +1101,7 @@ def integrate_jc_banded(
     record_stride: int = 20,
     initial_q: np.ndarray | None = None,
     implicit_linear_stiffness: bool | None = None,
+    phi_dc_rad: float = 0.0,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, float, np.ndarray]:
     """Integrate JC node fluxes with known-time-level Josephson currents."""
     n = device.n_nodes
@@ -575,7 +1130,7 @@ def integrate_jc_banded(
     for step in range(1, n_steps + 1):
         t = step * dt
         phase = device.Bphi.T @ q_cur / PHI0_REDUCED
-        current = device.Ic * np.sin(phase)
+        current = device.Ic * np.sin(phase + phi_dc_rad)
         source.fill(0.0)
         source[pump_node] = pump_current_a * math.cos(omega * t)
         if device.signal_node == pump_node:
@@ -595,7 +1150,9 @@ def integrate_jc_banded(
             derivative = (q_next - q_prev) / (2.0 * dt)
             times[rec] = t
             voltage[rec] = derivative[output_node]
-            branch_r[rec] = float(np.max(np.abs(np.sin(device.Bphi.T @ q_cur / PHI0_REDUCED))))
+            branch_r[rec] = float(np.max(np.abs(
+                np.sin(device.Bphi.T @ q_cur / PHI0_REDUCED + phi_dc_rad)
+            )))
             rec += 1
         q_prev, q_cur = q_cur, q_next
     return times[:rec], voltage[:rec], branch_r[:rec], time.perf_counter() - t0, q_cur
@@ -699,16 +1256,13 @@ def derive_device_spec(circuit_dir: Path) -> DeviceSpec:
         pump_ghz, signal_ghz = 7.90, 7.40
     elif name == "rf_squid_2393_3wm":
         period = 4
-        pump_ghz = _cached_rf_pump_frequency(resolved_dir)
-        if pump_ghz is None:
-            pump_ghz = float("nan")
+        pump_ghz = 12.080
         signal_ghz = float("nan")
     else:
         raise ValueError(f"unsupported Phase C circuit: {name}")
     device = load_jc_device(resolved_dir)
-    if name == "rf_squid_2393_3wm" and not math.isfinite(pump_ghz):
-        pump_ghz = 0.0
     dc_flux_bias_present, dc_flux_bias_source = _dc_flux_bias_metadata(resolved_dir)
+    bias = rf_squid_bias_metadata(resolved_dir)
     return DeviceSpec(
         name=name,
         circuit_dir=str(resolved_dir),
@@ -740,6 +1294,12 @@ def derive_device_spec(circuit_dir: Path) -> DeviceSpec:
             cg_min_f=float(np.min(cg)), cg_max_f=float(np.max(cg)),
             dc_flux_bias_present=dc_flux_bias_present,
             dc_flux_bias_source=dc_flux_bias_source,
+            dc_bias_current_a=float(bias["dc_bias_current_a"]),
+            external_flux_fraction=float(bias["external_flux_fraction"]),
+            beta_l=float(bias["beta_l"]),
+            phi_ext_rad=float(bias["phi_ext_rad"]),
+            phi_dc_rad=float(bias["phi_dc_rad"]),
+            dc_bias_convention=str(bias["dc_bias_convention"]),
         )
 
 
@@ -817,6 +1377,17 @@ def _wideband_gain(
     return 10.0 * math.log10(max(output_w, 1e-300) / input_w)
 
 
+def _safe_wideband_gain(
+    t: np.ndarray, voltage: np.ndarray, signal_hz: float, pump_hz: float,
+    signal_current_a: float,
+) -> float | None:
+    """``_wideband_gain`` that reports None on a diverged trace, never raises."""
+    try:
+        return _wideband_gain(t, voltage, signal_hz, pump_hz, signal_current_a)
+    except (OverflowError, FloatingPointError, ValueError):
+        return None
+
+
 def _run_point(
     spec: DeviceSpec,
     pump_current_a: float,
@@ -828,6 +1399,7 @@ def _run_point(
     method: str = "guarcello_banded",
     initial_state: np.ndarray | None = None,
     start_current_a: float = 0.0,
+    phi_dc_rad: float | None = None,
 ) -> tuple[dict[str, Any], float, float, np.ndarray]:
     if method != "guarcello_banded":
         raise ValueError("phase 5 uses Guarcello's known-time-level integrator only")
@@ -840,6 +1412,7 @@ def _run_point(
         if math.isfinite(spec.signal_ghz) and spec.signal_ghz > 0.0
         else pump_hz
     )
+    branch_phase_offset = spec.phi_dc_rad if phi_dc_rad is None else float(phi_dc_rad)
     theta, voltage, branch_r, runtime, final_q = _integrate_jc_compiled(
         device,
         pump_current_a=pump_current_a, pump_hz=pump_hz,
@@ -849,6 +1422,7 @@ def _run_point(
         n_steps=n_steps,
         record_stride=20,
         initial_q=initial_state,
+        phi_dc_rad=branch_phase_offset,
     )
     late = np.arange(theta.size) >= max(0, theta.size - max(10, theta.size // 2))
     trace_t = theta.copy()
@@ -856,15 +1430,27 @@ def _run_point(
     time_s = trace_t[late]
     voltage_ss = trace_v[late]
     signal_installed = bool(signal_current_a > 0.0)
-    amplitude = _tone_amplitude(time_s, voltage_ss, signal_hz) if signal_installed else None
-    gain_absolute = (
-        None if amplitude is None else
-        20.0 * math.log10(max(amplitude, 1e-300) / (signal_current_a * 50.0))
-    )
-    gain_vs_off = (
-        None if amplitude is None or pump_off_output is None else
-        20.0 * math.log10(max(amplitude / pump_off_output, 1e-300))
-    )
+    # A solution that runs away past the transition drives these expressions to
+    # overflow.  That is a property of the state, not a driver fault, and it
+    # must not cost the caller its trace: four points of the 2026-08-15 signal
+    # campaign lost 805-868 s of completed integration to an OverflowError
+    # raised after the stepping had finished.  Degrade the gain to None instead.
+    try:
+        amplitude = (
+            _tone_amplitude(time_s, voltage_ss, signal_hz) if signal_installed else None
+        )
+        gain_absolute = (
+            None if amplitude is None else
+            20.0 * math.log10(max(amplitude, 1e-300) / (signal_current_a * 50.0))
+        )
+        gain_vs_off = (
+            None if amplitude is None or pump_off_output is None else
+            20.0 * math.log10(max(amplitude / pump_off_output, 1e-300))
+        )
+        gain_status = "OK" if signal_installed else "NO_SIGNAL"
+    except (OverflowError, FloatingPointError, ValueError) as error:
+        amplitude, gain_absolute, gain_vs_off = None, None, None
+        gain_status = f"DIVERGED {error!r}"
     total_periods = theta[-1] * pump_hz
     row = {
         "method_attribution": "Guarcello known-time-level banded FDTD algorithm",
@@ -876,22 +1462,39 @@ def _run_point(
         "pump_port": spec.pump_port,
         "signal_source_port": spec.signal_source_port,
         "signal_output_port": spec.signal_output_port,
+        "dc_bias_current_a": spec.dc_bias_current_a,
+        "external_flux_fraction": spec.external_flux_fraction,
+        "beta_l": spec.beta_l,
+        "phi_ext_rad": spec.phi_ext_rad,
+        "phi_dc_rad": branch_phase_offset,
+        "bias_applied": bool(abs(branch_phase_offset) > 0.0),
+        "dc_bias_convention": spec.dc_bias_convention,
+        "bias_phase_is_uniform": True,
+        "bias_phase_model": "uniform_branch_phase_offset",
         "pump_current_peak_a_requested": pump_current_a,
         "pump_current_peak_a_achieved": pump_current_a,
         **power_labels(pump_current_a, pump_hz),
         "gain_absolute_db": gain_absolute,
         "gain_vs_off_db": gain_vs_off,
-        "gain_wideband_db": (
-            None if not signal_installed else
-            _wideband_gain(time_s, voltage_ss, signal_hz, pump_hz, signal_current_a)
-        ),
+        "gain_wideband_db": _safe_wideband_gain(
+            time_s, voltage_ss, signal_hz, pump_hz, signal_current_a,
+        ) if signal_installed else None,
+        "gain_status": gain_status,
+        # Recorded so downstream plots can mark the signal and idler lines
+        # without re-deriving them from the device spec.
+        "signal_hz": float(signal_hz),
+        "idler_hz": float(abs(pump_hz - signal_hz)),
         "signal_installed": signal_installed,
         "r_j": float(np.max(branch_r[late])),
         "pump_branch_current_peak_a_achieved": float(
             np.max(branch_r[late]) * spec.ic_max_a
         ),
-        "min_cos_phi": float(np.min(np.cos(device.Bphi.T @ final_q / PHI0_REDUCED))),
-        "argmax_cell_index": int(np.argmax(np.abs(np.sin(device.Bphi.T @ final_q / PHI0_REDUCED)))),
+        "min_cos_phi": float(np.min(np.cos(
+            device.Bphi.T @ final_q / PHI0_REDUCED + branch_phase_offset
+        ))),
+        "argmax_cell_index": int(np.argmax(np.abs(np.sin(
+            device.Bphi.T @ final_q / PHI0_REDUCED + branch_phase_offset
+        )))),
         "integrator_success": True,
         "integrator_message": "known-time-level constant banded solve",
         "strobe_d1_tail": float("nan"),
@@ -938,21 +1541,73 @@ def power_labels(
     }
 
 
+def finite_linear_inductance_device(device: JcDevice) -> JcDevice:
+    """Replace Josephson nonlinearity by its finite small-signal stiffness.
+
+    Setting ``Ic`` to zero alone removes the only inductive path in the JC
+    fixtures.  This variant keeps ``Bphi diag(Ic / phi0) Bphi.T`` in ``K``
+    while disabling the nonlinear current, so the time-domain kernel has a
+    non-degenerate linear reference.
+    """
+    josephson_stiffness = (
+        device.Bphi @ sp.diags(device.Ic / device.phi0) @ device.Bphi.T
+    ).tocsr()
+    return replace(
+        device,
+        K=(device.K + josephson_stiffness).tocsr(),
+        Ic=np.zeros_like(device.Ic),
+        phi_dc_rad=0.0,
+        implicit_linear_stiffness=True,
+    )
+
+
+def _discrete_linear_steady_state(
+    device: JcDevice, *, frequency_hz: float, source_current_a: float,
+    dt_s: float,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return the exact previous and current states of the discrete recurrence."""
+    omega = 2.0 * math.pi * frequency_hz
+    z = np.exp(1j * omega * dt_s)
+    c_dt2 = device.C / dt_s**2
+    g_2dt = device.G / (2.0 * dt_s)
+    discrete = (
+        z * (c_dt2 + g_2dt + device.K)
+        - 2.0 * c_dt2
+        + (c_dt2 - g_2dt) / z
+    ).tocsc()
+    source = np.zeros(device.n_nodes, dtype=np.complex128)
+    source[device.pump_node] = source_current_a * z
+    phasor = spla.spsolve(discrete, source)
+    return np.real(phasor / z), np.real(phasor)
+
+
 def _measure_linear_limit(
     device: JcDevice, spec: DeviceSpec, pump_hz: float, dt_norm: float,
+    implicit_linear_stiffness: bool | None = None,
+    retain_linear_inductance: bool = False,
 ) -> dict[str, Any]:
-    """Compare a zero-Ic kernel run with the continuous linear S21 solve."""
+    """Compare a linearized kernel run with the continuous linear S21 solve."""
+    if retain_linear_inductance:
+        device = finite_linear_inductance_device(device)
     linear_device = replace(
         device, Ic=np.zeros_like(device.Ic), output_node=device.pump_output_node,
+        phi_dc_rad=0.0,
     )
     dt_s = dt_norm / spec.omega_plasma
     steps_per_period = 1.0 / pump_hz / dt_s
-    n_steps = max(200, int(math.ceil(100.0 * steps_per_period)))
+    n_steps = max(200, int(math.ceil(20.0 * steps_per_period)))
     source_current = 1.0e-8
+    q_previous, q_current = _discrete_linear_steady_state(
+        linear_device, frequency_hz=pump_hz,
+        source_current_a=source_current, dt_s=dt_s,
+    )
     times, voltage, _, runtime, _ = _integrate_jc_compiled(
         linear_device, pump_current_a=source_current, pump_hz=pump_hz,
         signal_current_a=0.0, signal_hz=pump_hz, dt_s=dt_s, n_steps=n_steps,
-        record_stride=20, initial_q=None,
+        record_stride=20, initial_q=q_current,
+        initial_q_previous=q_previous,
+        implicit_linear_stiffness=implicit_linear_stiffness,
+        phi_dc_rad=0.0,
     )
     late = times >= times[-1] * 0.5
     amplitude = _tone_amplitude(times[late], voltage[late], pump_hz)
@@ -972,6 +1627,12 @@ def _measure_linear_limit(
         "linear_solve_s_abs": float(reference.s_abs),
         "relative_error": float(relative_error) if math.isfinite(relative_error) else None,
         "kernel_finite": finite,
+        "linear_reference": (
+            "finite_junction_inductance" if retain_linear_inductance
+            else "zero_Ic_degenerate"
+        ),
+        "initial_state": "exact_discrete_single_frequency_steady_state",
+        "measurement_periods": 20.0,
         "runtime_s": float(runtime), "n_steps": n_steps,
         "pass_rtol_1e-9": bool(finite and relative_error <= 1e-9),
     }
@@ -984,15 +1645,27 @@ def _measure_zero_drive(
     dt_s = dt_norm / spec.omega_plasma
     steps_per_period = 1.0 / pump_hz / dt_s
     n_steps = max(1, int(math.ceil(100.0 * steps_per_period)))
-    _, _, _, runtime, final_q = _integrate_jc_compiled(
+    _, _, _, runtime_first, settled_q = _integrate_jc_compiled(
         device, pump_current_a=0.0, pump_hz=pump_hz, signal_current_a=0.0,
         signal_hz=pump_hz, dt_s=dt_s, n_steps=n_steps,
         record_stride=n_steps, initial_q=np.zeros(device.n_nodes),
+        phi_dc_rad=device.phi_dc_rad,
     )
-    maximum = float(np.max(np.abs(final_q)))
+    _, _, _, runtime_second, final_q = _integrate_jc_compiled(
+        device, pump_current_a=0.0, pump_hz=pump_hz, signal_current_a=0.0,
+        signal_hz=pump_hz, dt_s=dt_s, n_steps=n_steps,
+        record_stride=n_steps, initial_q=settled_q,
+        phi_dc_rad=device.phi_dc_rad,
+    )
+    maximum = float(np.max(np.abs(final_q - settled_q)))
     return {
-        "n_steps": n_steps, "periods": 100.0, "runtime_s": float(runtime),
-        "max_abs_final_q": maximum, "pass_at_1e-12": bool(maximum <= 1e-12),
+        "n_steps": n_steps, "periods": 200.0,
+        "runtime_s": float(runtime_first + runtime_second),
+        "reference": "second 100-period hold from the first empirically settled state",
+        "max_abs_final_q_minus_empirical_settled_state": maximum,
+        "pass_at_1e-12": bool(maximum <= 1e-12),
+        "dc_bias_current_a": device.dc_bias_current_a,
+        "phi_dc_rad": device.phi_dc_rad,
     }
 
 

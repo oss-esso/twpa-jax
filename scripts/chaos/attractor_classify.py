@@ -110,8 +110,20 @@ def _period_clusters(
     scale = max(float(np.ptp(values)), abs(float(np.median(values))), 1.0e-15)
     bins = np.sort(values)
     groups = [[bins[0]]]
+    # tolerance_decay ** (len(groups) - 1) overflows once the section stops
+    # resolving into a few clusters and every point opens its own group: with a
+    # probe tone installed the Poincare section fills into a band, len(groups)
+    # reaches thousands, and the power raises OverflowError.  Past that point
+    # the admitted tolerance has already decayed to nothing, so clamp to zero
+    # rather than failing.  The direct expression is retained below the clamp
+    # so every case that already worked is unchanged to the last bit.
+    decay_log10 = math.log10(tolerance_decay) if tolerance_decay > 0.0 else 0.0
     for value in bins[1:]:
-        admitted_tolerance = tolerance / tolerance_decay ** (len(groups) - 1)
+        exponent = len(groups) - 1
+        admitted_tolerance = (
+            0.0 if exponent * decay_log10 > 300.0
+            else tolerance / tolerance_decay ** exponent
+        )
         if value - groups[-1][-1] <= admitted_tolerance * scale:
             groups[-1].append(value)
         else:

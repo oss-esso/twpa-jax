@@ -30,20 +30,34 @@ PAPER_SPEC.loader.exec_module(PAPER)
 
 def _pump_only_paper(
     power_dbm: float, dt_norm: float, tmax_norm: float, record_stride: int = 20,
-) -> tuple[np.ndarray, np.ndarray, float]:
+    signal_dbm: float | None = None,
+) -> tuple[np.ndarray, np.ndarray, float, float]:
+    """Integrate the paper device, optionally with a probe tone installed.
+
+    ``signal_dbm = None`` keeps the historical pump-only behaviour exactly: the
+    configuration still records ``-300`` dBm and the kernel still receives a
+    zero ``signal_vpk``, so no existing result changes.  Returns the signal
+    angular frequency alongside the trace so the caller can measure the tone
+    without re-deriving the paper's own default.
+    """
     device = PAPER.Device()
     cfg = PAPER.RunConfig(
         dt_norm=dt_norm, tmax_norm=tmax_norm, transient_fraction=0.5,
-        record_stride=record_stride, pump_dbm=power_dbm, signal_dbm=-300.0,
+        record_stride=record_stride, pump_dbm=power_dbm,
+        signal_dbm=-300.0 if signal_dbm is None else float(signal_dbm),
         power_convention="50ohm", port_update="stable",
     )
     dt_s = cfg.dt_norm / device.omega_plasma
     n_steps = int(round(cfg.tmax_norm / cfg.dt_norm))
     coefficients = PAPER.build_coefficients(device, dt_s)
+    signal_vpk = (
+        0.0 if signal_dbm is None
+        else PAPER.dbm_to_vpk(float(signal_dbm), "50ohm", device.ri_ohm)
+    )
     args = (
         n_steps, cfg.record_stride, dt_s, 2.0 * math.pi * cfg.pump_ghz * 1e9,
         2.0 * math.pi * cfg.signal_ghz * 1e9,
-        PAPER.dbm_to_vpk(power_dbm, "50ohm", device.ri_ohm), 0.0, 0.0,
+        PAPER.dbm_to_vpk(power_dbm, "50ohm", device.ri_ohm), signal_vpk, 0.0,
         device.ic_a, device.ci_f, device.rl_ohm, device.cl_f, device.cg_f,
         device.ri_ohm, device.lg_h, cfg.tau, 1,
         coefficients["cminus"], coefficients["alpha_p"], coefficients["alpha_m"],
@@ -53,15 +67,25 @@ def _pump_only_paper(
     )
     started = time.perf_counter()
     result = PAPER._integrate_numba(*args)
-    return result[0], result[1], time.perf_counter() - started
+    return (
+        result[0], result[1], time.perf_counter() - started,
+        cfg.signal_ghz * 1e9,
+    )
 
 
-def _pump_only_jc(name: str, power_dbm: float, dt_norm: float, tmax_norm: float) -> tuple[np.ndarray, np.ndarray, float, dict[str, Any]]:
+def _pump_only_jc(
+    name: str, power_dbm: float, dt_norm: float, tmax_norm: float,
+    signal_current_a: float = 0.0, pump_off_output: float | None = None,
+) -> tuple[np.ndarray, np.ndarray, float, dict[str, Any]]:
     if name in {"ipm_2c_fixed", "rf_squid_2393_3wm"}:
         source = phase5.phase_c_source_path(name)
         spec = phase5.derive_device_spec(source)
         if name == "ipm_2c_fixed":
             current = float(power_dbm) * 1.1628e-05
+        elif name == "rf_squid_2393_3wm":
+            # Phase C RF-SQUID control is the applied on-chip current. The
+            # derived dBm labels are emitted by phase5._run_point.
+            current = float(power_dbm)
         else:
             current = float(power_dbm) * spec.ic_median_a
     else:
@@ -78,13 +102,16 @@ def _pump_only_jc(name: str, power_dbm: float, dt_norm: float, tmax_norm: float)
             slope = np.polyfit(powers[-2:], np.log(currents[-2:]), 1)
             current = float(np.exp(np.polyval(slope, power_dbm)))
     row, _, _, _, trace_t, trace_v = phase5._run_point(
-        spec, current, dt_norm=dt_norm, tmax_norm=tmax_norm, signal_current_a=0.0,
-        pump_off_output=None, method="guarcello_banded",
+        spec, current, dt_norm=dt_norm, tmax_norm=tmax_norm,
+        signal_current_a=signal_current_a,
+        pump_off_output=pump_off_output, method="guarcello_banded",
     )
     row["control_value"] = float(power_dbm)
     row["control_axis"] = "I_over_I_bound" if name == "ipm_2c_fixed" else (
-        "r_j_target" if name == "rf_squid_2393_3wm" else "pump_power_dbm"
+        "pump_current_peak_a" if name == "rf_squid_2393_3wm" else "pump_power_dbm"
     )
+    if name == "rf_squid_2393_3wm":
+        row["pump_current_control_a"] = float(power_dbm)
     row["pump_hz"] = phase5.resolve_pump_frequency(spec)
     return trace_t, trace_v, float(row["runtime_s"]), row
 
@@ -199,7 +226,9 @@ def _powers_for_device(name: str) -> np.ndarray:
     if name == "ipm_2c_fixed":
         return np.round(np.arange(0.300, 1.2001, 0.025), 6)
     if name == "rf_squid_2393_3wm":
-        return np.round(np.arange(0.100, 1.0001, 0.025), 6)
+        base = np.geomspace(2.5e-6, 1.5e-5, 40)
+        landmarks = np.asarray([6.3246e-6, 7.0963e-6, 1.0024e-5])
+        return np.unique(np.round(np.concatenate([base, landmarks]), 12))
     hb_name = name.removeprefix("jc_")
     path = ROOT / ".hybrid_outputs" / "hb_columns_jtwpa_fqjtwpa_20260811" / hb_name / "hb_up_to_failure.csv"
     rows = phase5._read_hb_rows(path)
@@ -230,16 +259,118 @@ def _fine_powers(
     return np.linspace(low, high, 10)
 
 
-def _run_point(name: str, power: float, output: Path, dt_norm: float, tmax_norm: float) -> dict[str, Any]:
+def pump_off_reference(
+    name: str, dt_norm: float, tmax_norm: float,
+    signal_current_a: float = 0.0, signal_dbm: float | None = None,
+) -> float:
+    """Output tone amplitude with the signal on and the pump off.
+
+    This is the denominator of ``gain_vs_off_db`` and it does not depend on
+    pump power, so it is measured once per device and reused across the sweep
+    rather than paid at every point.
+    """
+    if name == "guarcello":
+        if signal_dbm is None:
+            raise ValueError("guarcello needs --signal-dbm for a pump-off reference")
+        t, v, _, signal_hz = _pump_only_paper(
+            -300.0, dt_norm, tmax_norm, signal_dbm=signal_dbm,
+        )
+    else:
+        if signal_current_a <= 0.0:
+            raise ValueError(f"{name} needs --signal-current-a for a pump-off reference")
+        source = (
+            phase5.phase_c_source_path(name)
+            if name in {"ipm_2c_fixed", "rf_squid_2393_3wm"}
+            else ROOT / "outputs" / "jc_doc_python_designs" / name
+        )
+        spec = phase5.derive_device_spec(source)
+        signal_hz = spec.signal_ghz * 1e9
+        _, _, _, _, t, v = phase5._run_point(
+            spec, 0.0, dt_norm=dt_norm, tmax_norm=tmax_norm,
+            signal_current_a=signal_current_a, pump_off_output=None,
+            method="guarcello_banded",
+        )
+    late = np.arange(t.size) >= max(0, t.size - max(10, t.size // 2))
+    amplitude = float(phase5._tone_amplitude(t[late], v[late], signal_hz))
+    if not math.isfinite(amplitude) or amplitude <= 0.0:
+        raise ValueError(f"{name} pump-off reference is not usable: {amplitude!r}")
+    # A reference measured before the probe has crossed the device is denormal
+    # noise, not a transmission level, and it would silently inflate every
+    # gain_vs_off_db in the sweep rather than failing.  A passive line cannot
+    # be 100 dB down, so treat that as an unsettled run and say so.
+    drive = (
+        PAPER.dbm_to_vpk(float(signal_dbm), "50ohm", PAPER.Device().ri_ohm)
+        if name == "guarcello" else signal_current_a * 50.0
+    )
+    if amplitude < drive * 1.0e-5:
+        raise ValueError(
+            f"{name} pump-off reference {amplitude:.3e} V is {20.0 * math.log10(drive / amplitude):.1f} dB "
+            f"below the {drive:.3e} V drive; the run is too short for the probe "
+            f"to have reached the output"
+        )
+    return amplitude
+
+
+def _tone_gain_row(
+    t: np.ndarray, v: np.ndarray, signal_hz: float, drive_scale: float,
+    pump_off_output: float | None,
+) -> dict[str, Any]:
+    """Measure the probe tone on the same late window phase5._run_point uses.
+
+    ``drive_scale`` is whatever the caller divides by to form an absolute gain:
+    the injected current times the port impedance for the solver devices, the
+    injected peak voltage for the paper device.  Keeping the window definition
+    identical to phase5._run_point matters because the two paths' gains are
+    compared against each other.
+    """
+    late = np.arange(t.size) >= max(0, t.size - max(10, t.size // 2))
+    amplitude = float(phase5._tone_amplitude(t[late], v[late], signal_hz))
+    return {
+        "signal_installed": True,
+        "signal_hz": float(signal_hz),
+        "signal_output_amplitude_v": amplitude,
+        "gain_absolute_db": (
+            None if drive_scale <= 0.0
+            else 20.0 * math.log10(max(amplitude, 1e-300) / drive_scale)
+        ),
+        "gain_vs_off_db": (
+            None if pump_off_output is None or pump_off_output <= 0.0
+            else 20.0 * math.log10(max(amplitude / pump_off_output, 1e-300))
+        ),
+    }
+
+
+def _run_point(
+    name: str, power: float, output: Path, dt_norm: float, tmax_norm: float,
+    signal_current_a: float = 0.0, signal_dbm: float | None = None,
+    pump_off_output: float | None = None,
+) -> dict[str, Any]:
     output.mkdir(parents=True, exist_ok=True)
     started = time.perf_counter()
+    trace: tuple[np.ndarray, np.ndarray] | None = None
     try:
         if name == "guarcello":
-            t, v, runtime = _pump_only_paper(power, dt_norm, tmax_norm)
+            t, v, runtime, signal_hz = _pump_only_paper(
+                power, dt_norm, tmax_norm, signal_dbm=signal_dbm,
+            )
+            trace = (t, v)
             solver_row: dict[str, Any] = {"signal_installed": False}
+            if signal_dbm is not None:
+                device = PAPER.Device()
+                solver_row = _tone_gain_row(
+                    t, v, signal_hz,
+                    PAPER.dbm_to_vpk(float(signal_dbm), "50ohm", device.ri_ohm),
+                    pump_off_output,
+                )
+                solver_row["signal_power_dbm"] = float(signal_dbm)
             pump_hz = 7.0e9
         else:
-            t, v, runtime, solver_row = _pump_only_jc(name, power, dt_norm, tmax_norm)
+            t, v, runtime, solver_row = _pump_only_jc(
+                name, power, dt_norm, tmax_norm,
+                signal_current_a=signal_current_a,
+                pump_off_output=pump_off_output,
+            )
+            trace = (t, v)
             pump_hz = float(solver_row.get("pump_hz", 0.0))
             if pump_hz <= 0.0:
                 source = (
@@ -248,16 +379,45 @@ def _run_point(name: str, power: float, output: Path, dt_norm: float, tmax_norm:
                     else ROOT / "outputs" / "jc_doc_python_designs" / name
                 )
                 pump_hz = phase5.resolve_pump_frequency(phase5.derive_device_spec(source))
-        reduced = _reduce_trace(t, v, pump_hz)
+        # Save the trace BEFORE reducing it.  The reduction is pure
+        # post-processing and it can fail on a diverged solution -- four points
+        # of the 2026-08-15 signal campaign raised OverflowError after 805-868 s
+        # of completed integration, and because the save came afterwards, every
+        # one of those traces was lost and had to be re-integrated from nothing.
+        np.savez_compressed(output / "trace.npz", t=t, v_out=v)
+        try:
+            reduced = _reduce_trace(t, v, pump_hz)
+        except (OverflowError, FloatingPointError, ValueError) as error:
+            # A diverged solution is a measurement, not a driver fault: record
+            # it, keep the trace, and let the campaign continue.
+            reduced = {
+                "reduction_status": "DIVERGED",
+                "reduction_error": repr(error),
+                "trace_is_finite": bool(np.all(np.isfinite(v))),
+                "trace_max_abs_v": (
+                    float(np.max(np.abs(v[np.isfinite(v)])))
+                    if np.any(np.isfinite(v)) else None
+                ),
+                "spectrum_frequency_hz": np.zeros(0),
+                "spectrum_db_relative_pump": np.zeros(0),
+                "upward_branch": np.zeros(0),
+            }
         spectrum_frequency = reduced.pop("spectrum_frequency_hz")
         spectrum_db = reduced.pop("spectrum_db_relative_pump")
         branches = reduced.pop("upward_branch")
-        np.savez_compressed(output / "trace.npz", t=t, v_out=v)
         np.savez_compressed(output / "poincare_branches.npz", upward=branches)
         np.savez_compressed(output / "spectrum.npz", frequency_hz=spectrum_frequency, spectrum_db_relative_pump=spectrum_db)
+        display_power = (
+            float(solver_row.get("pump_power_instrument_dbm", power))
+            if name == "rf_squid_2393_3wm" else power
+        )
         row = {
-            "device": name, "pump_power_dbm": power, "runtime_s": runtime,
+            "device": name, "pump_power_dbm": display_power, "runtime_s": runtime,
             "control_value": power,
+            # The paper device never carried this, so downstream plots could not
+            # scale their frequency axis and autoscaled to the whole Nyquist
+            # span (436 GHz instead of ~20 GHz).
+            "pump_hz": float(pump_hz),
             "control_axis": solver_row.get("control_axis", "pump_power_dbm"),
             "signal_installed": False, "gain_db": None, "gain_wideband_db": None,
             "trace_path": str((output / "trace.npz").resolve().relative_to(ROOT.resolve())),

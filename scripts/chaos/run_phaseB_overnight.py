@@ -66,15 +66,23 @@ def build_plan() -> dict[str, np.ndarray]:
         _grid(-33.50, -27.50, 0.10),
     ]), 4))
     ipm_2c_fixed = np.round(np.arange(0.300, 1.2001, 0.025), 6)
-    rf_squid_2393_3wm = np.round(np.arange(0.100, 1.0001, 0.025), 6)
+    rf_squid_2393_3wm = np.unique(np.round(np.concatenate([
+        np.geomspace(2.5e-6, 1.5e-5, 40),
+        np.asarray([6.3246e-6, 7.0963e-6, 1.0024e-5]),
+    ]), 12))
     return {
         "guarcello": guarcello, "jc_jtwpa": jtwpa, "jc_fqjtwpa": fqjtwpa,
         "ipm_2c_fixed": ipm_2c_fixed, "rf_squid_2393_3wm": rf_squid_2393_3wm,
     }
 
 
-def _tmax_norm(device: str) -> float:
-    """600 pump periods, the same budget ``run_phaseB_pump_only`` derives."""
+def _tmax_norm(device: str, periods: float = 600.0) -> float:
+    """``periods`` pump periods; 600 is what ``run_phaseB_pump_only`` derives.
+
+    600 is only valid for the Guarcello device.  Measured 2026-08-14, the
+    near-lossless devices need about 1050 pump periods before the off-lattice
+    energy reaches its floor, and anything shorter analyses residual ringing.
+    """
     if device == "guarcello":
         omega_plasma = PHASEB.PAPER.Device().omega_plasma
         pump_hz = 7.0e9
@@ -87,11 +95,23 @@ def _tmax_norm(device: str) -> float:
         spec = PHASEB.phase5.derive_device_spec(source)
         omega_plasma = spec.omega_plasma
         pump_hz = PHASEB.phase5.resolve_pump_frequency(spec)
-    return 600.0 * omega_plasma / pump_hz
+    return float(periods) * omega_plasma / pump_hz
 
 
 def _point_dir(root: Path, device: str, power: float) -> Path:
-    tag = f"{power:+.4f}".replace("+", "p").replace("-", "m").replace(".", "p")
+    """Directory name for one control value.
+
+    The RF-SQUID control axis is an absolute on-chip current near 1e-5 A, and
+    a fixed four-decimal tag rounds every one of its grid points to ``p0p0000``
+    - one directory for the whole sweep, with ``_is_done`` then skipping 42 of
+    43 points and the campaign reporting success on a single measurement.  Tag
+    that device in nanoamps; the dBm devices keep their existing names so the
+    traces already on disk still resume.
+    """
+    if device == "rf_squid_2393_3wm":
+        tag = f"{power * 1e9:.3f}nA".replace(".", "p")
+    else:
+        tag = f"{power:+.4f}".replace("+", "p").replace("-", "m").replace(".", "p")
     return root / device / f"dense_{tag}"
 
 
@@ -109,9 +129,49 @@ def main() -> int:
     parser.add_argument("--dry-run", action="store_true",
                         help="print the plan and the cost estimate, integrate nothing")
     parser.add_argument("--skip-stride-check", action="store_true")
+    parser.add_argument("--periods", type=float, default=600.0,
+                        help="pump periods per point; 600 is valid only for guarcello, "
+                             "the near-lossless devices need >~2100 (settle ~1050, "
+                             "analysed window is the last half)")
+    parser.add_argument("--control-min", type=float, default=None,
+                        help="drop plan points below this control value")
+    parser.add_argument("--control-max", type=float, default=None,
+                        help="drop plan points above this control value")
+    parser.add_argument("--n-points", type=int, default=None,
+                        help="evenly subsample the surviving plan to this many "
+                             "points per device; the endpoints are always kept")
+    parser.add_argument("--control-linspace", type=float, nargs=3, default=None,
+                        metavar=("LOW", "HIGH", "COUNT"),
+                        help="replace the built-in plan with an even sweep. The "
+                             "built-in grids bracket each device's known "
+                             "transition and cannot be widened with "
+                             "--control-min/--control-max, which only filter")
+    parser.add_argument("--signal-current-a", type=float, default=0.0,
+                        help="probe tone current for the solver devices; 0 keeps the "
+                             "campaign pump-only. A signal makes the forcing "
+                             "quasi-periodic, so the emitted bifurcation verdict is "
+                             "not meaningful and the run is for gain and spectra only")
+    parser.add_argument("--signal-dbm", type=float, default=None,
+                        help="probe tone power for the guarcello paper device; the "
+                             "solver devices use --signal-current-a instead")
     args = parser.parse_args()
 
     plan = build_plan()
+    if args.control_linspace is not None:
+        low, high, count = args.control_linspace
+        sweep = np.round(np.linspace(low, high, int(count)), 6)
+        plan = {device: sweep.copy() for device in plan}
+    if args.control_min is not None or args.control_max is not None or args.n_points:
+        low = -np.inf if args.control_min is None else args.control_min
+        high = np.inf if args.control_max is None else args.control_max
+        for device, powers in plan.items():
+            kept = powers[(powers >= low) & (powers <= high)]
+            if args.n_points and kept.size > args.n_points:
+                index = np.unique(np.round(
+                    np.linspace(0, kept.size - 1, args.n_points),
+                ).astype(int))
+                kept = kept[index]
+            plan[device] = kept
     devices = [name.strip() for name in args.devices.split(",") if name.strip()]
     root = args.output
     root.mkdir(parents=True, exist_ok=True)
@@ -139,9 +199,53 @@ def main() -> int:
     if args.dry_run:
         return 0
 
-    budgets = {device: _tmax_norm(device) for device in devices}
+    budgets = {device: _tmax_norm(device, args.periods) for device in devices}
     for device, budget in budgets.items():
-        print(f"  {device:<12} tmax_norm {budget:.1f} (600 pump periods)")
+        print(f"  {device:<12} tmax_norm {budget:.1f} ({args.periods:.0f} pump periods)")
+
+    # The pump-off tone amplitude is the denominator of gain_vs_off_db and is
+    # independent of pump power, so it is measured once per device here rather
+    # than at every point.  A device whose reference cannot be measured runs
+    # without gain_vs_off_db instead of failing the campaign.
+    signal_on = args.signal_current_a > 0.0 or args.signal_dbm is not None
+    references: dict[str, float | None] = {device: None for device in devices}
+    if signal_on:
+        # The reference costs one full integration per device and runs before
+        # the pool, so it is pure serial time -- 39 min across three devices on
+        # the 2026-08-15 run, which is most of that campaign's overrun.  It
+        # depends only on the device, the probe level and the budget, never on
+        # pump power, so cache it on disk and pay it once ever.
+        cache_path = root / "pump_off_reference_cache.json"
+        cache: dict[str, float] = {}
+        if cache_path.exists():
+            try:
+                cache = json.loads(cache_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                cache = {}
+        for device in devices:
+            key = (f"{device}|dt={args.dt_norm}|tmax={budgets[device]:.6f}"
+                   f"|i={args.signal_current_a}|dbm={args.signal_dbm}")
+            if key in cache:
+                references[device] = float(cache[key])
+                print(f"  {device:<12} pump-off reference "
+                      f"{references[device]:.6e} V (cached)")
+                continue
+            try:
+                started_reference = time.perf_counter()
+                references[device] = PHASEB.pump_off_reference(
+                    device, args.dt_norm, budgets[device],
+                    signal_current_a=args.signal_current_a,
+                    signal_dbm=args.signal_dbm,
+                )
+                cache[key] = references[device]
+                cache_path.write_text(json.dumps(cache, indent=2), encoding="utf-8")
+                print(f"  {device:<12} pump-off reference "
+                      f"{references[device]:.6e} V "
+                      f"({time.perf_counter() - started_reference:.0f} s, cached)")
+            except (ValueError, RuntimeError) as error:
+                print(f"  {device:<12} pump-off reference unavailable: {error}")
+        print("  signal installed: the forcing is no longer periodic at the pump, "
+              "so treat every emitted bifurcation verdict as void")
 
     log_path = root / "overnight_progress.csv"
     manifest: list[dict[str, Any]] = []
@@ -152,6 +256,7 @@ def main() -> int:
         futures = {
             pool.submit(
                 PHASEB._run_point, device, power, path, args.dt_norm, budgets[device],
+                args.signal_current_a, args.signal_dbm, references[device],
             ): (device, power, path)
             for device, power, path in todo
         }
@@ -178,7 +283,13 @@ def main() -> int:
             except OSError:
                 pass  # stdout is gone; the file log is authoritative
             manifest.append({
-                "device": device, "pump_power_dbm": power,
+                "device": device,
+                "control_value": power,
+                "control_axis": (
+                    "pump_current_peak_a" if device == "rf_squid_2393_3wm"
+                    else "pump_power_dbm"
+                ),
+                "pump_power_dbm": power if device != "rf_squid_2393_3wm" else None,
                 "point_dir": str(path.resolve().relative_to(ROOT.resolve())),
                 "status": status,
             })
