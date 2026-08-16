@@ -1,0 +1,543 @@
+
+
+===== PAGE 1 / 5 =====
+
+IEEE TRANSACTIONS ON APPLIED SUPERCONDUCTIVITY, VOL. 36, NO. 5, AUGUST 2026
+1700405
+Properties of Josephson Traveling Wave Parametric
+Ampliﬁer With a Non-Sinusoidal Current-Phase
+Relation and Resonant Phase Matching
+Claudio Guarcello
+, Carlo Barone
+, Giovanni Carapella
+, Giovanni Filatrella
+, Andrea Giachero
+,
+and Sergio Pagano
+Abstract—A comprehensive numerical analysis of the dynami-
+cal response of Josephson Traveling Wave Parametric Ampliﬁers
+(JTWPA) under varying driving conditions is presented. The pri-
+mary goal is to examine the effects of a current–phase relation
+(CPR) incorporating a second-harmonic contribution. The analysis
+further investigates how parameters such as pump intensity, signal
+frequency, and DC bias current inﬂuence the transition to chaos.
+The results reveal a wide range of dynamical regimes in JTWPAs,
+offering insights into optimizing device performance and stability.
+Notably, the shape of the CPR is shown to have a signiﬁcant
+impact on the operational effectiveness and stability of JTWPAs.
+To obtain results closer to real devices, numerical modeling of
+JTWPAs implementing Resonant Phase Matching (RPM) circuitry
+has been performed. We have veriﬁed that the introduction of RPM
+allows a signiﬁcant increase in the ampliﬁer gain also in the case
+of non-sinusoidal CPR. These ﬁndings may have important impli-
+cations for the development of next-generation JTWPAs, which
+are essential components in quantum computing and precision
+measurement applications.
+Index Terms—Josephson junctions, parametric ampliﬁers,
+quantum-noise limited ampliﬁers, superconducting microwave
+devices.
+Received 10 October 2025; revised 30 December 2025 and 19 January 2026;
+accepted 20 January 2026. Date of publication 26 January 2026; date of current
+version 4 February 2026. This work was supported in part by PNRR MUR
+Projects PE0000023, in part by NQSTI under Grant H43C22000870001, in part
+by NBJTWPA under Grant H43C22000870001 QSENS, in part by the Italian
+Institute of Nuclear Physics (INFN) QUARTET, and in part by the University
+of Salerno Italy under Grant FRB22PAGAN, Grant FRB23BARON, and Grant
+FRB24CAVAL. (Corresponding author: Sergio Pagano.)
+Claudio Guarcello and Giovanni Carapella are with the Physics Department,
+University of Salerno, 84084 Fisciano, Italy, and also with the Gruppo Collegato
+di Salerno, Istituto Nazionale di Fisica Nucleare, 84084 Fisciano, Italy (e-mail:
+cguarcello@unisa.it; gcarapella@unisa.it).
+Carlo Barone and Sergio Pagano are with the Physics Department, Uni-
+versity of Salerno, 84084 Fisciano, Italy, and with the Gruppo Collegato di
+Salerno, Istituto Nazionale di Fisica Nucleare, 84084 Fisciano, Italy, and also
+with the Salerno Unit, C.N.R. SPIN Institute, 84084 Fisciano, Italy (e-mail:
+cbarone@unisa.it; spagano@unisa.it).
+Giovanni Filatrella is with the Science and Technology Department, Univer-
+sity of Sannio, 82100 Benevento, Italy (e-mail: ﬁlatr@unisannio.it).
+Andrea Giachero is with the Physics Department, University of Milano
+Bicocca, 20126 Milano, Italy, and with the Milano Bicocca Section, Istituto
+Nazionale di Fisica Nucleare, 00186 Milano, Italy, and also with the Bic-
+occa Quantum Technologies (BiQuTe) Centre, 20126 Milano, Italy (e-mail:
+andrea.giachero@unimib.it).
+Color versions of one or more ﬁgures in this article are available at
+https://doi.org/10.1109/TASC.2026.3658055.
+Digital Object Identiﬁer 10.1109/TASC.2026.3658055
+I. INTRODUCTION
+A
+MPLIFYING weak microwave signals for the readout of
+superconducting qubits or for interfacing quantum detec-
+tors is essential for applications in quantum computing, basic
+physics experiments, and radio astronomy. The best low-noise
+microwave ampliﬁers reach the quantum-noise limit by work-
+ing at very low temperatures and using parametric pumping
+in circuits with Josephson junctions (JJs) or superconducting
+elements with high kinetic inductance [1]. Among supercon-
+ducting parametric ampliﬁers, Josephson Traveling Wave Para-
+metric Ampliﬁers (JTWPAs) offer large bandwidth, high gain,
+and high saturation power, at the expense of a rather complex
+structure with many elements [2], [3], [4], [5], [6]. This com-
+plexity may result in unwanted effects, such as signal reﬂection,
+oscillation, spurious harmonic generation, and even chaotic
+behavior [7].
+Proper modelling of the dynamical system forming a
+JTWPA, without simplifying approximations is, therefore, a
+crucial aspect. Moreover, as parametric ampliﬁers increas-
+ingly rely on unconventional weak links with high trans-
+parency, and hence non-sinusoidal current–phase relations
+(CPRs), [8] it becomes important to develop JTWPA descrip-
+tions that capture CPR harmonics and their impact on the device
+nonlinearity.
+II. THE JOSEPHSON TRAVELING WAVE PARAMETRIC
+AMPLIFIER
+A JTWPA is a transmission line composed of many cells,
+each containing one or more JJs, the nonlinear elements. Among
+the various possibilities, we focused on a cell made of a loop
+formed by a JJ and a superconducting inductor (forming an RF-
+SQUID cell), and with a capacitor to ground, see Fig. 1. The JJ
+is modeled, following the standard Resistively Shunted Junction
+(RSJ) model, as the parallel combination of a “pure” Josephson
+element, a capacitor C J and a resistor R J (here we used R J =
+20 kΩ) [9], [10], [11]. The current ﬂowing through and voltage
+across each JJ are then given by:
+I = IJ + IRJ + ICJ
+(1)
+and
+V = Φ0
+2π
+dϕ
+dt ,
+(2)
+© 2026 The Authors. This work is licensed under a Creative Commons Attribution 4.0 License. For more information, see
+https://creativecommons.org/licenses/by/4.0/
+
+
+===== PAGE 2 / 5 =====
+
+1700405
+IEEE TRANSACTIONS ON APPLIED SUPERCONDUCTIVITY, VOL. 36, NO. 5, AUGUST 2026
+where Φ0 ≃2.07 10−15 W is the ﬂux quantum, ϕ is the quantum
+phase difference across the junction, and IJ(ϕ) is the CPR of
+the “pure” Josephson element, that can assume different forms
+[12], [13]:
+standard :
+IJ (ϕ) = Ic sin (ϕ)
+(3)
+transparency dependent : IJ(τ, ϕ)=Ic α
+τ sin (ϕ)
+2
+
+1−τ sin(ϕ)2
+(4)
+second harmonic :
+IJ(ϕ)=Ic α (Jc1sin (ϕ)+Jc2 sin (2ϕ))
+(5)
+Here Ic is JJ critical current (i.e., the maximum dc current
+that can ﬂow in the junction while maintaining the zero-voltage
+state), τ is the transparency skewness parameter, α is a scaling
+parameter chosen such that max
+ϕ
+IJ(ϕ) = Ic, Jc1 and Jc2 are the
+relative weights of the ﬁrst and second harmonic respectively.
+The different CPR can be a result of the materials forming
+the junction, its geometrical shape, and, also, the temperature
+[14], [15], [16], [17], [18], [19]. Normally, a “standard”, i.e.,
+sinusoidal, CPR is used to model a JTWPA. However, as more
+research is done in improving the device performances, the
+presence of a nonstandard CPR cannot be excluded. JTWPAs
+made with junctions having a CPR with variable transparency
+have been investigated in [20], where it is found that the device
+response is highly sensitive to the speciﬁc form of the CPR.
+Increasing its skewness leads to a reduction of the maximum
+achievable gain, while at the same time enlarging the range
+of pump intensities over which the system remains stable.
+Moreover, the onset of chaotic dynamics becomes considerably
+sharper at higher skewness.
+A second-harmonic CPR has been shown to accurately de-
+scribe superconducting junctions with ferromagnetic barriers
+[17], [21], as well as JJs based on semiconductors [22], [23],
+[24], [25], graphene [26], and unconventional superconductors
+[27], [28]. Although higher-harmonic contributions are typically
+negligible in conventional tunnel junctions, recent work has
+demonstrated that they can also modify the excited-state spec-
+trum of Al- and AlO-based Josephson qubits [29]. Relatedly,
+microscopic barrier inhomogeneities (e.g., pinholes or weak
+points) can yield a small set of highly transmissive channels
+and thereby enhance higher-harmonic contributions even in
+nominally Al/AlO x
+/Al tunnel junctions [30], [31]. Finally,
+we note a recent mesoscopic theory for JJs formulated within
+nonrelativisticscalarelectrodynamics,inwhichaCPRincluding
+a second-harmonic term arises naturally [32]. More recently, the
+second-harmonic form of CPR has been explored in the context
+of JTWPA [33]: by tuning the relative weights of the harmonic
+CPR components, substantial ampliﬁcation can be obtained,
+with gains up to 13 dB even without the implementation of
+dispersion engineering. Furthermore, it was discussed how non-
+sinusoidal contributions to the CPR can drive the system from
+a stable, periodic regime into chaotic dynamics, particularly in
+the case of Jc2 < 0. We note that additional circuit embedding
+(e.g., RF-SQUIDunitcells)canyieldaneffectivenon-sinusoidal
+Fig. 1.
+Equivalent electric circuit of a JTWPA.
+current–phase response due to screening and ﬂux-dependent
+effects; for TWPA implementations and an overview of CPRs
+associated with different Josephson-based nonlinearities [4],
+[34]. In this work, however, we focus on the second-harmonic
+contribution of the CPR at the junction level, which depends on
+the underlying weak-link physics.
+As evident in Fig. 1, where the equivalent electric circuit of the
+investigated JTWPA is shown, the transmission line is made by
+N cells, each consisting in the parallel of a Josephson junction JJ,
+a superconducting inductor, L p, and a capacitor C 0 to ground.
+At the beginning of the line is applied the signal to amplify, I s,
+the microwave pump tone, I p and an optional DC bias current
+I DC, used to shift the equilibrium phase of the junctions. Z 0
+represents the source and load impedances, typically 50 Ω. The
+voltage at the Vout port represents the ampliﬁed signal, as well
+as the pump tone and various mixing products. Throughout this
+work we consider a purely current-biased operation and neglect
+any externally applied magnetic ﬂux bias, Φ ext = 0, so that the
+non-sinusoidal CPR is treated as a junction-level property rather
+than a topology-induced effect.
+Using the Kirckhoff’s laws and the constitutive relation of
+the components, the circuit in Fig. 1 can be easily converted
+in a set of nonlinear, coupled ordinary differential equations,
+describing the time evolution of voltages and currents in each
+part of the circuit. The system of differential equations can
+then be solved using standard numerical methods [35]. The
+system’s dynamics are obtained by integrating the system of N
+coupled differential equations, one for each cell of the JTWPA.
+The time-domain integration is performed with an in-house
+developed FORTRAN code implementing the implicit ﬁnite-
+difference scheme (tridiagonal solver), while FFT-based spectral
+post-processing is carried out using the Mathematica [36] soft-
+ware. The chosen normalized time step and integration time are
+Δt = 0.01 and tmax = 20000, respectively. Numerical details
+are reported in [20]. The Josephson nonlinearity is retained in
+full through the non-sinusoidal CPR (5), i.e., no small-signal
+or Taylor expansion of the nonlinear term is employed. Re-
+lated time-domain multiphysics/FDTD–FEM approaches have
+recently been reported [37].
+The design parameters were chosen to mimic a real device,
+designed and realized by INRIM-Italy, and are reported in Ta-
+ble I. The JTWPA is biased with a pump tone, with a frequency
+of 7 GHz and a power ranging from -70 to -45 dBm, and a small
+signal tone, with a power of -100 dBm and frequency ranging
+from 4 to 10 GHz. The Fourier spectrum of the output signal at
+Vout is analyzed using fast FFT algorithms.
+
+
+===== PAGE 3 / 5 =====
+
+GUARCELLO et al.: PROPERTIES OF JTWPA WITH A NON-SINUSOIDAL CPR AND RPM
+1700405
+Fig. 2.
+JTWPA gain (top panels) and output voltage spectrum (bottom panels) vs pump power, for different amplitudes of the second-harmonic contribution. Left
+panel: Jc2/ Jc1 =0 (pure sinusoidal CPR). Middle panel: Jc2/ Jc1 =0.6. Right panel: Jc2/ Jc1 =-0.6. The light-yellow area represents regular behavior with
+few spectral components, while the pink/gray area a chaotic behavior with large spectral noise. The arrows point to the value chosen for RPM testing. The color
+scale on the left indicates the signal power in the frequency spectrum.
+TABLE I
+PARAMETER VALUES USED IN SIMULATIONS
+Fig. 2(a) and (b) show results obtained using a standard
+CPR. Panel (a) focuses on the signal gain versus the pump
+tone amplitude: it shows an increasing gain with the pump
+power. However, for pump power exceeding -54 dBm, the gain
+jumps from about 10 dB to about 20 dB and is rather unstable.
+By looking at the spectrum of the output signal, panel (b), it
+is possible to see a large peak due to the pump (at 7 GHz),
+smaller peaks due to the ampliﬁed signal (at 6 GHz) and the idle
+tone (at 8 GHz), plus several harmonics and mixing products
+related to them. These mixing products increase in number and
+amplitude as the pump power increases up to a transition to a
+chaotic state for power above -54 dBm. Essentially, by scanning
+the pump amplitude it is possible to drive the JTWPA from a
+low gain with clean spectrum state, through a high gain with
+more harmonics, up to a chaotic state characterized by large
+noise rise. This effect is visible only by computing the full
+dynamical solutions of the JTWPA equations. Other methods,
+employingpre-conﬁguredansatzoftheoutputvoltagefrequency
+components [38], [39], [40], although numerically faster, cannot
+renderthefullcomplexityofthesystem,especiallynearachaotic
+transition.
+III. JTWPA WITH SECOND HARMONIC CPR
+When considering a modiﬁed CPR, like in (5), an additional
+parameter is introduced, namely the ratio between the second
+and ﬁrst harmonic of the CPR: Jc2/Jc1. This value can range
+typically from -1 to 1, where 0 means standard CPR, as in (3).
+In performing the numerical simulation of the system and to be
+comparable with the pure sinusoidal CPR, for each choice of the
+Jc2/Jc1 ratio, we have rescaled the α parameter in (5) in such a
+way that I c corresponds to the maximum value of IJ(ϕ).
+The effect of second-harmonic on the JTWPA dynam-
+ics appears quite destabilizing, as it shifts the threshold of
+chaos to lower pump power levels, see Fig. 2(d)–(f). How-
+ever, for Jc2/ Jc1 = −0.6, a larger gain is observed for a
+pump power of -64 dBm, see Fig. 2(e), thus showing that
+the harmonic component of the CPR is helping to achieve
+a more efﬁcient energy transfer between the pump and the
+signal.
+To improve the JTWPA gain, limited by the transmission line
+dispersion that causes a dephasing between pump and signal
+tones, typically Resonant Phase Matching (RPM) elements are
+periodically added to the transmission line [39], [41], [42].
+These consist of parallel LC resonators connected to ground and
+capacitively coupled to the transmission line each n cells. The
+role of the resonators is to change the wavevector of the pump
+tone,whenitisclosetotheirresonancefrequency,thusrephasing
+it with the signal. It has been numerically and experimentally
+demonstrated that, in this way, a gain larger than 20 dB can be
+achieved [39], [42]. The question is whether this mechanism
+is still valid in presence of non-sinusoidal CPR. To check this
+hypothesis, we have implemented the JTWPA model with RPM
+elements, tuned at a frequency of 7 GHz. To speed up the
+model development, and to check the consistency of different
+numerical modeling schemes, we have implemented the RPM
+JTWPA using a SPICE schematic simulator: the freely available
+LTSPICE [43].
+We have deﬁned the Josephson element, which is not present
+in the default libraries of LTSPICE, by means of controlled
+current sources, a standard SPICE component, and build the
+
+
+===== PAGE 4 / 5 =====
+
+1700405
+IEEE TRANSACTIONS ON APPLIED SUPERCONDUCTIVITY, VOL. 36, NO. 5, AUGUST 2026
+Fig. 3.
+One of the 99 sections of the RPM JTWPA showing 10 cells, repre-
+sented by the rectangular blocks, followed by the RPM circuit. The component
+values are Cc = C0 = 24 fF, Cr = 3 pF and Lr = 170 pH, resulting in a resonant
+frequency of 7 GHz.
+Fig. 4.
+Frequency spectrum of the input (red) and output (blue) signals from
+the JTWPA. Top panel: Jc2/Jc1 = 0, Fp = 6.95 GHz, Pp = −55 dBm. Middle
+panel: Jc2/Jc1 = 0.6, Fp = 6.95 GHz, Pp = −58 dBm. Bottom panel: Jc2/Jc1
+= −0.6, Fp = 7.05 GHz, Pp = −64 dBm. Inset: blow up of the spectra at the
+signal frequencies, showing the gain as ratio between output and input signal,
+also indicated by the black label. The vertical dB scale is in LTSPICE volt units.
+circuit implementing the JTWPA already investigated above.
+We ﬁrst checked that, for sinusoidal CPR, the results of the
+LTSPICE simulation are equivalent to those obtained with the
+FORTRAN code [20]. These results are not reported here due
+to space limitation. Then, we implemented the RPM circuitry,
+which was added every 10 cells. In Fig. 3 one of the 99 sections
+forming the RPM JTWPA, as visible in the LTSPICE schematic
+editor, is shown.
+By running the time domain simulation of the JTWPA circuit
+implementing the RPM, we ﬁrst made a scan to identify the best
+values for the pump tone frequency, which must be close to the
+RPM resonant frequency. Then we performed a time domain
+simulation with the identiﬁed frequencies using the same values
+for Jc2/Jc1 of Fig. 2 and choosing as amplitudes respectively:
+−55 dBm, −58 dBm and -64 dBm, as indicated by the arrows
+in Fig. 2.
+The resulting output voltage spectra are shown in Fig. 4. In
+the top panel is shown the effect of RPM addition on a pure
+sinusoidal CPR. In this case the resulting spectrum is quite clean,
+with the presence of the pump (Fp), signal (Fs) and idle (Fi)
+tones at the frequencies corresponding to the 4WM mechanism:
+(2 Fp = Fs + Fi). Relatively large peaks are also visible in the
+spectrum at frequencies close to the third harmonic of the pump
+frequency Fp. Being quite far in frequency, these signals can be
+easily ﬁltered out in a real device. Overall, the addition of RPM
+enhances the gain to from 8 dB to 11 dB.
+In the middle panel the same situation is represented for
+the case Jc2/Jc1 = 0.6. Here, the spectrum shows many more
+frequency mixing products extending also at frequencies close
+to that of the signal, but with reduced amplitudes. The overall
+gain goes from 7 dB to 12 dB. In the bottom panel the more
+interesting situation of Jc2/Jc1 = −0.6 is shown. The frequency
+spectrum is much more crowded, even if the pump power Pp is
+much lower (−64 dBm) with respect to the other two cases. The
+gain goes from 12 dB to 15 dB, but at the expense of the presence
+of many mixing products in all the interesting frequency bands
+for JTWPA applications (4 GHz to 12 GHz).
+IV. CONCLUSION
+Direct numerical simulation of JTWPA dynamics can provide
+insight into the device operation, including unwanted effects.
+JTWPAs made with Josephson junctions having non-standard
+CPR show signiﬁcant changes in the operative parameters, such
+as maximum gain and chaos transition threshold. The implemen-
+tation of Resonant Phase Matching circuits improves the JTWPA
+signal gain also in the case of nonstandard current proﬁles.
+However, care must be taken to avoid excessive generations of
+spurious signals. We emphasize that the present time-domain
+model is classical and deterministic: the increased spectral
+‘noise’ observed in Fig. 4 reﬂects nonlinear mixing and/or
+intermodulation products, while a quantitative assessment of
+the added (quantum) noise requires a quantum input–output
+treatment [44] and related JTWPA quantum-noise analyses [45].
+REFERENCES
+[1] J. Aumentado, “Superconducting parametric ampliﬁers: The state of the
+art in Josephson parametric ampliﬁers,” IEEE Microw. Mag., vol. 21, no. 8,
+pp. 45–59, Aug. 2020, doi: 10.1109/MMM.2020.2993476.
+[2] M. Sweeny and R. Mahler, “A travelling-wave parametric ampliﬁer uti-
+lizing Josephson junctions,” IEEE Trans. Magn., vol. TMAG-21, no. 2,
+pp. 654–655, Mar. 1985, doi: 10.1109/TMAG.1985.1063777.
+[3] M. T. Bell and A. Samolov, “Traveling-wave parametric ampliﬁer based
+on a chain of coupled asymmetric SQUIDs,” Phys. Rev. Appl., vol. 4,
+Aug. 2015, Art. no. 024014, doi: 10.1103/PhysRevApplied.4.024014.
+
+
+===== PAGE 5 / 5 =====
+
+GUARCELLO et al.: PROPERTIES OF JTWPA WITH A NON-SINUSOIDAL CPR AND RPM
+1700405
+[4] A. B. Zorin, “Josephson traveling-wave parametric ampliﬁer with three-
+wave mixing,” Phys. Rev. Appl., vol. 6, 2016, Art. no. 034006, doi:
+10.1103/PhysRevApplied.6.034006.
+[5] L. Fasolo et al., “Superconducting Josephson-Based Metamaterials for
+Quantum-Limited Parametric Ampliﬁcation: A Review,” in Advances in
+Condensed-Matter and Materials Physics. Rijeka, Croatia: IntechOpen,
+2020, ch. 5, pp. 75–94.
+[6] M. Esposito et al., “Perspective on traveling wave microwave paramet-
+ric ampliﬁers,” Appl. Phys. Lett., vol. 119, 2021, Art. no. 120501, doi:
+10.1063/5.0061893.
+[7] C. Guarcello et al., “Modeling of Josephson traveling wave parametric
+ampliﬁers,” IEEE Trans. Appl. Supercond., vol. 33, no. 1, Jan. 2023,
+Art. no. 0600207, doi: 10.1109/TASC.2022.3214751.
+[8] R. Rousset-Zenou et al., “Gate-tunable Josephson parametric ampliﬁers
+based on semiconductor nanowires,” 2025, arXiv:2510.00305.
+[9] W. C. Stewart, “Current-voltage characteristics of Josephson junctions,”
+Appl. Phys. Lett., vol. 12, pp. 277–280, 1968, doi: 10.1063/1.1652260.
+[10] D. E. McCumber, “Effect of AC impedance on DC voltage-current char-
+acteristics of superconductor weak-link junctions,” J. Appl. Phys., vol. 39,
+pp. 3113–3118, 1968, doi: 10.1063/1.1656743.
+[11] A. Barone and G. Paternò, Physics and Applications of the Josephson
+Effect. Hoboken, NJ, USA: Wiley, 1982, doi: 10.1002/9783527612055.
+[12] A. A. Golubov, M. Y. Kupriyanov, and E. Il’ichev, “The current-phase
+relation in Josephson junctions,” Rev. Mod. Phys., vol. 76, pp. 411–469,
+Apr. 2004, doi: 10.1103/RevModPhys.76.411.
+[13] R. Citro, C. Guarcello, and S. Pagano, “Josephson junctions, supercon-
+ducting circuits, and qubits for quantum technologies,” in New Trends and
+Platforms for Quantum Technologies, Lecture Notes in Physics, vol. 1025,
+Cham: Springer, 2024, pp. 1–59, doi: 10.1007/978-3-031-55657-9_1.
+[14] E. Goldobin et al., “Josephson junctions with second harmonic in the
+current–phase relation,” Phys. Rev. B, vol. 76, 2007, Art. no. 224523, doi:
+10.1103/PhysRevB.76.224523.
+[15] E. Goldobin et al., “Josephson junction with a magnetic-ﬁeld tunable
+ground state,” Phys. Rev. Lett., vol. 107, 2011, Art. no. 227001, doi:
+10.1103/PhysRevLett.107.227001.
+[16] H. Sickinger et al., “Experimental evidence of a ϕ Josephson junction,”
+Phys. Rev. Lett., vol. 109, 2012, Art. no. 107002, doi: 10.1103/Phys-
+RevLett.109.107002.
+[17] M. J. A. Stoutimore et al., “Second-harmonic current–phase relation
+in Josephson junctions with ferromagnetic barriers,” Phys. Rev. Lett.,
+vol. 121, 2018, Art. no. 177702, doi: 10.1103/PhysRevLett.121.177702.
+[18] A. G. P. Troeman et al., “Temperature dependence measurements of the
+supercurrent–phase relationship in niobium nanobridges,” Phys. Rev. B,
+vol. 77, 2008, Art. no. 024509, doi: 10.1103/PhysRevB.77.024509.
+[19] A. Chieppa et al., “Unveiling the current–phase relationship of InSb
+nanoﬂag Josephson junctions using a NanoSQUID magnetometer,” Nano
+Lett., vol. 25, pp. 14412–14419, 2025, doi: 10.1021/acs.nanolett.5c03765.
+[20] C. Guarcello et al., “Driving a Josephson traveling-wave parametric ampli-
+ﬁer into chaos,” Chaos Solitons Fractals, vol. 189, 2024, Art. no. 115598,
+doi: 10.1016/j.chaos.2024.115598.
+[21] R. Menditto et al., “Tunable ϕ Josephson junction ratchet,” Phys. Rev. E,
+vol. 94, 2016, Art. no. 042202, doi: 10.1103/PhysRevE.94.042202.
+[22] G. Singh et al., “Gate-tunable pairing channels in superconducting non-
+centrosymmetric oxide nanowires,” npj Quantum Mater, vol. 7, 2022,
+Art. no. 2, doi: 10.1038/s41535-021-00401-2.
+[23] P. Zhang et al., “Large second-order Josephson effect in planar
+superconductor–semiconductor junctions,” SciPost Phys., vol. 16, 2024,
+Art. no. 030, doi: 10.21468/SciPostPhys.16.2.030.
+[24] A. Leblanc et al., “From nonreciprocal to charge-4e supercurrent in Ge-
+based Josephson devices,” Phys. Rev. Res., vol. 6, 2024, Art. no. 033281,
+doi: 10.1103/PhysRevResearch.6.033281.
+[25] C. Ciaccia et al., “Charge-4e supercurrent in a two-dimensional InAs–
+Al heterostructure,” Commun. Phys., vol. 7, 2024, Art. no. 41, doi:
+10.1038/s42005-024-01541-4.
+[26] S. Messelot et al., “Direct measurement of a sin(2ϕ) current-phase rela-
+tion,” Phys. Rev. Lett., vol. 133, 2024, Art. no. 106001, doi: 10.1103/Phys-
+RevLett.133.106001.
+[27] E. Il’ichev et al., “Phase dependence of the Josephson current in inho-
+mogeneous high-Tc junctions,” Phys. Rev. B, vol. 59, pp. 11502–11510,
+1999, doi: 10.1103/PhysRevB.59.11502.
+[28] E. Il’ichev et al., “Anomalous periodicity of the current-phase relation-
+ship,” Phys. Rev. B, vol. 60, pp. 3096–3103, 1999, doi: 10.1103/Phys-
+RevB.60.3096.
+[29] D. Willsch et al., “Observation of Josephson harmonics in tun-
+nel
+junctions,”
+Nature
+Phys.,
+vol.
+20,
+pp. 815–820,
+2024,
+doi:
+10.1038/s41567-024-02429-3.
+[30] K.
+Bayros
+et
+al.,
+“Inﬂuence
+of
+pinholes
+and
+weak-points
+in
+aluminum-oxide Josephson junctions,” Phys. Rev. Mater., vol. 8, 2024,
+Art. no. 046202, doi: 10.1103/PhysRevMaterials.8.046202.
+[31] J. Griesmar et al., “Aluminum junctions with well-transmitted channels,”
+Phys. Rev. Appl., vol. 24, 2025, Art. no. 064065, doi: 10.1103/PhysRe-
+vApplied.24.064065.
+[32] T. J. Maldonado et al., “Mesoscopic theory of the Josephson junction,”
+Phys. Rev. B, vol. 111, 2025, Art. no. L140505, doi: 10.1103/Phys-
+RevB.111.L140505.
+[33] C. Guarcello et al., “Effect of a second-harmonic current–phase relation,”
+Appl. Phys. Lett., vol. 126, 2025, Art. no. 162602, doi: 10.1063/5.0262555.
+[34] H. Haider, “A black-box quantum model for superconducting traveling-
+wave parametric ampliﬁers,” IEEE Trans. Microw. Theory Techn., vol. 72,
+no. 4, pp. 2143–2157, Apr. 2024, doi: 10.1109/TMTT.2023.3345641.
+[35] C. Guarcello et al., “Nonlinear behavior of Josephson traveling wave
+parametric ampliﬁers,” IEEE Trans. Appl. Supercond., vol. 34, no. 3,
+May 2024, Art. no. 1701105, doi: 10.1109/TASC.2024.3367615.
+[36] Wolfram Research, Inc., Mathematica, Version 14.3, Champaign, IL,
+2025, https://www.wolfram.com/mathematica
+[37] S. T. Elkin, M. Haider, and T. E. Roth, “Multiphysics numerical method
+for modeling Josephson traveling-wave parametric ampliﬁers,” IEEE J.
+Multiscale Multiphys. Comput. Tech., vol. 9, pp. 247–257, 2024, doi:
+10.1109/JMMCT.2024.3428344.
+[38] O. Yaakobi et al., “Parametric ampliﬁcation in Josephson junction embed-
+ded transmission lines,” Phys. Rev. B, vol. 87, 2013, Art. no. 144301, doi:
+10.1103/PhysRevB.87.144301.
+[39] K. O’Brien et al., “Resonant phase matching of Josephson traveling-wave
+parametric ampliﬁers,” Phys. Rev. Lett., vol. 113, 2014, Art. no. 157001,
+doi: 10.1103/PhysRevLett.113.157001.
+[40] S.
+Ó.
+Peatáin
+et
+al.,
+“Simulating
+fabrication
+tolerance
+effects,”
+Supercond. Sci. Technol., vol. 36, 2023, Art. no. 045017, doi:
+10.1088/1361-6668/acba4e.
+[41] T. C. White et al., “Traveling-wave parametric ampliﬁer with Joseph-
+son junctions,” Appl. Phys. Lett., vol. 106, 2015, Art. no. 242601, doi:
+10.1063/1.4922593.
+[42] C. Macklin et al., “A near-quantum-limited Josephson traveling-wave
+parametric ampliﬁer,” Science, vol. 350, pp. 307–310, 2015, doi:
+10.1126/science.aaa8525.
+[43] M. Engelhardt, LTspice/SwitcherCAD III, Linear TechnologyCorpora-
+tion, https://www.analog.com, 2007.
+[44] C. M. Caves, “Quantum limits on noise in linear ampliﬁers,” Phys. Rev.
+D, vol. 26, no. 8, pp. 1817–1839, 1982, doi: 10.1103/PhysRevD.26.1817.
+[45] A. L. Grimsmo and A. Blais, “Squeezing and quantum state en-
+gineering,”
+npj
+Quantum
+Inf.,
+vol.
+3,
+2017,
+Art.
+no.
+20,
+doi:
+10.1038/s41534-017-0024-0.
+Open Access funding provided by ‘Università degli Studi di Salerno’ within the CRUI CARE Agreement

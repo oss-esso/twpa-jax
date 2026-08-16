@@ -1,0 +1,704 @@
+
+
+===== PAGE 1 / 7 =====
+
+
+View
+Online 
+Export
+Citation
+RESEARCH ARTICLE |  JUNE 01 1982
+Even and odd subharmonic frequencies and chaos in
+Josephson junctions: Impact on parametric amplifiers?
+M. T. Levinsen
+J. Appl. Phys. 53, 4294–4299 (1982)
+https://doi.org/10.1063/1.331259
+Articles You May Be Interested In
+Structured chaos in a devil's staircase of the Josephson junction
+Chaos (July 2014)
+Lennard-Jones hyperelastic oscillators: Observing strange attractors, Feigenbaum cascades, and chaos
+Chaos (January 2026)
+Chaotic states of rf‐biased Josephson junctions
+J. Appl. Phys. (October 1981)
+ 12 August 2026 08:51:42
+
+
+===== PAGE 2 / 7 =====
+
+Even and odd subharmonic frequencies and chaos in Josephson junctions: 
+Impact on parametric amplifiers? 
+M. T. Levinsen 
+Physics Laboratory I, H. C. Orsted Institute, Uniuersitetsparken 5, DK-2100 Copenhagen 0, Denmark 
+(Received 8 September 1981; accepted for publication 9 December 1981) 
+The Stewart-McCumber model of a Josephson junction has been shown to exhibit period-
+doubling bifurcation cascades, as described by the Feigenbaum bifurcation theory. Chaotic 
+states, sometimes associated with the bifurcations, are also prevalent. The present paper deals 
+with the questions of sub harmonic generation and chaotic states in the aforementioned model, 
+and in addition with the problem of the ubiquitous noise rise found in Josephson junction 
+parametric amplifiers. The bifurcation is first discussed by drawing on analytical results on the 
+Duffing equation which is an approximation to the complete ac-driven Stewart-McCumber 
+model. The complete model is then solved on an analog computer. Thereafter it is shown that 
+besides the even subharmonics predicted by the bifurcation theory, the natural subharmonic to 
+expect at small de currents is the odd. This may then have associated its own bifurcation tree. 
+The role of spon taneous symmetry breaking will be discussed. This reconciles the earlier 
+treatment of the 3-photon amplifier with the Feigenbaum scheme. Finally, analog calculations 
+on a model ofan externally pumped Josephson junction parametric amplifier will be discussed. 
+The conclusion seems to be that chaotic noise cannot account for the noise rise. 
+PACS numbers: 74.50. + r, 84.30.Dx, 85.25. + k 
+I. INTRODUCTION 
+The existence of period-doubling bifurcation cascades 
+in the Stewart-McCumber I model of a Josephson junction 
+has been pointed out by Huberman et oJ. 2 Since then a rather 
+extensive study of the conditions for the cascading bifurca-
+tions in this model (see Fig. 1) has been performed by Kautz. 3 
+It is the aim here first to provide a more detailed understand-
+ing of the connection between the earlier theories4 for para-
+metric amplification on the supercurrent (and the micro-
+wave induced constant voltage steps) and the cascading 
+bifurcation theory of Feigenbaum.s Especially the role of 
+spontaneous symmetry breaking will be treated in detail. In 
+Ref. 4 it was shown that the ac-driven Stewart-McCumber 
+model could be unstable towards generation of a half-har-
+monic. For this to happen conditions were ide :;60 and the 
+pump frequency fD approximately equal to twice the J oseph-
+son plasma frequency /p. The condition ide :;60 came about 
+by proving that the threshold pump power for ide = 0 was 
+infinite. In Ref. 6 a symmetry argument was similarly em-
+ployed to rule out the possibility of 3-photon interaction for 
+ide = O. Since in Ref. 2 it was found that bifurcation took 
+place for ide = 0 and a condition was/D </p, obviously some 
+clarification is needed for surely the two phenomena are one 
+and the same. Secondly, it will be demonstrated that the 
+natural subharmonic to expect is really the odd sub harmonic 
+and not the even that comes about as an instability. Associat-
+FIG. I. Junction equivalent diagram. The current source can be both 
+dc and ac. I = Ide + 10 sin wDt. 
+ed with this odd subharmonic may then again be a Feigen-
+baum bifurcation tree. 
+In Ref. 2 a very complicated pattern of deterministic 
+chaos, sometimes associated with the bifurcation cascades, 
+was also observed. This chaotic noise was pointed to in Ref. 2 
+as a likely source of the noise rise always encountered in 
+externally pumped Josephson junction parametric amplifi-
+ers. However, it is of course not enough to show the existence 
+of chaotic states. In order to test the idea a complete amplifi-
+er was modeled on an analog computer. Both the 3- and 4-
+photon amplifier cases were treated. Also the existence of the 
+diverse sub harmonics was investigated with the help of the 
+analog computer. As in the cases of Refs. 2 and 3 the basic 
+junction model will be the ac-driven Stewart-McCumber 
+model. This is rather difficult to treat analytically and we 
+shall therefore take recourse to the Duffing equation to give 
+a qualitative understanding of what to expect and then use 
+an analog computer (EMRI-ACS-122 D hybrid analog com-
+puter) to verify the conclusions on the complete model. 
+II. SUBHARMONIC GENERATION 
+The basic ingredients in the Stewart-McCumber model 
+are shown in Fig. 1. In terms of dimensionless parameters 
+the differential equation for this model reads 
+Pc¢i + ~ + sin <p = ide + iD cos fiD" 
+(1) 
+where 
+Pc = 2eR 2IcC Iii, 
+fiD = (li/2eRIc)tuD' 
+and 
+r = (2eRIJIi)t. Currents and voltages are normalized by Ic 
+and RIc, respectively. In normalized units the Josephson 
+plasma frequency (J)p = (2eIJliC)1 becomes fip = P c-~' 
+Since as stressed above the equation is rather unhandy we 
+shall in the following turn to Duffings equation. This comes 
+about by expanding sin <p and retaining only the first two 
+terms. Written in the usual notation 7 we have 
+4294 
+J. Appl. Phys. 53(6), June 1982 
+0021-8979/82/064294-06$02.40 
+@ 1982 American Institute of Physics 
+4294 
+ 12 August 2026 08:51:42
+
+
+===== PAGE 3 / 7 =====
+
+(2) 
+where v is an integer. 
+In what follows we shall assume that 28< 1, i.e., the 
+junction is highly undamped. The behavior of this equation 
+is well documented in the literature7 and it is therefore well 
+suited for expounding the qualitative behavior to be expect-
+ed from the Stewart-McCumber model. Following Huber-
+man et aU let us first assume Bo = 0, and then guess as an 
+approximate solution 
+v = vo+s 
+= z + w cos V'T + s. 
+(3a) 
+Here Vo is an appropriate steady-state solution before some 
+(small) change in a parameter introduces a change s. z is a dc 
+term. Under the aforementioned condition this trial function 
+is a quite good approximation. The amplitude w is further-
+more well approximated by 
+1 
+w= ---B. 
+I-v 
+(4) 
+If one now suspects the existence of a subharmonic Eq. (3a) is 
+written explicitly as 
+v = z + w cos V'T + x sin r + y cos 'T. 
+(3b) 
+By reason of symmetry one would guess that z = 0 is a neces-
+sary condition. Using this, insertion of Eq. (3b) into Eq.(2) 
+under the condition v# 3, yields (by collecting terms in sin 'T 
+and cos r) 
+c3[ 1 - l (x2 + y2) -
+~ w2] X + 2c5y = 0, 
+c3 [ 1 - l (x2 + y2) -
+~ w2] Y -
+2c5x = O. 
+(5) 
+From this set of equations we find 
+2 8(x2 + y2) = 0 
+(6) 
+for the amplitude of the subharmonic oscillation. This im-
+plies that no subharmonic oscillation can occur for Bo = 0 
+unless no damping is present in agreement with Refs. 4 and 6 
+and in seeming disagreement with Ref. 2. The solution to this 
+discrepancy is broken symmetry. As noted in Ref. 7 it is 
+really the choice of z = 0 that results in the banishment of 
+subharmonics. Another known case where broken symme-
+try plays an important role in the behavior ofthe Josephson 
+junction is ide = 0, <P = nwt, i.e., the spontaneous jump to 
+zero-crossing steps.8 This is what is called a traveling limit 
+cycle in Ref. 2. 
+III. EVEN SUBHARMONICS 
+If we now concern ourselves with the case v = 2 and 
+allow z#O, the following terms are added to the left hand 
+side of Eq.(5) 
++ c3(3 rx - 3 zwx) 
++ c3(3 Z2y + 3 zwy). 
+(7) 
+This results in the condition [instead of Eq.(6)] 
+2 8(x2 + y2) = 6 CJZwxy. 
+(8) 
+Also one finds for the dc term the equation 
+ctz + c3[r + 32
+Z (x2 + y2) + 3
+2
+Z w2 -
+lw(x2 _ y2)] = o. 
+(9) 
+4295 
+J. Appl. Phys., Vol. 53, No.6, June 1982 
+Thus the existence of a half-harmonic is possible if at the 
+same time z#O. Since this is really a bifurcation there is of 
+course two values of z: Zt = - Z2' giving symmetric solu-
+tions. In the language of the Josephson junction this means 
+that 
+ide = < sin <p > = 0 
+does not necessarily imply 
+<<p> = 0 
+(10) 
+(11) 
+which at first seems rather strange and explains why this 
+solution was ruled out in Refs. 4 and 6. From Eq.(9)it is seen 
+that z # 0 is actually a second order effect in s. The possibility 
+of z#O was therefore ruled out by the linearization of the 
+Stewart-McCumber equation performed in Ref. 4. If the sec-
+ond order term is retained it is in fact easy to see by guessing a 
+trial function that includes a half-harmonic, the relaxation of 
+the condition in Eq.(1 U In agreement with Ref. 2 this is seen 
+to imply rather high power levels (inherent in a second order 
+effect) where the supercurrent is very much depressed and so 
+the plasma frequency. It is therefore not surprising that the 
+half-harmonic generation for ide = Bo = 0 only seems to 
+happen when W D <wp(wp being the undisturbed plasma fre-
+quency). Knowing this one might easily, by playing with a 
+pendulum, convince oneself about the possibility of the z # 0 
+solution (or in the Josephson language < <p > #0 solution). 
+From Eq.(9)one can easily see that for finite Bo(ide #0) one no 
+longer has to take the second order term into account. The 
+result is that the excitation of the half-harmonic can take 
+place for much lower power values. This then explains why 
+the frequency condition can be WD -2 wp. In this case the 
+symmetry is already broken by the dc-current term. 
+Let us now briefly discuss the case of v = 4. For v = 4 
+and z#O we have to add only 
++c3 3z2x 
++ c3 3 ry 
+(12) 
+to the left hand side of Eq.(5).Thus we again find the condi-
+tion Eq.(6)for the amplitude; i.e., only for 8 = 0 (no damping) 
+can a 1/4 subharmonic exist in the Duffing equation without 
+a 1/2 subharmonic being present. Inclusion ofthe ~ subhar-
+monic in the steady-state solution will of course through 
+some rather tedious calculations show that the 1/4 subhar-
+monic is a possibility even for 8 #0. More about this in Sec. 
+IV. 
+The usual procedure for calculating the stability of a 
+steady-state solution is to go back to Eq. (3a) and treat S as a 
+small perturbation. Linearization of the equation in S makes 
+it possible to transform the Duffing equation into a Mathieu 
+equation which may be unstable towards excitation of the 
+half-harmonic. With the transformation s = e - OT1J this 
+reads 
+(13) 
+If the half-harmonic then is stable one includes this in the 
+steady-state solution Vo. The linearization then allows the 
+transformation into a Hill's type equation 
+d 21J [3 
+] 
+d~ + 00 + 2.f0n cos (2 n'T -
+En)TJ = 0, 
+(14) 
+M. T. Levinsen 
+4295 
+ 12 August 2026 08:51:42
+
+
+===== PAGE 4 / 7 =====
+
+where the specific values of the constants On and En need not 
+concern us. 
+This equation may be unstable towards a 1/4 subhar-
+monic. If this then is stable it can be incorporated in Vo and so 
+on ad infinitum. This is the origin of the cascading bifurca-
+tion of Feigenbaum. 5 The Mathieu equation was already uti-
+lized for the McCumber case in Ref. 4 working on the 3-
+photon amplifier. We should like to remark here that if one 
+sets Do = Z = 0 in Eq.(13)then the driving term in v~ has the 
+frequency 2 (r) D' The system is therefore unstable towards 
+(r) D! This is the basis for the 4-photon parametric amplifier. 6.9 
+Of course no bifurcation is connected with this instability for 
+z=O. 
+Use of the Duffing equation can naturally only give an 
+idea of what may be expected from the full equation. Howev-
+er, it is already known from Refs. 2 and 3 that the bifurcation 
+actually may occur. The analog calculations shown in Fig. 2 
+(spectrum obtained on a 3582A H.P. spectrum analyzer) are 
+dB 
+50 
+a 
+40 
+20 
+0 
+60 
+b 
+i,Q 
+"' E 
+J 
+20 
+~ 
+E 
+.e 
+.E 
+0 
+,., 
+~50 
+c 
+~ 
+"E .. 
+~ 40 
+n.. 
+50 
+d 
+'0=0.500 
+'0=0.544 
+1154dB 
+'0=0.574 
+FIG. 2. Examples of subharmonic generation in a cascading bifurca-
+tion leading to chaos. "Junction parameters": Pc = 25, and f" = 318 
+Hz. ide = 0.5, fD = 480 Hz. The vertical bar in 2(b) shows the expected 
+drop in successive power levels of subharmonics. A chaotic trace is 
+shown in Fig. 2(d). 
+4296 
+J. Appl. Phys., Vol. 53, NO.6, June 1982 
+meant to illustrate two important features. First, that the 
+cascading bifurcation may actually happen for (r) D - 2 {r)p (ide 
+'# 0) and therefore in a regime of interest for the 3-photon 
+amplifier. Secondly, Fig. 2(c) shows an unexpected feature, 
+namely what looks like a 1/12 subharmonic. This may of 
+course be attributed to the finite precision of the analog com-
+puter, but turning back to the hitherto neglected case of 
+v = 3 in the treatment of the Duffing equation another ex-
+planation will be seen to prevail. This will be the subject of 
+Sec. IV. 
+Concluding Sec. III we should like to remark on the 
+comparison with the Feigenbaum theory. Two universal 
+predictions are resulting from this. This first is that if a 
+change in a parameter a brings about a cascade, then the 
+critical values an for the 2 - n subharmonic to occur form a 
+geometric series such that lim an - an _ II an + I -
+an 
+n~oo 
+= Ii = 4.669 ... This has been shown to be fulfilled in some 
+cases for the ac-driven Stewart-McCumber model both for 
+a = i D (Ref. 2) and a = ide (Ref. 3). However, the occurrence 
+of the 1112 subharmonic in Fig. 2(c) shows that the picture 
+may be much more complicated than hitherto conjectured, 
+since the 1/12 subharmonic actually breaks into the bifurca-
+tion cascade just after the 1/32 subharmonic has appeared. 
+The chaotic state still occurs but at a higher power level than 
+expected. 
+The other prediction concerns the power levels of the 
+subharmonic which should differ by approximately 16.4 dB 
+for adjacent values of n. From Fig. 2(b) this also is seen to be 
+approximately correct. 
+IV. ODD SUBHARMONICS 
+Returning to the discussion in Sec. II we shall now con-
+sider the case of v = 3. For simplicity we take Do = D. Again 
+we use a trial function of the form given in Eq. (3b). In this we 
+set Z = O. As will be seen this does not have the disruptive 
+effect as was the case for all other subharmonics. Substitu-
+tion of the trial function into the Duffing equation leads to 
+(again isolating terms in sin r and cos r) 
+3w 
+Ax + 2 oy = - 2 
+C3XY, 
+Ay- 20x = 
+(15) 
+where 
+A = 1 -
+CI -
+[ ~ (x2 + y2) + ~ w
+2
+] c3• 
+(16) 
+By squaring and adding the two equations constituting Eq. 
+(15)we obtain 
+(17) 
+Therefore a 1/3 subharmonic may occur whether or not v 
+Ii = O. It is easily shown that this is also the case for Do'#O. 
+This is a direct consequence of the relation 
+sin 3z = 3 sin z - 4 sin 3Z• 
+(18) 
+From this one can immediately see why a 1/2 subharmonic 
+can be a natural frequency to expect for Do '# o. By a suitable 
+choice of k, v = u + k transforms the Duffing equation with 
+M. T. Levinsen 
+4296 
+ 12 August 2026 08:51:42
+
+
+===== PAGE 5 / 7 =====
+
+Bo#O into the form7 (corresponding to the expansion of 
+sin cP around cPo#O) 
+ii + 2 c5u + CIU + C2U2 + C3U3 = B cos vt. 
+(19) 
+The leading nonlinear term is thus in u2• No spontaneous 
+symmetry breaking is therefore required. This is the basis of 
+the optical parametric amplifier with the obvious implica-
+tion that a similar bifurcation cascade may be possible here. 
+Since 
+(n -
+1112 
+sin nz = L a2k _ I sin (2k -
+1)z + an sin nz 
+(20) 
+k=1 
+including a vn nonlinearity in the Duffing equation might 
+lead one to suspect that 1/n subharmonics may also occur 
+given suitable conditions. This can indeed be proven as 
+above and a general statement is as follows. If the maximum 
+nonlinear term is of order n ,n odd, then subharmonics up to 
+?ut not .above nth order may occur! This has the following 
+mterestmg consequence for the Josephson junction. Since 
+the expansion for sin cP is an infinite series in odd powers, all 
+kinds of odd subharmonics may be expected to occur de-
+pending on the damping c5. Whether this conjecture is true 
+must of course be investigated using the complete 
+McCumber equation. Figure 3 shows different types of be-
+havior calculated on the analog computer using the full 
+equation, showing that odd subharmonics are indeed the 
+natural subharmonics to expect for the Josephson junction 
+at ide = O. A comment on the absence of odd subharmonics 
+in the calculation by Kautz3 is relevant here. The drive fre-
+quency chosen by Kautz was equal to the plasma frequency. 
+We found that somewhat lower frequencies were needed to 
+dB 
+60 r-
+40 r-
+2 20 r-
+C 
+::J 
+~ 
+E 00 
+.0 
+(; 
+~ dB 
+.~ 60 r-
+<1J 
+"E 
+~ 40 r-
+20 t-
+o 0 
+iD = 0.52 
+I 
+I 
+I 
+I 
+100 
+200 
+300 
+400 
+Hz 
+iD =033 
+II 
+I. 
+100 
+200' 
+300 
+400 
+Hz 
+FIG. 3. Examples of generation of odd subharmonics. "Junction pa-
+rameters" as Fig. 2. id, = 0.4. Iv = 210 Hz. 
+4297 
+J. Appl. Phys., Vol. 53, No.6, June 1982 
+dB 
+III 
+~ 60 
+::J 
+>-e 
+15 40 
+(; 
+r-
+I--
+I--
+1 II 
+0 
+100 
+iD =0.54 
+I 
+A 
+J 
+2004 
+300 
+4 00 
+Hz 
+FIG. 4. Start of bifurcation from an odd subharmonic. "Junction pa-
+rameters" as Fig. 2. id, = 0.4. Iv = 210 Hz. 
+bring out the odd subharmonics, thus the choice of21O Hz in 
+the present calculation (WD/WP = 0.66). On the analog all 
+odd subharmonics up to 1/15 have been observed. Naturally 
+once a 1/n subharmonic is generated all higher harmonics of 
+this will show up in the usual fashion. Returning to a 1/12 
+subharmonic such may be produced in the following way. 
+Consider a steady-state solution that includes a stable 1/3 
+sub harmonic. Insert this as Vo in the Mathieu equation (Eq. 
+(13)]and Vo is seen to be possibly unstable towards a 1/6 sub-
+harmonic. Thus one may generate a cascading bifurcation 
+starting from an odd subharmonic as illustrated in Fig. 4 on 
+the complete equation. So in a Josephson junction there is 
+really an infinite choice of ways to bifurcate into chaos. To 
+our knowledge these odd subharmonics have not been ob-
+served experimentally yet. However, this is probably be-
+cause no one has ever arranged the excitation-detection sys-
+tem in such a way as to allow for the observation. 
+From the above discussion it is now clear why the 1/4 
+subharmonic required the simultaneous presence of the 1/2 
+subharmonic in the case of the Duffing equation. This is a 
+reflection of the fact that the highest even order term in Eq. 
+(19)is the second order term. For Bo (or Ide)#O a similar 
+g~neral statement as for the case of odd subharmonics ap-
+phes for even subharmonics. Thus in principle a 1/vn sub-
+harmonic may spontaneously occur without the previous oc-
+currence of the Un subharmonic. This, of course, will be 
+generated as a harmonic. 
+Up to this point we have only considered the case of a 
+spontaneous symmetry breaking correlated with the appear-
+ance of a time-independent term in the trial function. How-
+ever, as mentioned before, another type of spontaneous sym-
+metry breaking exists in the Josephson junction. This is the 
+spontaneous jumps to finite voltage steps which may take 
+place even with no dc current applied. This corresponds to 
+including a term I?roportional to t in the trial function (i.e., a 
+constant term in cP for the Josephson junction). For the Duff-
+ing equation the nonlinear term will then generate terms in 
+higher orders of t which will then diverge. The Stewart-
+McCumber model on the other hand has a periodic poten-
+tial. The divergencies are therefore successively cancelled by 
+the higher order terms as is known from the usual Bessel 
+function expansion for the step structure. Subharmonics of 
+the pump frequency can therefore arise from a higher har-
+M. T. Levinsen 
+4297 
+ 12 August 2026 08:51:42
+
+
+===== PAGE 6 / 7 =====
+
+monic of the finite voltage Josephson oscillation phaselock-
+ing with the pump. On these substeps (even or odd), the exis-
+tence of which are well documented, one can then again have 
+excitation of subharmonic frequencies, again both even and 
+odd. We have e.g. observed a 1/3 subharmonic of the funda-
+mental Josephson frequency from a 1/5 substep, i.e., 1/15 
+subharmonic of the pump. 
+V. AMPLIFIER NOISE 
+In all externally pumped parametric amplifiers based 
+on the Josephson junction one encounters the strange phe-
+nomenon of the noise rise which at least for tunnel junctions 
+seems to have the unfortunate consequence that gain and 
+noise temperature are proportional. For a detailed review of 
+this we should refer to Ref. 10. For the microbridge at least 
+the range of parameters is such that it seems very unlikely 
+that chaotic noise might occur. The RC time constant corre-
+sponds to a frequency of order 500 GHz. The pump frequen-
+cy is therefore well below the lower cut-off frequency for 
+chaotic behavior. The phase-instability noise of Ref. 11 
+seems therefore a good candidate for explaining the noise 
+rise here although some difficult points remain. 10 We should 
+remark here that although the exact coefficient is not yet 
+known, a gain-dependent noise temperature is also found in 
+the case of the microbridge. In what follows we shall devote 
+ourselves to the question of tunnel junctions where chaotic 
+noise may be expected to occur. 
+Since for the 4-photon amplifier one is actually able to 
+choose junction parameters such that to operate outside the 
+regime of chaotic behavior, we shall concentrate on the 3-
+photon amplifier in the following. There is of course no es-
+caping that the operating point has to be close to the very 
+threshold of 1/2 harmonic excitation and therefore may be 
+comparatively close to a regime of chaotic behavior, con-
+nected with a cascading bifurcation. In the calculation de-
+scribed below parameters have deliberately been chosen so 
+that this is indeed the case. 
+In the 3-photon process one applies a signal offrequen-
+cy w .. -wp cos rPo which is the plasma frequency at.the dc 
+bias current ide = ie sin rPo. The pump frequency IS then 
+wD -2ws ' Turning up the pump amplitude one c~n then 
+observe the parametric interaction through obserVing the 
+idler w, = W D -
+W s ,- W s' For the chaotic noise to be ~ noise 
+source in the parametric amplification one would reqUire the 
+idler and the chaotic noise to be present simultaneously. 
+This, however, does not happen. The idler grows until the 
+half-harmonic occurs, then the amplitude falls drastically. 
+The amplitude then wobles up and down as the 1/4 subhar-
+monic and the higher subharmonics set in but never becomes 
+large again and long before the chaotic state occurs the idler 
+has completely disappeared. This too happens in the four-
+photon case. This is, however, not conclusive evidence since 
+a change in idler amplitude just may refl.ect an imp~ance 
+change and bears no relation to amplification before Input 
+and output circuits are established. This has been realized on 
+the analog computer in the following way (Fig. 5). Since the 
+circulator isolates the signal source this is just a current 
+source i to which one then can ascribe a source resistance 
+equal t;"the load resistance. Since we are only interested in 
+4298 
+J. Appl. Phys., Vol. 53, No.6, June 1982 
+~oed ciccuil 
+I;~RAMP 
+FIG. 5. Analog model of a circulator coupled Josephson junction para-
+metric amplifier. The J stands for the Stewart-McCumber model of the 
+amplifier. 
+the output signal at the input signal frequency, a tuned cir-
+cuit can be used to dc isolate the load resistor from the junc-
+tion circuit. Such a tuned circuit is actually often present in 
+the experiments. The output iou• in the load resistor is now 
+just the sum of the current in the tuned circuit and iin' The 
+amplification is then simply defined as r = (iou,lii" f Pro-
+ceeding as before gains above 30 dB were observed on the 
+threshold of the half-harmonic. Small gain was obtained 
+above threshold but as soon as higher order subharmonics 
+were created, the gain disappeared completely and we in fact 
+never obtained coexistent gain and chaotic noise. 
+With the idea in mind that external noise could switch 
+the junction between states of amplification and chaotic 
+noise and through this on the laboratory time scale make 
+them look simultaneous, a white noise source (generated by 
+the spectrum analyzer) was applied either directly to the 
+junction or together with the signal. A typical example of the 
+outcome is shown in Fig. 6. The double peak structure of the 
+noise background is due to the tuned circuie 2 and is very 
+often encountered in real life experiments.",13 As can be 
+seen we have amplified noise, but noise and signal are ampli-
+fied together and the noise temperature is therefore constant; 
+i.e., we have no noise rise. One should say that we do find a 
+constant gain-bandwidth product given by .1w/(w) 
+r' /2 -lIQ as expected from varactor theory. 
+.. 
+For higher pump power values the half-harmomc IS ex-
+cited and the gain disappears. The output noise at the signal 
+frequency for the curve with highest amplification is ap-
+1/2 to = 240 Hz 
+......................... _ ............ . 
+Input 
+signal 
+level 
+FIG. 6. "Output" of the amplifier model for two different "pump" 
+amplitude settings. Lower curve iD = 0.230, upper curve iD = 0.245. 
+Value of load resistor 4XRJ , Q of tuned circuit (including load resis-
+tor) equals 10. "Junction parameters" as Fig. 2. ide = 0.4. fD = 480 Hz. 
+/, = 265 Hz. 
+M. T. Levinsen 
+4298 
+ 12 August 2026 08:51:42
+
+
+===== PAGE 7 / 7 =====
+
+proximately equal to the chaotic noise level for yet higher 
+pump values. But changing the input noise power makes no 
+change in the qualitative picture. We should stress here that 
+the actual shape of the noise spectrum far from the plasma 
+frequency does not make any noticeable difference. Thus a 
+high level of low frequency noise does not have much 
+influence. 
+From this we conclude that the chaotic noise, although 
+itself an intriguing phenomenon, does not seem to explain 
+the observed noise rise neither for the 3- nor for the 4-photon 
+amplifier. We have altogether not been able to produce the 
+noise rise on the analog. One reason may be the comparative-
+ly low Q ( - 10) of the tuned circuit as compared to that in real 
+experiments, where amplifier bandwidths of order 20 MHz 
+are encountered compared to signal frequencies of 35 GHz. 
+Such high Q values, however, are very difficult to realize on 
+the analog. Also their occurrence in experiments is not fully 
+accounted for. It is anyway difficult to see that a high Q 
+could bring about the coexistence of gain and chaotic noise, 
+but this could be the explanation for the failure of the mecha-
+nism suggested in Ref. 14 to show up. 
+ACKNOWLEDGMENTS 
+The author wish to thank M. J. Feldman, R. Y. Chiao, 
+and the Josephson group at DtH, Lyngby for many stimulat-
+ing discussions. Furthermore, I wish to thank the Servolab. 
+at DtH for the loan of their analog computer and especially I 
+want to thank H. Holt and M. Blanke for their generous 
+help. Thanks are also due to Peter Mossing of the Dept. of 
+4299 
+J. Appl. Phys., Vol. 53, No.6, June 1982 
+Structural Engineering, DtH for loan of his Spectrum Ana-
+lyzer. This work was supported by the Danish Natural Sci-
+ence Research Council. 
+IW. C. Stewart, Appl. Phys. Lett. 12,227 (1968); D. E. McCumber, J. 
+Appl. Phys. 39, 3113 (1968). 
+2B. A. Huberman, J. P. Crutchfield, and N. H. Packard, Appl. Phys. 
+Lett. 37, 750 (1980). 
+3R. L. Kautz, 1. Appl. Phys. 52, 3528, 6241 (1981). 
+4N. F. Pedersen, M. R. Samuelsen, and K. Saermark, J. Appl. Phys. 
+44, 5120 (1973). 
+5M. J. Feigenbaum, J. Stat. Phys. 19, 25 (1978); J. Stat. Phys. 21, 669 
+(1979); Los Alamos Science, Summer 1980, p. 4. 
+OM. J. Feldman, J. Appl. Phys. 48, 1301 (1977). 
+7C. Hayashi, Nonlinear Oscillations in Physical Systems (McGraw-Hill, 
+New York, 1964). 
+8M. T. Levinsen, R. Y. Chiao, M. J. Feldman, and B. A. Tucker, 
+Appl. Phys. Lett. 31, 776 (1977). 
+9M. T. Levinsen, N. F. Pedersen, O. H. Sorensen, B. Dueholm, and J. 
+Mygind, IEEE Trans. Electron Devices ED-27, 1928 (1980). 
+10M. J. Feldman and M. T. Levinsen, IEEE Trans. Magn. MAG-l1, 
+834 (1981). 
+"R. Y. Chiao, M. J. Feldman, D. W. Peterson, B. A. Tucker, and M. 
+T. Levinsen, in "Future Trends in Superconducting Electronics," 
+edited by B. S. Deaver,Jr., C. M. Falco, J. H. Harris, and S. A. 
+Wolf, AlP Conf. Proc. No. 44 (AlP, New York, 1978), p. 259. 
+12W. J. Getsinger and G. L. Matthaei, IEEE Trans. MTT·12, 77 
+(1964). 
+l3y' Taur, and P. L. Richards, J. Appl. Phys. 48, 1321 (1977). B. Due-
+holm, N. F. Pedersen, O. H. Sorensen, J. Mygind, and M. T. Levin-
+sen, Internal Report No. 206, DtH Lyngby. 
+14M. J. Feldman, and M. T. Levinsen, Appl. Phys. Lett. 36, 854 
+(1980). 
+M. T. Levinsen 
+4299 
+ 12 August 2026 08:51:42

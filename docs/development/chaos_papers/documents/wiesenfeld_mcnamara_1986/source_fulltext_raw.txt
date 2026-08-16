@@ -1,0 +1,4227 @@
+
+
+===== PAGE 1 / 14 =====
+
+PHYSICAL REVIE%' A
+VOLUME 33, NUMBER
+1
+Small-signal
+amplification
+in bifurcating
+dynamical
+systems
+JANUARY
+1986
+Kurt Wiesenfeld'
+and Bruce McNamara
+Department ofPhysics,
+Uniuersity of California,
+Santa Cruz, California
+95064
+I'Received
+5 August
+1985)
+Near
+the onset of a dynamical
+instability,
+any time-periodic
+system
+can act to amplify
+small
+periodic perturbations.
+The details of this small-signal
+sensitivity
+depend
+solely on the type of bifur-
+cation involved:
+Explicit expressions
+are derived for the. power spectra in the vicinity of the simplest
+classes of codimension-1
+bifurcations.
+Results
+obtained
+from
+analog
+simulations
+of a period-
+doubling
+system
+are in good
+agreement
+with
+the theory.
+%e propose
+that
+the superconducting
+Josephson-junction
+parametric
+amplifier
+is an example of this amplification
+process.
+I. INTRODUCTION
+This paper
+concerns
+time-periodic
+dynamical
+systems
+near the onset of instabilities
+and their sensitivity
+to per-
+turbations
+which
+are
+likewise
+periodic.
+We show
+that
+such
+dynamical
+systems
+can
+greatly
+amplify
+small-
+amplitude
+perturbations,
+provided
+the
+frequency
+of the
+perturbation
+is properly
+chosen.
+The "proper choice" of
+frequency
+range depends
+only on the type of bifurcation
+encountered.
+In this paper
+we consider
+several
+classes of
+bifurcation:
+saddle-node,
+transcritical,
+pitchfork,
+period-
+doubling,
+and Hopf.
+These are the simplest
+codimension-
+1 instabilities
+of periodic orbits. i.e., they are the bifurca-
+tions typically
+encountered
+as a single control parameter
+is varied.
+The results of this paper are based on very gen-
+eral considerations;
+consequently,
+they apply to any physi-
+cal system
+governed
+by a set of ordinary
+differential
+equa-
+tions, near the onset of a bifurcation.
+The basic
+principles
+involved
+here
+have
+already
+ap-
+peared
+in a short paper. '
+There,
+we studied
+a particular
+system, namely
+the driven Duffing
+equation
+x=F(x,t), xcZ~.
+(1.2)
+Second, the unperturbed
+system
+may depend
+explicitly
+on
+time, as in Eq. (1.1), or may not (the system
+is said to be
+nonautonomous
+or autonomous,
+respectively).
+Third, the
+perturbative
+modulation
+can enter either
+additively
+as in
+x+yx+Aox+px
+=A cos(tot)+B+5cos(Qt),
+where the constants y, Q, p, A, and 8 were tuned so that
+the unperturbed
+oscillator (5=0) was close to the onset of
+a period doubling.
+%%en the small-amplitude
+modulation
+was turned
+on (5&0) with frequency
+Q=nco/2,
+n an odd
+integer, the power spectrum
+of x (t) showed
+a large com-
+ponent
+at Q. An explicit expression
+for the power spec-
+trum
+was derived
+for Eq. (1.1) in terms of the detuning
+frequency
+A=Q
+nto/2
+and—
+the bifurcation
+parameter
+e
+when both b, and e were small:
+Analog simulations
+of Eq.
+(1) were also performed,
+and these supported
+the analytic
+results. '
+The purpose of the present
+work is to extend the results
+of Ref. 1 in four important
+ways.
+First, we begin with the
+more general evolution
+equation
+Eq. (1.1), or "parametrically, "such as
+x+yx+[Ao+5cos(Qt)]x+Px =3 cos(tot)+8 .
+(1.3)
+Finally,
+the instability
+in question
+need not be a period-
+doubling
+bifurcation.
+We are able to handle most of these
+generalizations
+within
+a single notational
+formalism,
+the
+only
+exception
+being
+the difference
+between
+autonomous
+and
+nonautonomous
+systems.
+Consequently,
+the deriva-
+tions for autonomous
+systems
+are covered
+separately
+in
+Sec. V, though
+the
+differences
+with
+the
+corresponding
+nonautonomous
+results are relatively
+mild.
+The
+idea
+that
+a system
+poised
+near
+the
+onset of a
+dynamical
+instability
+might
+amplify
+coherent
+(i.e., non-
+random)
+signals
+was
+spawned
+from
+previous
+work
+con-
+cerning
+the effect of noisy
+perturbations
+on the
+power
+spectra of periodic
+systems.
+The addition
+of a flat-
+spectrum
+input
+(white
+noise) gives rise to new broadband
+peaks not present
+in the noise-free system.
+In each case
+these noisy
+precursor
+peaks are centered
+at the new fre-
+quencies
+that
+appear
+only
+after
+the bifurcation
+of the
+deterministic
+system.
+The theory of noise precursors
+has
+been checked quantitatively
+by measurements
+on voltage-
+driven p njuncti-ons
+for period doubling
+and Hopf cases.
+Noisy
+precursors
+have also been
+seen in experiments
+on
+semiconductor
+lasers
+and in analog
+circuits
+governed
+by
+Eq. (1.1).
+One
+question
+that
+is bound
+to arise
+is whether
+the
+small-signal
+sensitivity
+described
+in this paper has a prac-
+tical use.
+One place where these ideas may find practical
+application
+is in the study of superconducting
+Josephson-
+junction
+parametric
+amplifiers
+("paramps"). '
+'
+These
+devices
+operate
+in an interesting
+frequency
+range (-35
+GHz) and have achieved
+good gain in laboratory
+experi-
+ments, '
+'
+although
+undesirable
+noise
+characteris-
+tics'
+'
+thus far have prevented
+them from being techno-
+logically
+useful.
+We propose that the basic amplification
+mechanism
+underlying
+the operation
+of these paramps
+is
+just the dynamical
+explanation
+developed
+here, both for
+three-photon
+paramps'
+and for four-photon
+paramps.
+%e
+enter a fuller discussion of this topic in Sec. IV B.
+An issue of a more general
+nature
+is discussed
+in Sec.
+IV C, which
+may also be important
+for potential
+applica-
+tions of this amplification
+mechanism.
+The theory
+finds
+33
+629
+1986 The American
+Physical Society
+
+
+===== PAGE 2 / 14 =====
+
+630
+KURT %IESENFELD AND BRUCE McNAMARA
+33
+that
+large amplification
+factors
+are achieved
+when
+both
+the bifurcation
+parameter
+e and the detuning
+frequency
+b
+are small.
+Consequently,
+significant
+amplification
+might
+be achieved
+in only
+narrow
+frequency
+windows.
+An in-
+teresting
+phenomenon
+can occur, however,
+that alleviates
+this difficulty,
+allowing
+for a wide and continuous
+tuning
+range for these high-gain
+windows.
+This phenomenon-
+the so-called
+virtual
+Hopf sequence
+' —
+is quite common
+in low-dimensional
+systems,
+such as the Lorenz equations
+and the driven damped
+pendulum
+(which in turn describes
+the Josephson
+paramp
+dynamics
+mentioned
+above).
+The contents of this paper are organized
+as follows.
+In
+Sec. II the basic problem
+is laid out along with the formal
+mathematical
+framework,
+and a general
+expression
+is de-
+rived
+for the system's
+response
+to the perturbation.
+In
+Sec. III expressions
+are derived
+for the power
+spectrum
+near
+the
+onset
+of saddle-node,
+transcritical,
+pitchfork,
+period-doubling,
+and Hopf bifurcations,
+when
+the unper-
+turbed
+system
+is nonautonomous.
+Section IV discusses
+three specific aspects of these general
+results:
+(i) The re-
+sults of analog
+simulations
+of the driven
+Duffing
+oscilla-
+tor are presented,
+and compared
+with the period-doubling
+predictions;
+(ii) the connection
+with Josephson
+paramps
+is
+made,
+for
+both
+the
+three-
+and
+four-photon
+operating
+modes; (iii) the virtual
+Hopf phenomenon
+is described
+and
+is shown to provide certain advantages
+for tuning
+and sta-
+bility
+in small-signal
+amplification.
+In Sec. V we return
+to the situation
+where
+the unperturbed
+system
+is auto-
+nomous
+and
+compare
+the expected
+power
+spectra
+on a
+case-by-case
+basis with the corresponding
+results of Sec.
+III. Finally,
+a brief summary
+of the limitations
+and con-
+clusions of the theory is provided
+in Sec. VI.
+II. PERTURBATIVE APPROACH
+Our aim is to study
+the effect of a coherent
+(i.e., non-
+random)
+perturbation
+on a system
+near
+the onset of a
+dynamical
+instability.
+Before developing
+the general
+for-
+malism,
+we consider a specific example.
+The damped
+driven pendulum
+obeys
+8+y8+ oiosin8 =A cos(oJt)
+(2.1}
+and can undergo
+a sequence
+of bifurcations
+as
+A is in-
+creased from zero. '
+o' ' For small driving
+amplitude
+A,
+the
+steady-state
+response
+8(t) is a symmetric,
+(2m/co)-
+periodic
+oscillation.
+[The
+"symmetry"
+of 8(t)= —8(t
++m/oJ).
+The experimental
+signature
+of such an orbit is
+that
+its power
+spectrum
+contains
+odd harmonics
+only. ]
+As
+A
+is
+increased,
+the
+system
+first
+undergoes
+a
+symmetry-breaking,
+or
+pitchfork,
+bifurcation.
+Then,
+steadily
+increasing
+A can result
+in a sequence of period-
+doubling
+bifurcations,
+leading to chaos. ' '
+Suppose that 3 is adjusted
+so that the system is just be-
+fore the onset of the first period doubling.
+Then we will
+demonstrate
+that
+a small,
+coherent
+perturbation
+of the
+system
+will be amplified
+greatly
+when
+the frequency
+of
+the perturbation
+is close to co/2.
+Generally
+speaking,
+there are two ways that a coherent
+signal can be coupled into Eq. (2.1). The small signal may
+enter additiuely,
+so that Eq. (2.1) becomes
+8+y8+aiosin8=A cos(cot)+5cos(Qt+P) .
+(2.2)
+x=F(x;A.), xER
+(2.4)
+Here, F may or may not depend explicitly on time, and F
+depends
+on (at least) one parameter
+A,, which we take to be
+modulated
+about its mean value
+A,o.
+A,=Q+5cos(Qt} .
+{2.5)
+The
+dependence
+of F
+on
+any
+other
+parameters
+is
+suppressed
+for notational
+convenience.
+We next
+suppose
+that
+the unperturbed
+(5=0) system
+has a stable periodic solution
+xo.
+x (ro+ T)= xo(t)
+(2.6)
+The effect of a weak perturbation
+(5&0) is to make x(t)
+deviate
+from
+xo(t).
+Writing
+this
+small
+deviation
+as
+iI =x—xo, Eq. (2.4) becomes
+xo+g =F(xo+ iI' Ao+5 cos( Qt) ) .
+(2.7)
+Expanding
+F to first order in iI and 5, and using the fact
+that
+xo is a solution of Eq. (2.4) when 5=0, leads to an
+evolution for iJ:
+g =DF(xo;Q)iI+5 cos(Qt)A,
+where DF is the matrix of periodic functions
+p.
+(DF)EJ =
+BXJ
+and A is the vector of periodic functions
+(2.8)
+(2.9)
+X=XO
+(2.10)
+For example,
+for the
+parainetrically
+modulated
+system
+{2.3), we have
+A.o—
+—bio, and
+8
+x=
+, DF=
+8
+0
+1
+—coocos80
+2
+J
+—sin80
+In writing
+Eq. (2.8), terms of quadratic
+(and higher)
+de-
+gree in y have been ignored,
+leaving a linear inhomogene-
+ous equation
+with
+periodic
+coefficients.
+Such equations
+can
+be
+solved
+via
+the
+standard
+methods
+of Floquet
+theory.
+%'e begin by recalling
+a few basic results needed
+to construct
+the solution to Eq. (2.8).
+Alternatively,
+one of the parameters
+may
+be modulated
+about its mean value, for example,
+8+y8+[coo+5cos(Qt+p)]sin8=A
+cos(oJt) .
+(2.3)
+%'e can consider both additive
+and parametric
+modulation
+at the same time by the following
+device.
+Think of Eq.
+(2.1) as having
+an additional,
+constant
+term on the right-
+hand side. Then Eq. (2.2) represents
+a parametric
+modula-
+tion of that constant
+term, for the special case where its
+mean value is zero.
+The general
+development
+begins with a dynamical
+sys-
+tem governed
+by the set of first-order
+nonlinear
+differen-
+tial equations
+
+
+===== PAGE 3 / 14 =====
+
+33
+SMALL-SIGNAL AMPI.IFICATION IN BIFURCATING DYNAMICAL
+SYSTEMS
+631
+First, there exist special solutions
+P» of the homogene-
+ous equation
+associated with Eq. (2.8), such that
+with
+A'
+C' k=e
+~k
+(2.20)
+P»(t)=e 'P»(t),
+(2.11)
+and
+where
+Pk is a periodic
+function
+with the same period
+as
+the matrix
+DF(xo', A). For convenience,
+we assume
+that
+time is scaled so that this period is equal to 2m, so that
+P»(t+2~}=P»(t) .
+(2.12)
+The constant
+p» appearing
+in Eq. (2.11) is, in general,
+a
+complex quantity
+and is called a F/oquet
+exponent.
+From
+Eq. (2.11) it is seen that p» is arbitrary
+up to integer mul-
+tiples
+of i
+W. e remove
+this
+ambiguity
+by picking
+the
+branch
+—2l QImpk
+Q 21
+(2.13}
+As will
+be sho~n,
+the Floquet
+exponents
+determine
+the
+main features of the observed
+power spectrum —
+all of the
+basic results can be neatly summarized
+in terms of the p».
+Physically,
+the f» represent
+responses of the unmodu-
+lated (5=0) system
+to a single
+impulse
+perturbation.
+If
+the basic oscillation
+xo is stable, these must not grow with
+time, so that
+Rep» &0
+(2.14)
+C(t)=(pi, p2, . . . ,pz),
+(2.15)
+so that the jth column of 4 is Pj. In terms of the matrix
+4, the solution of Eq. (2.8) may be written
+t
+ri(t) =4(t) J 4-'(t')[5cos(Qt')A(t')]dt'
+.
+(2.16)
+In writing
+this, we have taken
+initial
+conditions
+ri(0) =0
+for convenience —
+the results of this paper are insensitive
+to the precise choice of g(0).
+The inverse matrix 4
+' consists of row vectors
+I
+e
+' q, (t')
+4 -'(t') =
+I
+e "qx(t')
+(2.17)
+where
+the q», like the P», are 2~-periodic
+functions
+of
+time. It is a simple matter to show that
+Pk ql=&kl
+where 5kl is the Kronecker delta, a fact which follows im-
+mediately
+because 4 and 4?
+' are inverse matrices.
+In component
+notation, Eq. (2.16) becomes
+i)~ =5+4»(t) J (@ ')»t(t'}At(t')cos(Qt')dt'
+k, l
+for all k. As the parameters
+of the system
+are tuned,
+the
+p» vary.
+An instability
+is signaled
+when
+one or more of
+the p» cross the imaginary
+axis into the right half-plane.
+Typically,
+there
+will be N distinct
+Floquet
+exponents
+for the system
+(2.8); consequently
+there will be N linearly
+independent
+solutions
+P». The importance
+of these solu-
+tions is that they may be used to construct
+a fundamental
+matrix 4(t),
+—~k'
+)»t =e
+q»t
+(2.21)
+which
+is the major result of this section.
+Note that this
+represents
+an exact solution to the linearized
+Eq. (2.8).
+%'e now make an im.portant
+observation:
+In the vicini-
+ty of a dynamical
+instability,
+ri (t) reduces to a particu-
+larly simple form.
+This is because the sum over k is dom-
+inated
+by only a small number
+of terms, corresponding
+to
+the number of near-critical
+exponent(s) p». In Sec. III we
+compute
+ri (t) and
+the
+corresponding
+power
+spectrum
+S~(co) for systems
+near the onset of the simplest
+classes
+of codimension-1
+bifurcations
+of a periodic orbit.
+We will
+find that
+only the type of bifurcation
+encountered
+is im-
+portant
+in determining
+the response of the system
+at the
+modulation
+frequency
+Q. Moreover, there is a set of reso-
+nance frequencies
+determined
+solely by the bifurcation
+en-
+countered,
+this resonance
+becoming
+stronger
+and sharper
+as the instability
+is approached.
+III. PO%'ER SPECTRA—
+DRIVEN SYSTEMS
+In this section we compute
+the power spectra expected
+in
+the
+vicinity
+of various
+codimension-1
+bifurcations.
+Generically,
+the basic oscillation
+xo will go unstable
+in one
+of three ways as a single parameter
+is varied.
+(i) A single real exponent
+p~ crosses the imaginary
+axis.
+Usually,
+three
+subcases
+are distinguished
+depending
+on
+constraints
+and/or
+symmetries
+obeyed
+by the system.
+In
+what follows, only symmetry
+properties
+are important,
+so
+we will distinguish
+two cases:
+unsymmetric
+(saddle-node
+and
+transcritical
+bifurcations)
+and
+symmetric
+(pitchfork
+bifurcation).
+(ii) A single
+exponent
+pi
+crosses
+the
+imaginary
+axis
+along
+the line Imp=
+—,'. From Eq. (2.11), one sees that
+this corresponds
+to a period-doubling
+instability,
+since—
+precisely at the bifurcation
+point—the function Pi simply
+changes
+sign after each
+2m time interval.
+(iii)
+A
+complex-conjugate
+pair p„pz —
+—pi
+cross
+the
+imaginary
+axis with imaginary
+part different
+from zero or
+one-half.
+This
+corresponds
+to a Hopf bifurcation:
+In
+most cases the resulting
+orbits are confined to an invariant
+torus.
+Before proceeding
+to the case-by-case
+derivation
+of the
+power
+spectrum,
+an important
+distinction
+between
+auto-
+nomous
+and
+nonautonornous
+systems
+must
+be made.
+In
+an autonomous
+system,
+time does not explicitly
+enter the
+differential
+equations,
+and
+there
+is always
+one Floquet
+exponent —
+call it pz—
+equal to zero.
+Geometrically,
+this
+corresponds
+to the fact that, in phase space, the periodic
+orbit
+is neutrally
+stable to perturbations
+along
+the limit
+cycle.
+In the calculations
+that follow, the dominant
+con-
+where
+P»
+is the mth component
+of P», and
+q»t is the 1th
+component of q». Combining
+Eqs. (2.19)—(2.21}yields
+(t)=5+P» (t) J e "
+q»t(t')At(t')cos(Qt')dt'
+k, l
+(2.22)
+
+
+===== PAGE 4 / 14 =====
+
+632
+KURT %'IESENFEI.D AND BRUCE McNAMARA
+33
+tribution
+to the power spectrum
+near an instability
+comes
+from
+exponents
+closest
+to the
+imaginary
+axis—conse-
+quently,
+both the near-critical
+exponent(s)
+and the zero ex-
+ponent p~ contribute
+in the autonomous
+case. For driven
+systems,
+however,
+there is no such constraint
+on p~. As
+we shall see, the prime effect of the zero exponent
+is to re-
+normalize
+the strength
+of the 5 functions
+in the power
+spectrum
+due to the basic oscillation
+x0; moreover,
+since
+the exponent
+piv is not free to move as the control param-
+eters
+are
+varied,
+this
+extra
+autonomous
+contribution"
+changes
+only
+midly
+as the bifurcation
+is approached.
+In
+contrast,
+the contribution
+of the near-critical
+exponent(s)
+is quite sensitive to the value of the bifurcation
+parameter.
+For the sake of clarity,
+we derive
+the expected
+power
+spectra for nonautonomous
+systems
+in this section, return-
+ing to the derivations
+relevant
+to autonomous
+systems
+in
+Sec. V.
+A. Case one: Saddle-node
+and transcritical
+bifurcations
+In this case, a single real exponent
+lies close to the ori-
+gin
+p) =—6',
+(3.1)
+where e is a small positive number,
+and is the natural
+bi-
+furcation
+parameter,
+since it is zero at the bifurcation
+point.
+With
+the other
+exponents
+relatively
+far from the
+imaginary
+axis, the sum in Eq. (2.22) is dominated
+by the
+k = 1 term:
+i) (r)=5P,
+(t)I e"' " gq, &(t')Ai(t')
+cos(Qt')dt'.
+g q„(r')A, (r') =g a„e'"', a „=a„',
+I
+n
+(3.3)
+this
+last condition
+following
+since the
+quantity
+is real.
+Equation (3.2) may be rewritten
+(3.2)
+The function
+qii is 2n. periodic
+and Ai is either constant
+(for additive
+modulations)
+or 2n periodic
+(for parametric
+modulations},
+so we may introduce
+the Fourier sum
+where
+k is an integer.
+Then
+the n=k (n= —k) term
+dominates
+the sum
+over the first
+(second) part
+in large
+parentheses
+in Eq. (3.5), with the result
+e —iht
+71 =—5Pi
+cxk
++c.c.
+~
+6'—l6
+(3.7)
+Finally, introducing
+the Fourier series
+pi (t)= gpje'',
+p
+=p.
+J
+(3.8)
+the power
+spectrum
+S (co) corresponding
+to Eq. (3.7} is
+given by
+B. Case two: Pitchfork
+(symmetry-breaking)
+bifurcation
+In one sense, this is a special case since it requires
+that
+the dynamical
+system
+under
+study
+has a symmetry.
+On
+the other hand, symmetries
+are fairly common
+in physical
+systems,
+and in such systems
+symmetry-breaking
+bifurca-
+tions play an important
+role in the observed dynamics.
+Here
+we have a specific symmetry
+in mind,
+in which
+the vector field F(x,t ) [see Eq. (2.4)] satisfies
+F(x,t )= —F(—x,t+ T/2),
+(3.10)
+where T is the period of F, if it is explicitly
+time depen-
+dent.
+This
+is a common
+symmetry —
+for example,
+the
+(3.9)
+Note that the denominator
+is the sum of two small quan-
+tities, e
+and 5 . Consequently,
+the small
+input
+modula-
+tion at frequency
+k+6, gives
+rise to a relatively
+large
+response
+at frequencies j+b, for all integers j. The situa-
+tion
+is illustrated
+in Fig. 1, where
+the spectral
+lines at
+co=0,1,2, . . . due to the basic oscillation
+xo(t) have also
+been included.
+For fixed bifurcation
+parameter
+e, the fre-
+quency
+response S
+is a I.orentzian
+function of b„with
+half-width
+e and height proportional
+to e
+(r)
+5P
+(r)g +
+eE(t —t)el&if (e —int +&int'}d't~
+0
+This integral
+is easily evaluated,
+yielding
+i(n —Q)t
+1
+e
+'9m =Y5Pim g
+&n
++c c.
+e'+i
+il —Q
+(3.4)
+(3.5)
+Q=k+6,
+~ b
+~ &&1
+(3.6)
+where c.c. means
+complex
+conjugate,
+and
+we have taken
+et &&1. This last inequality
+simply
+means
+that the time
+series
+considered
+is of much
+longer
+duration
+than
+the
+longest dynamical
+time scale, which is required
+for deter-
+mining a sensible power spectrum.
+From Eq. (3.5), one sees that the response
+i)
+will be
+large provided
+that the modulation
+frequency
+Q is very
+close to an integer.
+Thus, we put
+I
+I
+2D
+FIG. 1. Predicted
+power
+spectrum
+S{~)for a periodically
+perturbed
+system
+near the onset of a saddle-node
+or transcritical
+bifurcation,
+as given by Eq. {3.9).
+
+
+===== PAGE 5 / 14 =====
+
+33
+SMALL-SIGNAL AMPLIFICATION
+IN BIFURCATING DYNAMICAL
+SYSTEMS
+633
+xo(t+ T/2) = —xo(t} .
+(3.11)
+Typically,
+a symmetric
+solution
+will lose stability
+by giv-
+ing
+rise
+to a pair of asymmetric
+solutions26 —
+such
+a
+symmetry-breaking
+bifurcation
+is called a pitchfork bifur-
+cation in the theory of iterated
+maps.
+Near the onset of
+the instability,
+a single real exponent
+lies near the origin,
+(3.12)
+while the other exponents
+have relatively
+large (negative)
+real parts, so that the sum in Eq. (2.22) is again dominat-
+ed by the k = 1 term:
+=5P, (t)
+e"' "g-q»(r')AI(r')cos(Qt')dr'
+.
+(3.13}
+%'e have assumed
+that time is scaled so that the matrix
+DP(xo) [see Eq. (2.9)] and
+thus
+q,I(t') are
+2m periodic.
+Owing
+to the symmetry
+(3.11), the basic oscillation
+xo is
+4m periodic.
+It follows that AI is either a constant
+(for an
+additive
+modulation)
+or a 4m-periodic
+symmetric
+function
+(for a parametric
+modulation).
+In the former instance, the
+product
+QitAI
+&s 2m period
+g g}IA~= g Q„e
+(3.14)
+I
+lt
+while a parametric
+modulation
+entails
+this product
+being
+4m periodic and symmetric,
+driven
+Duffing
+equation
+(1.1) with 8=5=0 possesses
+property
+(3.10), as does
+the
+driven
+pendulum
+equation
+(2.1).
+When
+property
+(3.10) holds,
+the (periodic)
+solution
+xo
+may or may not share this symmetry.
+If it does, then
+whereas
+a large response
+requires
+parametric
+modulations
+to be near half-integer
+frequencies
+0= —,'k+6,
+k odd
+(3.18b)
+I
+= T5P]
+—iht
+ake
++c.c.
+p—EA
+(3.19b)
+C. Case three:
+Period-doubling
+bifurcation
+(Ref. 1)
+and
+Sm(co)= —,5 g
+[5(co—j—6)+5(co—j+b, )] .
+I &)~k
+I '
+2+ Q2
+(3.20b)
+In writing
+Eqs. (3.20a) and
+(3.20b) we
+have
+used
+the
+Fourier series (3.8) for P~ (t). The power spectra for the
+two subcases are essentially
+identical.
+The observed
+spec-
+trum,
+including
+the 5 function
+at 5= —,', —
+', ,—,', . . . , due to
+the basic symmetric
+oscillation
+xo is illustrated
+in Fig. 2.
+At first glance,
+it seems strange
+that the two types of
+modulation,
+which
+require
+input
+oscillations
+at different
+frequencies,
+lead to qualitatively
+identical
+power spectra.
+The mystery
+disappears,
+however,
+when
+one recalls that
+the
+actual
+input
+perturbation
+is given
+by
+the product
+A~cosQt
+Ne.ar
+a
+pitchfork
+bifurcation,
+the
+system
+"resonates" with input
+signals near integer frequencies
+for
+both subcases.
+Thus, if A~ is constant
+(additive
+modula-
+tion), one requires
+Q=integer,
+while if AI contains
+half-
+integer
+frequencies
+(parametric
+modulation)
+one requires
+Q=half-integer
+as well.
+g g)(A( = g Qne
+1
+lf odd
+(3.15}
+Near the onset of a period-doubling
+bifurcation,
+a single
+exponent
+lies near the imaginary
+axis, with
+As before, the integral
+appearing
+in Eq. (3.13) is readily
+evaluated,
+with the results
+r
+pi —
+— a+i l2 . —
+Retaining
+only the k =1 term in Eq. (2.22) yields
+(3.21)
+i(n —A)t
+1
+e
+'9m = 25P&m g
++n
++c c
+@+i n —Q
+(3.16)
+for an additive
+modulation,
+and
+I
+ei (n/2 —A)t
+rim
+2 5Plm g
++n
++c c
+@+in 2—Q
+(3.17)
+A=k+6,
+with the results
+(3.18a)
+—iht
+k
++C.C.
+e—ib
+(3.19a)
+for a parametric
+modulation.
+An important
+difference
+thus
+appears
+between
+these
+two
+subcases:
+The
+system
+response
+ri
+will be large for additive
+modulations
+near
+integer frequencies
+k,
+llt2
+I
+I
+I
+I
+I
+I
+I
+I
+I
+I
+I
+I
+I
+l
+I
+I
+I
+I
+I
+I
+I
+I
+I
+I
+I
+I
+l
+S (co)= —,5 g
+[5(a)—j—6)+5(co—j+b,)],
+I PJ&k
+I '
+~2+ Q2
+(3.20a}
+FIG. 2.
+Predicted
+power
+spectrum
+S(co) for a periodically
+perturbed
+system
+near the onset of a pitchfork
+bifurcation,
+as
+given by Eq. (3.20).
+
+
+===== PAGE 6 / 14 =====
+
+KURT %'IESENFELD AND BRUCE McNAMARA
+33
+5P
+i(Itf erat
+'—
+t(e
+i—
+t'l2
+'9m =
+)me
+0
+y g q,t(t')At(t'}cos(Qt')dt'
+.
+I
+S(M)
+I
+n odd
+Upon evaluating
+the integral
+in Eq. (3.22), we have
+ei (n/2 —A)t
+"e+i n/2 —0
+(3.23)
+The
+product
+q&iAI
+is
+2m. periodic,
+and
+e "
+merely
+changes
+sign after
+2m., so we may introduce
+the Fourier
+series
+0
+I
+I
+I
+I
+I
+I
+I
+I
+I
+j(
+I
+I
+-I
+2A
+I
+I
+I
+I
+I
+I
+I
+I
+I
+This will be large whenever
+0=k/2+6, ,
+k odd .
+(3.24)
+(3.25)
+FIG. 3. Predicted
+power
+spectrum
+S(co} for a periodically
+perturbed
+system
+near the onset of a period-doubling
+bifurca-
+tion, as given by Eq. (3.28).
+-i ht
+1
+;t/2
+k
+, 5P( e'—
++C.C.
+The dominant
+contribution
+to Eq. (3.24) becomes
+(3.26)
+complex-conjugate
+pair,
+P& —
+—P2
+and
+q&I ——qadi.
+Intro-
+ducing the Fourier expansion
+as before,
+Since P&m is 2m periodic, we may put
+P
+(t) it/2
+g P eijtl2
+J odd
+(3.27)
+gq(t(t')At(t')= g a„e'"',
+I
+n odd
+the integral
+appearing
+in Eq. (3.30) reduces to
+(3.31)
+which
+is a 4ir-periodic,
+symmetric
+function.
+Combining
+Eqs. (3.26) and (3.27) leads to the power spectrum
+1
+ei{n—b —Q)t
+ei{n—6+A)t
+—,ga„ e+i (n
+b —0) —e+i (n 6+0)—
++
+(3.32)
++5(co——,' j+5)] .
+(3.28)
+(Note that a „&a„' here since the function
+q, i is com-
+plex. )
+To get a large response g, let
+The situation
+is illustrated
+in Fig. 3. Analog
+simulations
+for the driven
+Dufftng
+oscillator
+are presented
+in Sec. IV
+to test Eq. (3.28).
+D, Case four: Hopf bifurcation
+(3.33}
+where k is an integer.
+Then the dominant
+contribution
+to
+(3.32) is
+This final case entails a complex-conjugate
+pair of ex-
+ponents p(, p2 crossing
+into the right half-plane.
+Just be-
+fore the instability,
+we have
+p) =—6+lb
+eight
+l ~ e —iht
++—
+2 a+i 6
+2
+e—ih
+Substitution
+of this into Eq. (3.30) yields
+(3.34)
+1
+P2=P1,
+(3.29)
+( 5g p
+" ei(j+b+d)t
+J
+Now only the two terms
+k =1 and 2 are retained
+in the
+summation
+appearing
+in Eq. (2.22):
+5P
+ibi f
+e((
+(i ib('' — —
+'9m =
+(me
+0
+X g q(t(t'}At(t')cos(Qt')dt'+
+cc.
+(3.30)
++ e—sh
+where the Founer expansion
+P, (t)= QPje'j'
+J
+i(j +b
+blr +c c
+(335)—
+(3.36)
+where
+we have used the fact that, since p& and p2 form a
+has been introduced.
+Equation
+(3.35) leads to the power
+spectrum
+
+
+===== PAGE 7 / 14 =====
+
+33
+SMALL-SIGNAL AMPLIFICATION
+IN BIFURCATING DYNAMICAL
+SYSTEMS
+635
+2
+S(co)= —,'5 g
+[5(co—j
+—
+b —b)
+e+6
++5(~—j+b+ &)]
+IV. APPLICATIONS
+A. Analog simulations
+(Ref. 1)
+As a check on the basic predictions
+of Sec. III, we per-
+formed measurements
+on an analog electrical circuit obey-
+ing the driven Duffing equation:
+x'+ yx +ax +Px =A cos(cot )+A,
+,
+=Q +5, cos( Qt) .
+(4.1)
+(4.2)
++ 5(co j+—
+b —b, )] .
+(3.37)
+The situation
+is illustrated
+in Fig. 4—a modulation
+intro-
+duced at the single frequency
+Q gives rise to pairs of lines
+syminetrically
+located about half-integer
+frequencies.
+The
+occurrence
+in the present
+case of four lines between
+suc-
+cessive harmonics
+of the basic oscillation
+xo, rather
+than
+only
+two
+for the
+previous
+three
+cases,
+may
+be traced
+directly to the fact that there is a pair of near-critical
+ex-
+ponents for the Hopf bifurcation.
+Figure 5 summarizes
+the results of this section, showing
+the response of the system in terms of the near-critical
+ex-
+ponent pi and the detuning
+frequency h. The dashed
+line
+represents
+the
+envelope
+of the
+new
+signal-induced
+line:
+The height
+and width of this envelope
+scales with Repi,
+while the center depends
+on Imp».
+In general, the imaginary
+part b of the near-critical
+Flo-
+quet exponents
+may change
+as the parameters
+of the sys-
+tem are varied.
+As will be shown
+in Sec. IV, this feature
+is potentially
+important
+for exploiting
+the resonant
+mech-
+anism
+discussed
+in this paper
+as a practical
+method
+for
+amplifying
+small signals.
+With y, a, P, and
+A held constant,
+and 5=0, the parame-
+ter Q was increased
+until
+a period-doubling
+bifurcation
+occurred at A.o—
+—A,
+According to the calculations
+of Sec.
+III, for Ao slightly
+less than
+A,„,the system
+should be very
+sensitive
+to
+modulations
+of
+A,
+near
+frequencies
+Q=(n+ —, ko, where
+n is an integer.
+For small
+modula-
+tion
+input
+amplitude
+5, the
+observed
+power
+spectrum
+should follow Eq. (3.28) and Fig. 3.
+Figure 6 shows the output of a spectrum
+analyzer
+when
+the modulation
+frequency
+Q was close to 3'/2 and illus-
+trates a number
+of qualitative
+features.
+The input
+power
+level is —50 dB, while the output
+power level at this fre-
+quency
+is —25 dB, yielding
+a gain in power by a factor of
+about 300. This represents
+a relatively
+modest
+amplitude
+amplification,
+roughly
+by a factor of 17. As expected, the
+input
+at the single
+frequency
+Q gives rise to a series of
+pairs of lines, centered
+at co/2, 3'/2, 5'/2, etc., but no
+lines
+near
+integer
+multiples
+of co.
+Finally,
+the partners
+within
+each pair of lines have nearly
+equal
+amplitude,
+in
+reasonable
+agreement
+with Eq. (3.28), which
+predicts
+ex-
+act equality.
+To make
+a more
+quantitative
+check,
+we
+varied
+the
+modulation
+frequency
+Q, and measured
+the output
+at Q,
+generating
+the frequency
+response
+curves shown
+in Fig. 7,
+for three different
+values of Ao & A,,—
+that is, for three dif-
+ferent values of bifurcation
+parameter
+e. The normalized
+response,
+plotted
+on the
+vertical
+axis,
+is given
+by
+the
+square
+root of the power
+spectrum
+S(Q) and is normal-
+ized to the input
+amplitude
+5. Consequently,
+the vertical
+axis of Fig. 7 gives directly the factor by which the input
+signal
+has been amplified.
+The horizontal
+axis gives the
+relative
+frequency
+E=Q——
+', , where
+time
+is rescaled
+so
+that co= 1, as in the calculations
+of Sec. III.
+The solid lines appearing
+in Fig. 7 represent
+Y fits of
+the data to the square
+root of a Lorentzian,
+as predicted
+by Eq. (3.28). As expected,
+the response
+curves
+sharpen
+and grow as the bifurcation
+point is approached.
+Quanti-
+tatively,
+the height-width
+product of these curves
+should
+be independent
+of e: We find products
+of 0.154, 0.150,
+and 0.146 for the circles, squares,
+and triangles,
+respec-
+tively.
+In summary,
+the analog
+simulations
+agree
+quite
+well
+with
+the calculations
+of Sec. III for the period-doubling
+bifurcation.
+A more complete
+examination
+is in order, of
+course,
+but the few results
+presented
+here give us confi-
+I
+I
+I
+I
+I
+I
+I
+I
+I
+I
+I
+I
+I
+I
+I
+I
+I
+I
+I
+I
+I
+I
+J~
+I
+I
+Ji
+l
+i
+Ji
+i
+JL
+I
+t
+(d
+I-
+=l
+2D
+Peak — 5/g 2
+I/
+Width- g
+Center: n-b
+IIIII
+/I
+i
+li
+FIG. 4. Predicted
+power
+spectrum
+S(co) for a periodically
+perturbed
+system
+near the onset of a Hopf bifurcation,
+as given
+by Eq. (3.37}.
+2D—
+I
+FIG. 5. Summary
+of the frequency
+response properties,
+valid
+for all four cases of Sec. III. Re@i governs
+the size and shape of
+the Lorentzian
+response
+curve, while
+Impi determines
+the posi-
+tion of the pairs of spectral lines induced
+by the modulation.
+
+
+===== PAGE 8 / 14 =====
+
+636
+KURT ETESENPELD AND BRUCE McNAMARA
+33
+IO—
+-50-
+FIG. 6. Measured
+power spectrum of an analog simulation
+of
+the Duffing
+oscillator Eqs. (4.1} and (4.2), near the onset of a
+period-doubling
+bifurcation.
+be low-dissipation
+and low-noise
+instruments.
+Curiously,
+it
+has
+been
+due
+to poor
+noise
+characteristics
+that
+the
+Josephson
+paramps
+thus far have failed to become useful
+devices,
+despite
+the fact that
+good signal
+gain
+has been
+achieved. '
+'
+The origin of the high-noise
+levels has re-
+ceived much
+attention, '
+'
+and although
+several
+sugges-
+tions have been forwarded
+to explain
+the phenomenon,
+it
+is fair to say that the problem
+is not yet solved.
+In what
+follows,
+we do not address
+this very interesting
+problem.
+Rather,
+our point
+is that the signal
+gain which
+has been
+reported
+for this device is intimately
+linked
+to the pres-
+ence of dynainical
+instabilities
+nearby in parameter
+space.
+We should
+point out that a number of different
+amplif-
+ier
+schemes
+have
+been
+studied
+which
+employ
+one
+or
+several Josephson junctions.
+Here, we focus on the single
+junction
+devices, which
+may be operated
+in two different
+modes.
+The
+first
+mode—
+given
+the
+colorful
+name
+SUPARAMP
+(superconducting
+unbiased
+parametric
+am-
+plifier) by Feldman
+et al. ' —
+obeys the circuit equation
+P+yP+sin((}=A cos(cot)+5cos(Qt+g),
+(4.3)
+dence that the theoretical
+predictions
+are sensible.
+Along
+these lines, we should
+point out that an independent
+mea-
+surement
+of the bifurcation
+parameter
+e would
+allow a
+more stringent
+test of predictions
+like Eq. (3.28), enabling
+the scaling of the height
+and the width —
+rather
+than the
+height-width
+product —of the response curves to be tested
+independently.
+The direct measurement
+of e is possible—
+even though
+its value is only implicitly
+determined
+from a
+knowledge
+of the
+actual
+parameters
+appearing
+in
+the
+governing
+evolution
+equation —
+because it is directly
+relat-
+ed to the relaxation
+time of the system
+subject to an im-
+pulse
+perturbation
+(see Sec. II). This fact was exploited
+successfully
+to measure
+e in experiments
+testing the effect
+of random
+noise on voltage-driven
+p njunctio-ns
+near the
+onset of period-doubling
+and Hopf bifurcations. i
+B. Josephson-junction
+parametric
+amplifiers
+We have seen how, near the onset of some simple insta-
+bilities,
+any dynamical
+system
+can act as an amplifier
+of
+small
+coherent
+modulations.
+The following
+question
+im-
+mediately
+arises:
+Can
+this
+notion
+be exploited
+for any
+practical
+applications?
+The purpose of this subsection
+is
+to suggest that there already exist examples of such ampli-
+fiers, which
+have been studied
+extensively
+in the physics
+literature
+'
+These
+devices
+are known
+as Josephson-
+junction parametric
+amplifiers
+(paramps).
+The main thrust of the calculations
+of Sec. III is that a
+system's
+characteristic
+sensitivity
+to coherent
+modulations
+depends
+only on the type of instability
+encountered
+and is
+wholly
+independent
+of the physical
+details of the system.
+The original
+idea to use a device based on the Josephson
+junction
+as an amplifier
+was motivated
+by two features.
+First,
+the
+natural
+oscillation
+frequencies
+for Josephson
+junctions
+are in the range 10—100 GHz, where useful am-
+plifiers
+have been difficult
+to realize.
+(Currently,
+devices
+known
+as superconductor-insulator-superconductor
+mix-
+ers are the best
+amplifiers
+in this
+frequency
+regime.
+)
+Second, as superconducting
+devices they were expected to
+where P is the phase difference
+between
+the macroscopic
+wave functions
+across the junction,
+so that p is propor-
+tional to the voltage across the junction.
+The signal am-
+plitude
+5 is small, and gain can be achieved
+provided
+the
+signal frequency
+Q is close to the pump
+frequency
+co. Be-
+sides the peak at co, the output
+power spectrum
+shows
+a
+sizable component
+at Q and at the "idler" frequency
+Q',
+given by
+0+0'=2' .
+(4 4)
+The second
+mode of operation
+includes
+a dc bias, so
+that
+0+0 =N .
+(4.6)
+The conditions
+(4.4) and (4.6) have inspired
+the designa-
+tions of four-photon
+paramp
+and
+three-photon
+paramp,
+respectively.
+Let us focus first on the three-photon
+mode.
+An ana-
+lytic
+theory
+has
+been
+worked
+out
+by Soerensen
+et al.
+Based on a direct
+(though
+approximate)
+analysis
+of Eq.
+(4.5), they showed
+that the condition
+for infinite
+gain in
+the limit Q=col2 (i.e., zero detuning)
+was equivalent
+to
+the condition
+for the onset of subharmonic
+oscillations of
+the unmodulated
+(5=0) system at half the pump
+frequen-
+cy. That is, maximum
+gain coincided with the onset of a
+period-doubling
+bifurcation.
+Experiments
+with real junc-
+tions
+and
+analog
+simulations'
+have
+supported
+this:
+Indeed,
+the appearance
+of subharmonic
+oscillations
+"is a
+useful
+means of showing
+that the maximum
+gain condi-
+tion has just been passed. "'
+A glance at Eq. (3.28) shows that this is just what one
+should
+expect, regardless
+of the details of the governing
+equation.
+[This is of some significance
+since Eq. (4.5) is a
+somewhat
+simphfied
+representation
+of the actual paramp
+P+yP+sin4 =A cos(cot)+B+5cos(Qt+g) .
+(4.5)
+Despite the obvious similarity
+between Eqs. (4.3) and (4.5),
+high
+gain
+is not achieved
+via condition
+(4.4); rather,
+the
+biased mode has achieved gain with Q =co/2, so that
+
+
+===== PAGE 9 / 14 =====
+
+33
+SMALL-SIGNAL AMPLIFICATION
+IN BIFURCATING DYNAMICAL SYSTEMS
+637
+dynamics,
+neglecting,
+for example,
+the quasiparticle
+con-
+tribution
+and
+the presence
+of additional
+tuning
+circuits
+employed
+in coupling
+in the external
+signal. ]
+Without
+passing to the limit b,=0 (corresponding
+to Q= co/2), it is
+still
+true
+that
+maximum
+gain
+occurs at the bifurcation
+point a=0. Taking
+both @~0 and 5~0 results
+in the
+"infinite gain" of Soerensen
+et al.
+Turning
+next
+to the
+unbiased
+mode
+[Eq. (4.3)], we
+deduce from condition
+(4.4) that the system
+must operate
+near a saddle-node
+bifurcation
+[see Eq. (3.6) and Fig. 1] to
+achieve
+good gain.
+Indeed,
+Chiao et al. reported
+the oc-
+currence of what
+they termed a "phase instability"
+in the
+dynamics
+of their microbridge
+SUPARAMP's. '
+In fact,
+we can deduce
+something
+else about the dynamics
+of the
+unbiased
+system.
+Note that Eq. (4.3) has the symmetry
+discussed
+in case two of Sec. III. However,
+Eq. (3.18a)
+shows
+that
+the experimentally
+achieved
+condition
+Q=co
+(= —,' for the time scaling
+used in Sec. III) will not result
+in high gain, so that the amplifier
+is not near the onset of
+a symmetry-breaking
+instability.
+Consequently,
+in order
+to reach a high-gain
+region of parameter
+space for Q =co,
+the system
+must first undergo
+a symmetry
+breakin-g
+bifur
+cation as A is increased
+from zero. That this is so would
+be very easy to check experimentally —
+the signature
+of a
+symmetry-breaking
+bifurcation
+is the appearance
+of even
+harmonics
+in the output
+power spectrum.
+Recapping,
+the
+gain
+achieved
+in
+the
+three-photon,
+biased
+mode
+is due to the presence of a nearby
+period-
+doubling
+instability,
+while the success of the four-photon,
+unbiased
+mode is due to the presence of a saddle-node
+bi-
+furcation.
+As a further
+conclusion,
+we note that the unbiased
+sys-
+tem governed
+by Eq. (4.3) could be successfully
+operated
+in the three-photon
+mode, where Q =co/2:
+After all, it is
+well-known
+that
+the
+governing
+equation
+(with 5=0)—
+which
+is just
+the
+equation
+of motion
+for
+the
+driven,
+damped
+pendulum —
+has solutions
+which
+undergo
+period-
+doubling
+instabilities'
+' '
+(though
+only
+after
+the
+symmetry-breaking
+bifurcation
+has occurred '
+). Conse-
+quently,
+if the parameters
+are tuned so that the system
+is
+near the onset of a period
+doubling,
+the same analysis of
+Sec. III, case three applies just as it does for the biased-
+junction mode.
+C. Virtual Hopf phenomenon
+and tunable
+resonances
+We have seen that, in order to achieve large amplifica-
+tion factors, both the bifurcation
+parameter
+e and the de-
+tuning
+frequency 6 must
+be small.
+One ramification
+of
+these conditions
+is that the range of input
+frequencies
+Q
+that are significantly
+amplified
+may be very small.
+Near a
+period-doubling
+instability,
+for example,
+the system
+acts
+as a small-signal
+amplifier
+for only the sequence of nar-
+row windows
+centered at Q =n+ —, and of width of order
+e. Indeed, the higher the gain is made (by reducing
+e), the
+narrower
+these windows
+become (see Fig. 5).
+Happily,
+this situation
+can be overcome
+in a large class
+of systems,
+so that all frequencies
+can be amplified.
+This
+relies
+on
+the
+occurrence
+of
+the
+virtual
+Hopf
+phenomenon:
+'
+In msence,
+this phenomenon
+allows
+the
+centers of the resonance
+curves to be continuously
+tuned,
+500—
+Q)
+C
+C5.
+CL
+500—
+QP
+iQ
+0
+E
+l00—
+Norma t(zed
+Frequency
+Di fference
+& (~ l0 ~)
+FIG. 7.
+Amplitude
+response
+V(co) vs signal
+detuning
+fre-
+quency 4, for an analog simulation
+of Eqs. (4.1) and (4.2). Data
+shown for three different
+parameter
+values, just before the onset
+of a period-doubling
+bifurcation.
+The circles, squares,
+and tri-
+angles correspond
+to successively
+smaller bifurcation
+parameters
+»li kl =2~Repk,
+arQLk =2p' Impk
+(4.8)
+(4.9)
+so that a bifurcation
+occurs when
+(at least) one of the pk
+exits the unit
+circle.
+A period
+doubling
+corresponds
+to
+pi —
+——1, while
+a Hopf
+bifurcation
+corresponds
+to
+a
+complex-conjugate
+pair p&,p2 with modulus
+unity.
+To fix ideas, consider the driven
+pendulum
+equation
+8+ye+aPosin8=A
+cos(cui) .
+Figure
+8 depicts
+the behavior
+of the multipliers
+between
+successive period doublings,
+as the driving
+amplitude
+A is
+increased.
+This
+system
+has
+two
+Floquet
+multipliers,
+which are either both real or a complex-conjugate
+pair.
+In
+the latter case, the pair must lie on the circle
+while
+their width
+remains
+narrow.
+We now
+give a brief
+review of the virtual
+Hopf phenomenon
+and then discuss
+its potential
+advantages
+for small-signal
+amplification.
+The virtual
+Hopf is a particular
+kind of noisy precursor
+of period-doubling
+bifurcations,
+which
+occurs
+when
+the
+Floquet
+multip!iers
+pk, which
+are related
+to the Floquet
+exponents pk via the formula
+Pk =e
+(4.7)
+behave
+as in Fig 8. (Th.e Floquet
+multipliers
+are simply
+the eigenvalues
+of the
+linearized
+Poincare
+return
+map. )
+This behavior
+must occur, for example,
+between
+succes-
+sive period-doubling
+bifurcations
+in all purely
+dissipative
+second-order
+nonautonomous
+and third-order
+autonomous
+systems,
+a class which includes the driven Duffing oscilla-
+tor,
+the
+driven
+pendulum,
+and
+the
+Lorenz
+equations.
+From Eq. (4.7), we have (taking T =2m
+)
+
+
+===== PAGE 10 / 14 =====
+
+638
+KURT WIESENRELD AND BRUCE MeNAMARA
+33
+V. AUTONOMOUS
+SYSTEMS
+{b)
+(c)
+Re p.
+We return
+now to the problem of small modulations
+of
+autonomous
+dynamical
+systems.
+%e consider
+the same
+classes of codimension-1
+bifurcations
+as in Sec. III and
+derive
+the
+expected
+power
+spectra
+S(to).
+As
+will
+be
+shown,
+the form of the resulting
+power spectra for per-
+turbed
+autonomous
+systems
+is substantially
+the same as
+the corresponding
+spectra for driven
+systems:
+The major
+differences
+are summarized
+at the end of this section.
+From a computational
+point of view, the difference
+in
+autonomous
+systems
+is the necessary
+existence of the zero
+Floquet
+exponent pz, so that
+any approximation
+to the
+full
+response
+rl
+given
+by Eq. (2.22) must
+include
+the
+k =N term in addition to the term(s) corresponding
+to the
+near-critical
+exponent(s).
+In fact, we can write
+rl (t)=rl (t)+rl„'(t),
+(5.1)
+(e)
+where j~ is the contribution
+due to the near-critical
+ex-
+ponents
+already computed
+in Sec. III, and g'
+is the k =N
+term of Eq. (2.22):
+t
+'q' (t) =&Ptv
+(t)f g qNt(t')At(t')
+cos(Qt')dt',
+0
+FIG. 8. Behavior of the Floquet multipliers
+[Eq. {4.7)] during
+the virtual Hopf phenomenon.
+(5.2)
+where
+PN
+and qnt are 2m-periodic
+functions of time.
+In
+all
+cases
+treated
+below
+except
+one—
+the
+parametrically
+modulated
+pitchfork
+bifurcation —
+the term in parentheses
+is 2m periodic,
+(5.3)
+which
+is a circle of constant
+radius
+lying
+inside
+the unit
+circle.
+During
+the sequence
+Figs. 8(b)—8(d), the multi-
+pliers stay the same distance from the unit circle,
+so that Eq. (5.2) becomes
+rt' (t)=5P„(t)ga„' f e'"'cos(Qt')dt'.
+(5.4)
+0(argy~ & m' .
+(4.13)
+(4.12)
+while they slide continuously
+from the positive to the neg-
+ative real axis,
+gqnt(t')A{(t')= g ct
+B' e'"'"
+I
+n odd
+(5.5)
+For
+the
+parametrically
+modulated
+pitchfork
+case,
+the
+AI(t') are 4n. periodic and symmetric,
+so that
+From Eqs. (4.9) and (4.13), it follows that
+b =Imp& may
+be continuously
+tuned
+from 0 to
+—,', while Eqs. (4.8) and
+(4.12) imply
+and Eq. (5.2) instead becomes
+ri (t)=5P& (t) g a'„ f e'"'~ c 2(oQst')dt'.
+n odd
+(5.6)
+Rep) —
+——y/2
+(4.14)
+so that the bifurcation
+parameter e= —Rep, remains
+con-
+stant.
+Comparison
+with Fig. 7 shows that the centers of
+the corresponding
+resonance
+curves may vary continuous-
+ly over all frequencies,
+while
+the shape of the curves
+is
+fixed.
+Fortuitously,
+this example
+has the additional
+property
+that
+the shape and the center of the resonance
+curues are
+independently
+and directly
+tunable
+during
+Figs. 8(b)—8{d).
+Ordinarily,
+since the values of the Floquet multipliers
+are
+only implicitly
+determined
+by the parameters
+appearing
+in
+the governing
+dynamical
+equation,
+varying
+any
+one pa-
+rameter
+changes
+both the real and imaginary
+parts of the
+pk.
+But for Eq. (4.10), e depends
+directly
+on y [via Eq.
+(4.14)] during
+the virtual Hopf sequence,
+while
+A controls
+the continuous
+variation of b.
+We now proceed to the case-by-case derivations
+of the re-
+sulting
+power spectra, based on Eqs. (5.1), (5.4), and (5.6).
+A. Case one: Saddle-node
+and transcritical
+bifurcations
+i(n —Q)t
+1 p
+, e
+lm
+2 ~
+Nm g
++n
+~
++c'c'
+n
+i n —Q)
+(5.7)
+and under the near-resonance
+condition
+(3.6), this reduces
+to
+1
+9m
+2 ~~Nm
+CK e
+k
+&k
++c.c. +5I'z Re
+zh
+e
+(5.8)
+The contribution
+71~ to the full response g~ was com-
+puted
+in Sec. III and is given by Eq. (3.7). From Eq. (5.4),
+the autonomous
+contribution
+is
+
+
+===== PAGE 11 / 14 =====
+
+33
+SMALL-SIGNAL AMPLIFICATION
+IN BIFURCATING DYNAMICAL
+SYSTEMS
+639
+Notice that the first part of this may be combined
+with
+the expression
+for g, Eq. (3.7). Introducing
+the Fourier
+series (3.8) and
+under inversion
+of x, while others are even.
+For example,
+in the Lorentz equations '
+x =o(y
+x—
+)=F„,
+PN (t)= QPje'~',
+J
+(5.9)
+y =px —y —xz =Fy
+(5.17)
+the full expression
+for i)
+becomes, from Eqs. (3.7), (5.1),
+and (5.8),
+rl~(t)= g
+gje' + "+cc . +TP~~(t),
+J
+where
+(5.10)
+1
+pj&
+k
+pj'& —k
+2
+e+ib,
+id,
+(5.11)
+and
+&k
+T=5 Re ih
+(5.12)
+The last term
+in Eq. (5.10) has the same
+period
+as the
+basic oscillation
+xo and merely
+serves to renormalize
+the
+strength
+of the 5 functions
+in the
+power
+spectrum
+at
+to=0, 1,2,. . . . We note that this effect is independent
+of
+the bifurcation
+parameter
+e.
+Aside
+from
+these
+integer-
+frequency
+contributions,
+the power spectrum
+becomes
+S (co)=g
+~ gj
+~ [5(to—j—b, )+5(~o—j+b)] .
+J
+The coefficients
+~ gj
+~
+are not simply
+Lorentzian
+func-
+tions of e and 5, but are somewhat
+more complicated.
+After some algebra, one finds
+I pjt k
+~ +2Re(pj& —kp jtzk)—
+2
+52
+J
+4
+62+52
+z = —Pz+xy =F, ,
+the relevant
+symmetry
+is
+Fi(x,y,z)=
+F„(—
+—x, —y,z),
+F~(x,y,z)=
+F~( —x, —y,z),
+F,(x,y, z)= +F,( —x, —y,z),
+(5.18)
+so that the modes x and y have an odd parity,
+while z has
+even parity.
+Consequently,
+if one observes
+the evolution
+of either x or y as a control
+parameter
+is varied,
+then a
+symmetry-breaking
+bifurcation
+may occur.
+If the
+perturbing
+modulation
+is
+additive,
+the
+auto-
+nomous
+contribution
+i)'
+is again given by Eq. (5.4), while
+is given by Eq. (3.19a). The appropriate
+condition
+on
+0 is Eq. (3.18a), which leads to
+&k
+rj' = , 5P~
+.—(1—e
+' ')+c.c.
+(5.19)
+I
+I
++—5
+.
++
+.
+e' '
++c.c.
+k
+J+
+k
+i(j +adjt
+e+Eb
+EA
+Introducing
+the Fourier
+series (5.9) for Pz~, Eqs. (5.19)
+and (3.19a) combine to yield the full response
+Pj tZ«
+—5+
+e"'
+2
+26'
++
+Im(P
+a«P'tz'
+k )
+hb, +e)
+I pje
+'
+« I'
++2
+(5.14)
+B. Case two: Pitchfork bifurcation
+In Sec. III the symmetry
+considered
+was one in which
+the vector field F of the unperturbed
+system satisfied
+F(x,t)=—F(
+x,t+ T/2),
+—
+where
+T was the period of F. For autonomous
+systems,
+F is independent
+of time, so that we consider
+instead the
+situation
+where
+F(x)=—F( —x) .
+(5.16)
+Indeed, the relevance of this analysis
+is easily extended
+to
+the case where only some of the components
+of F are odd
+As a check, we do recover the nonautonomous
+result (3.9)
+by taking the primed coefficients equal to zero. Although
+a piece of Eq. (5.14) has the Lorentzian
+form, there are
+additional
+pieces having
+different
+behavior,
+which become
+particularly
+important
+for small h.
+(5.20)
+Recalling
+that our scaling of time is such that the basic
+symmetric
+oscillation
+xo is 4~ periodic, so that the unper-
+turbed
+spectrum
+has spikes
+at ~= —,, —,, —,, . . . ,
+we see
+that the response Eq. (5.20) does not contribute
+power to
+these
+frequencies.
+In
+this
+regard,
+the
+(autonomous)
+symmetry-breaking
+instability
+differs
+from
+the
+other
+codimension-1
+bifurcations
+considered
+in
+this
+section:
+The presence of the zero exponent
+does not serve to renor-
+malize the spikes of the unperturbed
+oscillation,
+but rath-
+er gives rise to the new lines at co=0, 1,2,. . . . Aside from
+these, the power spectrum
+is
+S (co)= —,5
+Pj& kPj & k—
+—
+@+i'
+i 5
+X [5{co—j—b, )+5(co—j+b,)],
+(5.21)
+so that the strengths
+of the lines at m=j+6 are no longer
+Lorentzian
+functions
+of e and 5, as they
+were for the
+nonautonornous
+case.
+Turning
+next to parametric
+modulations,
+we have
+in-
+stead of Eq. (5.4) the expression
+(5.6) for rj', and
+the
+near-resonance
+condition
+is now [see Eq. {3.18b)]
+
+
+===== PAGE 12 / 14 =====
+
+KURT %'IESEPOT.LD AND BRUCE McNAMARA
+33
+Q= —,'k+6„k odd.
+(5.22)
+Substitution
+of Eq. (5.22) into Eq. (5.6) yields precisely the
+same result, Eq. (S.19), as for the additive modulation
+(but
+with ai, replaced by a i,}. Combining
+this with Eq. (3.19b)
+for q, therefore,
+yields the same power spectrum S
+as
+Eq. (5.21).
+lm
+5PNm
+I
+—i(,b+h)t+c c
+—
+i (b+b, )
+Elk
+i (b+b, )
+(5.28)
+Combining
+this with Eq. (3.35) yields a total response
+rj
+of
+C. Case three:
+Period-doubling
+bifurcation
+This time q
+is given by Eq. (3.26) and the autonomous
+contribution
+rj'
+by Eq. (5.4}. Upon
+performing
+the in-
+tegral in Eq. (5.4), we have
+I
+j —k
+j —k
+i(j+b+s, 'n
++C.C.
+i(b+b, )
+e+ib,
+i(,n —A)t
+1
+, e
+m
+2 5PNm g
+Qn
+~
++C'
+i n —Q
+n
+(5.23)
+(5.29)
+while the near-resonance
+condition
+on Q is [see Eq. (3.25}]
+Q=k/2+6,
+k odd .
+(5.24)
+Q=k+6,
+(b,
+( ((1.
+(5.25)
+Again,
+however,
+this
+contribution
+is independent
+of e:
+Indeed, this resonance effect aluxtys exists for autonomous
+systems,
+even
+far from
+an
+instability,
+since it depends
+purely
+on the zero exponent
+pN.
+This phenomenon
+is ir-
+relevant
+to a discussion of systems'
+properties
+near the on-
+set of bifurcations,
+so we pursue this point no further.
+D. Case four: Hopf bifurcation
+In this final case, rj
+was computed
+to be that given by
+Eq. (3.25), while evaluation
+of the integral
+appearing
+in
+Eq. (5.4) leads to
+i[n —O)t
+1
+e
+'gm —2 5PNm $
+Qn
+.
++C.c.
+i
+n —Q)
+(5.26)
+As in Sec. III, the resonance condition
+is
+(5.27)
+where
+b is the imaginary
+part of the near-critical
+Floquet
+exponents,
+so that
+Observe that none of the terms appearing
+in Eq. (5.23) in-
+volves
+a small
+denominator —
+unlike
+g
+for—
+the condi-
+tion (5.24); consequently,
+the autonomous
+piece rjm leads
+to only a minor
+correction
+to the spectrum
+found
+in the
+nonautonornous
+case.
+Clearly,
+the contribution
+g'
+leads
+to relatively
+weak additional
+lines at frequencies co=n+b
+(as well as a slight
+renormalization
+of the basic lines at
+co=n), the strength
+of these new lines being independent
+of the bifurcation
+parameter
+e, and largely
+independent
+of
+the detuning 6, as well.
+We
+note
+in
+passing
+that
+g'
+can
+give
+a
+large
+contribution —
+while
+rj
+becomes
+relatively
+insignif-
+icant—
+for a resonance condition
+different
+from Eq. (5.24),
+namely
+where
+we introduced
+the Fourier
+expansions
+(3.36) and
+(5.9) for P, (t) and PN (t), respectively
+The first term in Eq. (5.29) leads to the by now familiar
+e-independent
+renormalization
+of the
+integer-frequency
+lines in the power spectrum
+due to xo. Aside from these,
+the power spectrum
+is
+S(co)= —,'5 g
++ Q2
+x [5(co j
+b+—5—
+)+5(co j+b —b, )—
+]
+2
+Pj & kPg'ct —k-
++—5
+i (b +5)
+@+i',
+x [5(cu j
+b
+b, )+—5(—
+co—j+b+i5—
+)] .
+(5.30)
+Consequently,
+half of these lines have precisely
+the same
+Lorentzian
+dependence
+on e and
+b, as for the nonauto-
+nomous
+case, while the strength
+of the other half have a
+somewhat
+more
+complicated
+parameter
+dependence.
+However,
+unless
+b is very small —wf the same order as the
+small
+parameters
+e and 6—
+the deviation
+of Eq. (5.30)
+from the nonautonomous
+result (3.37) is minor.
+Finally,
+one may wonder
+why it is that the lines at co=j +(b +3,)
+have corrections
+due to the zero exponent,
+awhile those at
+io=j +(b —5) do not.
+The reason is that the modulation
+was chosen to be at the single frequency
+Q, and this can
+be tuned
+to be near either co=j+b or co=j —b; conse-
+quently,
+only half of the spectral lines are affected.
+E. Summary
+We take time out to summarize
+the results of this sec-
+tion.
+Comparing
+the calculations
+for autonomous
+systems
+with the corresponding
+cases for nonautonomous
+systems,
+we find that
+the extra contribution
+due to the zero ex-
+ponent
+pN has two effects.
+First, in all but the pitchfork
+case, the strength
+of the integer-frequency
+spikes
+due to
+the basic oscillation
+xo are renormalized.
+This effect is in-
+dependent
+of the bifurcation
+parameter
+E, but does depend
+
+
+===== PAGE 13 / 14 =====
+
+33
+SMALL-SIGNAL AMPLIFICATION
+IN BIFURCATING DYNAMICAL SYSTEMS
+on the detuning
+parameter
+b,. Second, the strength
+of the
+modulation-induced
+lines are no longer I.orentzian
+func-
+tions of e and 6; in the Hopf case this is so for only half
+of the lines, the other half remaining
+unchanged
+from the
+nonautonomous
+result.
+However,
+for the pitchfork
+and
+period-doubling
+cases, as well as the Hopf case provided
+the Hopf frequency
+b is not as small as e and 5, this devi-
+ation from a Lorentzian
+dependence
+on e and 5 is rela-
+tively
+small,
+so that the nonautonomous
+behavior
+nearly
+matches the autonomous
+results.
+VI. DISCUSSION
+The theory
+developed
+in this paper is based on a num-
+ber of approximations,
+so it is worthwhile
+to pause and re-
+flect on how these affect the range of validity
+of the re-
+sults.
+First, the bifurcation
+parameter
+e is assumed
+small
+enough
+that
+a single
+Floquet
+function
+Pk dominates
+the
+dynamical
+response.
+This enables
+us to find a form for
+the power spectrum
+S(to) that depends
+solely on the class
+of the bifurcation
+encountered,
+and these classes are rela-
+tively few in number.
+Second, the perturbation
+amplitude
+5 is supposed
+small enough
+that the linearized
+Eq. (2.8) is
+sufficient
+to capture
+the important
+dynamics.
+For larger
+perturbations,
+one would
+expect
+the nonlinear
+terms
+to
+give significant
+corrections
+to the theory
+developed
+here.
+One interesting
+effect for larger 5 that has been observed
+in period-doubling
+systems is to shift the bifurcation
+point
+of the unperturbed
+system.
+In contrast,
+the linearized
+theory
+takes the basic oscillation
+xo to be unchanged
+by
+the modulation,
+so that the onset of the dynamical
+insta-
+bility is likewise
+unchanged.
+Recently,
+a theory
+has been
+developed
+for periodically
+modulated
+nonautonomous
+sys-
+tems near the onset of period-doubling
+instabilities
+which
+explains the shifted bifurcation
+point, as well as predicting
+a number of other curious nonlinear
+effects.
+Finally, en-
+trainment
+(or frequency
+locking)
+is another
+effect that is
+beyond
+the scope of the theory
+presented
+here.
+This can
+occur for larger 5 in modulated
+autonomous
+systems
+and
+corresponds
+to a change
+in the frequency
+of the basic os-
+cillation
+xo due to the presence of the nearly resonant
+per-
+turbation.
+Despite
+the
+above
+limitations,
+the
+linearized
+theory
+seems to explain the basic features of small-signal
+amp1ifi-
+cation near the onset of simple bifurcations.
+This amplifi-
+cation can be quite substantial
+when the detuning 6 of the
+modulation
+is small.
+The most important
+feature of our
+analysis
+is that the amplification
+effect follows from pure-
+ly dynamical
+considerations,
+regardless of the physical
+de-
+tails of the system.
+Moreover,
+the derived
+results
+depend
+only
+on the type of bifurcation
+involved,
+which
+requires
+only the broadest,
+most general
+kind of dynamical
+infor-
+mation.
+For example,
+one may
+readily
+locate parameter
+values for period-doubling
+and Hopf instabilities
+in an ex-
+perimental
+situation,
+even
+without
+knowledge
+of the
+govermng
+dynamical
+equations.
+Owing to the general
+dynamical
+nature of this amplifi-
+cation mechanism,
+one is free to choose physical
+realiza-
+tions that provide
+additional
+advantages:
+The Josephson-
+junction
+paramps
+are attractive
+because they operate in an
+interesting
+frequency
+range
+and, as superconducting
+sys-
+tems, are low-dissipation
+devices.
+Finally,
+as was shown
+in Sec. IV C, certain detailed
+dynamical
+properties
+might
+also prove
+desirable:
+The existence of the virtual
+Hopf
+phenomenon
+can greatly
+extend the frequency
+range over
+which small-signal
+amplification
+can be achieved.
+ACKNOW LEDGMP NTS
+We thank F. Bridges, P. Bryant, J. Guckenheimer,
+M.
+Nauenberg,
+N. Schumaker,
+P. Scott, and especially D. Be-
+langer
+for useful
+discussions.
+Successful
+design
+of the
+analog
+computer
+is
+due
+largely
+to the
+guidance
+of J.
+Crutchfteld.
+We are indebted to J. Clarke and R. Miracky
+for introducing
+us to the subject of Josephson-junction
+parametric
+amplifiers.
+This work
+was supported
+by Na-
+tional Science Foundation
+Grant No. PHY-81-1S541 and
+Division of Materials
+Sciences, U. S. Department
+of Ener-
+gy, Contract No. DE-AC02-76CH00016.
+'Present
+address:
+Department
+of Physics, Brookhaven
+National
+Laboratory,
+Upton, NY 11973.
+K. %iesenfeld
+and B. McNamara,
+Phys.
+Rev. Lett. 55, 13
+(1985).
+K. %iesenfeld, J. Stat. Phys. 38, 1071 (1985).
+3C. Jeffries and K. %'iesenfeld, Phys. Rev. A 31, 1077 (1985).
+4Y. C. Chen, H. G. %'inful, and J. M. Liu, Appl. Phys. Lett. (to
+be published).
+~H. G. %'inful and Y. C. Chen {unpublished).
+68. McNamara
+and K. %'iesenfeld
+(unpublished).
+7K. %iesenfeld, Phys. Rev. A 32, 1744 (1985).
+J. P. Crutchfield,
+J. D. Farmer,
+and B. A. Huberman,
+Phys.
+Rep. 92, 45 (1982).
+J. Heldstab,
+H. Thomas, T. Geisel, and B. Radons, Z. Phys. B
+50, 141 (1983).
+~ M. J. Feldman, P. T. Parrish,
+and R. Y. Chiao, J. Appl. Phys.
+46, 4031 (1975).
+I Y. Taur and P. L. Richards, J. Appl. Phys. 48, 1321 (1977).
+I2J. Mygind, N. F. Pedersen, O. H. Soerensen, B.Duelholm,
+and
+M. T. Levinsen, Appl. Phys. Lett. 35, 91 (1979).
+' M. T.
+Levinsen,
+N. F. Pedersen,
+O.
+H.
+Soerensen,
+B.
+Duelholm,
+and J. Mygind,
+IEEE Trans.
+Electron
+Devices
+ED-27, 1928 {1980).
+R. Y. Chiao, M. J. Feldman,
+D. %. Petersen, B. A. Tucker,
+and
+M. T. Levinsen,
+in Future
+Trends
+in Superconductive
+Electronics
+(Charlottesuille,
+1978), Proceedings
+of the Confer-
+ence on Future
+Trends
+in Superconductive
+Electronics,
+AIP
+Conf. Proc. No. 44, edited by B.S. Deaver, C. M. Falco, J. H.
+Harris, and S. A. %'olf (AIP, Ne~ York, 1979), p. 259.
+'58. A. Huberman,
+J. P. Crutchfield,
+and N. H. Packard, Appl.
+Phys. Lett. 37, 750 (1980).
+'6M. J. Feldman
+and
+M. T. Levinsen,
+IEEE Trans.
+Magn.
+NAG-17, 834 (1981).
+N. F. Pedersen
+and A. Davidson,
+Appl. Phys. Lett. 39, 830
+(1981).
+~8M. T. Levinsen, J. Appl. Phys. 53, 4294 (1982).
+'9R. F. Miracky and J. Clarke, Appl. Phys. Lett. 43, 508 (1983).
+20R. L. Kautz, J. Appl. Phys. 52, 3528 (1981);52, 6241 (1981).
+
+
+===== PAGE 14 / 14 =====
+
+33
+D. O'Humieres,
+M. R. Beasley, B.A. Huberman,
+and A. Lib-
+chaber, Phys. Rev. A 26, 3438 (1982).
+22D. W. Jordan
+and P. Smith, nonlinear
+Ordinary
+Differential
+Equations
+(Oxford University
+Press, Oxford, 1977).
+J. Guckenheimer
+and
+P. Holmes,
+Nonlinear
+Oscillations,
+Dynamical
+Systems
+and
+Bifurcations
+of
+Vector
+Fields
+(Springer,
+New York, 1983).
+24M. Golubitsky
+and D. G. Schaeffer, Singularities
+and Groups
+in Bifurcation
+Theroy iSpringer,
+New York, 1984i.
+2so. H. Sattinger,
+Branching
+in the Presence of Symmetry,
+Vol.
+40 of Conference
+Board of the
+Mathematical
+Sciences—
+National
+Science Foundation
+Regional
+Conference
+Series in
+Applied
+Mathematics
+(Society
+for
+Industrial
+and
+Applied
+Mathematics,
+Philadelphia,
+1983).
+J. %'. Swift
+and K. VAesenfeld,
+Phys.
+Rev. Lett. 52, 705
+(1984).
+27See, far example, Ref. 16.
+8B. D. Josephson,
+Phys. Lett. 1, 251 (1962).
+O. H. Soerensen, B. Duelholm, J. Mygind,
+and N. F. Pedersen,
+J. Appl. Phys. 51, 5483 (1980).
+3oN. F. Pedersen, O. H. Soerensen, B.Duelholm,
+and J. Mygind,
+J. Low Temp.
+Phys. 38, 1 (1980).
+3'B. Salzmann, J. Atmos. Sci. 19, 239 (1962).
+3~E. N. Lorenz, J. Atmos. Sci. 20, 130 (1963).
+C. Sparrow,
+The Lorenz Equations:
+Bifurcation,
+Chaos, and
+Strange Attractors
+(Springer,
+New York, 1982).
+34P. Bryant and K. %iesenfeld
+(unpublished).

@@ -1,0 +1,527 @@
+                                                     JTWPA with a 2nd harmonic CPR
+
+                                                     Effect of a 2nd harmonic current–phase relation on the behavior of a
+                                                     Josephson Traveling Wave Parametric Amplifier
+                                                               Claudio Guarcello ,1, 2, a) Carlo Barone ,1, 2, b) Giovanni Carapella ,1, 2, c) Giovanni Filatrella ,3, d) Andrea
+                                                               Giachero ,4, 5, 6, e) and Sergio Pagano 1, 2, f)
+                                                               1)
+                                                                  Dipartimento di Fisica “E.R. Caianiello”, Università di Salerno, Via Giovanni Paolo II, 132,
+                                                               I-84084 Fisciano (SA), Italy
+                                                               2)
+                                                                  INFN, Gruppo Collegato di Salerno, Via Giovanni Paolo II, 132, I-84084 Fisciano (SA),
+                                                               Italy
+                                                               3)
+                                                                  Science and Technology Department, University of Sannio, Benevento, Italy
+                                                               4)
+                                                                  Department of Physics, University of Milano Bicocca, Piazza della Scienza, I-20126 Milano,
+arXiv:2502.00804v2 [cond-mat.supr-con] 24 Apr 2025
+
+
+
+
+                                                               Italy
+                                                               5)
+                                                                  INFN—Milano Bicocca, Piazza della Scienza, I-20126 Milano, Italy
+                                                               6)
+                                                                  Bicocca Quantum Technologies (BiQuTe) Centre, Piazza della Scienza, I-20126 Milano,
+                                                               Italy
+                                                               (Dated: 28 April 2025)
+                                                               We numerically investigate the behavior of a Josephson traveling wave parametric amplifier assuming a
+                                                               current-phase relation with a second–harmonic contribution. We find that varying the weight of harmonic
+                                                               terms in the Josephson current affects the gain profile. The analysis of gain characteristics, phase-space
+                                                               portraits, Poincaré sections, and Fourier spectra demonstrates that the nonsinusoidal contribution influences
+                                                               the operating mode and stability of the device. In particular, we identify the optimal weighting of harmonic
+                                                               contributions that maximizes amplification, achieving gains up to ∼ 13 dB in a device without dispersion
+                                                               engineering.
+
+
+                                                        Boosting weak microwave signals is essential in many           superconductors9–13 or in the JJs embedded in the
+                                                     application fields, like reading superconducting qubits,          transmission line. In the latter case they are called
+                                                     quantum devices, and radio astronomy1–3 . Optimal low-            Josephson TWPAs (JTWPAs)7,14–18 .              One of the
+                                                     noise microwave amplifiers get close to the quantum–              primary goals in designing a JTWPA is determining
+                                                     noise limit by working at very low temperatures and               strategies that maximize signal amplification, while
+                                                     using parametric pumping in circuits with Josephson               keeping a good control of the system bandwidth and
+                                                     junctions (JJs) or superconducting elements with high             of spurious tones generation.         The amplifier’s gain
+                                                     kinetic inductance4 .                                             can be optimized through dispersion engineering, e.g.,
+                                                        Superconducting amplifiers based on nonlinear                  by resonant phase matching strategies19–21 involving
+                                                     resonators usually have reasonable gain and quantum-              periodically embedded LC resonators capacitively
+                                                     limited noise, but feature a limited bandwidth of                 coupled to the transmission line: the resonators adapt
+                                                     a few hundred MHz.           Alternatively, the so-called         the dispersion relation so that the total phase mismatch
+                                                     traveling-wave parametric amplifiers (TWPAs) can                  along the transmission line remains small over a wide
+                                                     achieve much wider bandwidths, up to several GHz5–7 .             bandwidth.       Other dispersion–engineering strategies
+                                                     This aspect is especially useful for reading multiple             to maximize the achievable gain and the robustness
+                                                     qubits and detection applications8 . The efficient use of         of the device response can be also implemented22–27 .
+                                                     quantum hardware through frequency multiplexing is a              The basic element of a JTWPA, i.e., the Josephson
+                                                     crucial factor for the scalability of quantum processors.         junction, determines the device performance. Usually,
+                                                     However, superconducting TWPAs have also drawbacks,               a JJ is assumed to follow a sinusoidal current-phase
+                                                     such as gain ripples, generation of unwanted tones and            relation (CPR). However, this is not always the case,
+                                                     comparatively lower gain. These challenges need to be             as higher harmonics are often observed in the CPR of
+                                                     addressed by proper design of the distributed amplifiers          unconventional JJs28,29 . For instance, in nanobridge-
+                                                     and control of the intrinsic nonlinearities.                      based junctions, deviations from a sinusoidal CPR at
+                                                        Superconducting TWPAs are currently realized                   high temperatures to a sawtooth-like or even multivalued
+                                                     using the high nonlinear kinetic inductance found in              form at lower temperatures arise due to phase slippage
+                                                                                                                       effects in the weak link30 . In this work, we precisely focus
+                                                                                                                       on the gain profiles in the specific case of a CPR with a
+                                                     a) Electronic mail: Author to whom correspondence should be       second–harmonic contribution.
+                                                     addressed: cguarcello@unisa.it
+                                                     b) Electronic mail: cbarone@unisa.it                                 To do so, we numerically investigate the behavior of a
+                                                     c) Electronic mail: gcarapella@unisa.it                           JTWPA31,32 with the realistic system parameter setting
+                                                     d) Electronic mail: filatr@unisannio.it
+                                                                                                                       from the design developed within the DARTWARS
+                                                     e) Electronic mail: andrea.giachero@unimib.it
+                                                                                                                       INFN collaboration8,33–39 . In particular, we consider
+                                                     f) Electronic mail: spagano@unisa.it
+                                                                                                                       a discrete transmission line formed by 990 cells, each
+JTWPA with a 2nd harmonic CPR                                                                                               2
+
+
+   (a)                                    (b)                                        (c)
+
+
+
+                                                       π                   0         (d)
+
+
+
+
+                                                e (Jc1 , Jc2 ). (c) CPR, I(φ), and (d) Josephson energy, U (φ), at Jc1 = 1 and
+FIG. 1. (a) n-th cell of the JTWPA. (b) GS map, φ
+Jc2 = −0.6.
+
+
+formed by a capacitor Cg,n = 24 fF to ground and                 semiconductors65–73 , graphene74 , or unconventional
+an rf–SQUID in series along the signal path, see                 superconductors75,76 .      Higher-order contributions,
+Fig. 1(a).     Each rf–SQUID consists of one JJ in               typically overlooked in conventional tunnel JJs, have
+parallel with an inductor Lg,n = 120 pH. At the                  recently been demonstrated to affect also the excited–
+input of the transmission line is connected a voltage            state spectrum of Al– and AlO–based Josephson
+source, having a standard internal impedance, Ri =               qubits77 . Finally, a recent proposal suggests that also
+50 Ω, and generating pump and signal voltages, Vpump             altermagnets could provide an alternative route for CPR
+and Vsign , respectively. The end of the transmission            engineering78 .
+line is connected, through a series capacitance, Cℓ =               The Josephson energy associated to the CPR in Eq. (2)
+1 nF, for DC decoupling, a standard load impedance               reads
+Rℓ = 50 Ω, across which the voltage drop, Vout , is
+measured. Setting of boundary conditions is highly                         U (φ) = −Jc1 cos(φ) − Jc2 cos(2φ)/2.           (3)
+relevant when studying Josephson transmission lines,
+for load–matched boundary conditions can significantly           The phase, φ,
+                                                                            e of the ground state (GS) is determined by
+impact the dynamics and even suppress chaos40,41 . The           minimizing U (φ), which requires solving the equation
+current through the JJ of the n-th cell is expressed by the
+well-known resistively and capacitively shunted junction                 ∂U
+                                                                                 = sin(φ)
+                                                                                       e [Jc1 + 2Jc2 cos(φ)]
+                                                                                                         e = 0,           (4)
+(RCSJ) model42–47 as                                                     ∂φ φ=φe
+                     ℏ d2 φn    1 ℏ dφn                          so that the values of φ
+                                                                                       e are given by
+         IJ,n = CJ         2
+                             +          + I(φn ),        (1)
+                     2e dt     RJ 2e dt
+                                                                                                                1
+where we assume CJ = 200 fF and RJ = 20 kΩ.                                sin(φ)
+                                                                               e =0        or      cos(φ)
+                                                                                                       e =−       .       (5)
+                                                                                                               2g
+We deal with the numerical solution of the system
+of coupled differential equations, one for each cell of          Here, g = Jc2 /Jc1 is the ratio of the weights of the
+the JTWPA, with appropriate boundary conditions,                 harmonic contributions. Therefore, there are also non–
+through an implicit finite–difference method based on            trivial GSs, i.e., φ
+                                                                                    e = 0, π, or φ e ∈ (0 − π). In detail,
+a tridiagonal algorithm, i.e., a common route for                when |g| < 1/2, the GS can be only φ  e = 0, if Jc1 > 0, or
+numerically studying Josephson transmission lines48–53 .         e = π, if Jc1 < 0. Instead, if |g| ≥ 1/2, the system has
+                                                                 φ
+The time step and the integration period, in units of            non–trivial GSs, φ e = ± arccos (1/2g), if Jc2 < 0.
+the Josephson plasma frequency44 , are ∆t = 10−2 and
+                                                                    Figure 1(b)58 shows the GS map, φ   e (Jc1 , Jc2 ). In the
+tmax = 2 × 104 , respectively. Numerical details can be
+                                                                 following, we explore the JTWPA response along the
+found in Ref. 54.
+                                                                 vertical, yellow dashed line in this plot, i.e., for Jc1 = 1
+  We are interested in exploring the JTWPA
+                                                                 and Jc2 ∈ [−1, 1]. The region for Jc2 > 0 and |g| ≥ 1/2
+performance in the case of a CPR with a second–
+                                                                 is highlighted since it corresponds to U (φ) profiles with
+harmonic contribution, i.e.,
+                                                                 an additional secondary minimum in φ = 0 or π 58 .
+             I(φ) = Jc1 sin(φ) + Jc2 sin(2φ).            (2)     Figures 1(c) and (d) present, respectively, the CPR and
+                                                                 the Josephson energy at (Jc1 , Jc2 ) = (1, −0.6), i.e., the
+This   type     of   CPR      has    demonstrated   to           point marked by a yellow diamond in the GS map in
+well   describe    superconducting     junctions  with           Fig. 1(a). It is evident that the minimum energy is
+ferromagnetic barriers55–64 , as well as JJs based on            slightly off–center with respect to φ = 0.
+JTWPA with a 2nd harmonic CPR                                                                                                    3
+
+  (a)                                       (b)                                 (c)
+                         Ppump= ‒63.5dBm
+
+
+
+
+  (d)                                       (e)
+                          Ppump= ‒63.5dBm
+
+
+
+
+                                                                                                                   ′
+FIG. 2. (a) FT of Vout at Ppump = −63.5 dBm. (b) Gain versus Ppump . (c) Fourier map. (d) Phase portrait, Vout        versus Vout ,
+                                                   ′
+at Ppump = −63.5 dBm. (e) Poincaré section, ⟨VPS ⟩, versus Ppump . The other parameters are: νpump = 7 GHz, νsign = 6 GHz,
+Psign = −100 dBm, and Ibias = 0. In (a), the red (orange) dashed vertical line marks νpump (νsign ), the cyan (blue) dot-dashed
+vertical line indicates the 4WM (3WM) νidle , and the magenta horizontal line indicates the input–signal level. In (d), the
+                                                  ′
+region in yellow highlights the distribution of Vout collected to construct the plot in (e). In (b), (c) and (e), a vertical, cyan
+line indicates the value Ppump = −63.5 dBm set in (a) and (d) (Multimedia available online).
+
+
+   The physical meaning of negative Jc1 and Jc2                    with maxima, γ± (g), given by58
+is intertwined with the mechanisms governing
+supercurrent transport.      A negative Jc1 typically                             1 p               23p             12
+                                                                     γ± (g) =          1 + 32g 2 ± 3      1 + 32g 2 ∓ 1 . (7)
+indicates a π-junction79 , commonly found in systems                            32|g|
+such as superconductor-ferromagnet-superconductor
+(SFS) junctions, where the exchange interaction in                 It turns out√that γ+ (g) > γ− (g) (in particular, ∆γ =
+the ferromagnetic layer induces oscillations in the                γ+ − γ− ≈ 2), with the secondary maximum, γ− (g),
+superconducting wavefunction80,81 . In unconventional              appearing only if |g| ≥ 1/2. Therefore, the critical
+superconductors, such as d-wave materials, a similar               current is Ic = Jc1 γ+ , so that the Josephson current can
+effect, depending on the junction’s orientation relative to        be recast as I(φ) = Ic × i(φ, g). Here, we stress the
+the superconducting gap symmetry, occurs. In high-Tc               role of the normalized current i(φ, g) = γ(φ, g)/γ+ (g) ∈
+cuprates, grain-boundary JJs exhibit this phenomenon,              [−1, +1], which embodies the φ-dependence. Indeed,
+leading to spontaneous half-flux quantum states in                 we aim to scan the Jc2 values along the path marked
+superconducting loops82,83 . A negative Jc2 suggests               by the yellow line in Fig. 1(a), i.e., at Jc1 = 1 so
+a more intricate interplay of transport channels and               that Jc2 ≡ g 88 . However, modifying g also changes
+becomes particularly relevant when Jc1 is suppressed,              the critical current, which may significantly influence
+such as near the 0–π transition in SFS junctions84 .               the performance of the JTWPA (for example, changing
+Ferromagnetic junctions thus provide a direct way to               Ic affects both the Josephson plasma frequency and
+intrinsically “control” g by adjusting ferromagnetic               the Josephson inductance, e.g., eventually leading to an
+layer properties62,63 .   A recently introduced family             unwanted load mismatch). Instead, we want to show
+of logics exploits JJs with a dominant 2nd-harmonic                how the shape of the CPR, rather than the critical
+component in their CPR85,86 . In the original proposal,            current itself, can lead to a non–trivial response in the
+phase logic circuits were based on bistable junctions              JTWPA. Therefore, in what follows, we fix Ic = 2 µA, a
+with Is (φ) ∝ sin(2φ), offering a promising route for              value consistent with the device specifications reported
+high–density superconducting circuits.        Notably, a           in Ref. 8, and we investigate how the parameter g affects
+0–0–π SQUID, i.e., the building block of the so-called             the JTWPA performance assuming different normalized
+half-flux-quantum logic, is effectively equivalent to              CPRs i(φ, g).
+a single junction with a CPR containing a negative                    We first look at the Fourier transform of the output
+2nd-harmonic term, Is (φ) ∝ − sin(2φ)85,87 .                       signal, from which we extract the gain in dB, defined
+   The maximum supercurrent, i.e., the critical current,           as Gain = 20 log[Vout (νsign )/Vsign ]. Figure 2 shows
+Ic = maxφ {I(φ)}, depends on g. In units of Jc1 , Eq. (2)          the results for Jc1 = 1 and Jc2 = −0.6 (Multimedia
+reads                                                              available online). We will demonstrate in the following
+                                                                   that this value of Jc2 maximizes the gain with stable
+                                                                   conditions. We consider the effects produced by the
+               γ(φ, g) = sin(φ) + g sin(2φ),               (6)     change in pump intensity, Ppump , taking the other driving
+JTWPA with a 2nd harmonic CPR                                                                                             4
+
+                 (a)                                         (b)
+
+
+
+
+                                                             Jc2
+                Jc2
+
+
+
+
+                                 pump                                        pump
+
+                           ′
+FIG. 3. (a) Gain and (b) VPS                        ′ , as a function of Jc2 ∈ [−1, 1] and Ppump ∈ [−70, −45] dBm. The other
+                             –standard deviation, σVPS
+parameters are: νpump = 7 GHz, νsign = 6 GHz, Psign = −100 dBm, and Ibias = 0. The white horizontal dashed line marks the
+value Jc2 = −0.6 used for Fig. 2.
+
+
+parameters fixed, that is, νpump = 7 GHz, νsign = 6 GHz,        intertwined with the FT response, which displays
+Psign = −100 dBm, and Ibias = 0. In Figs. 2(b),                 multiple peaks. From this plot, we can construct
+(c), and (e), a vertical, cyan line indicates the value         the Poincaré section by collecting, for each parameter
+                                                                                                   ′
+Ppump = −63.5 dBm set in (a) and (d).                           combination, all values of Vout        when Vout = 0, i.e.,
+   In Fig. 2(a) we show the Fourier transform (FT) of           the trajectory crossings within the region highlighted in
+Vout at Ppump = −63.5 dBm; the red (orange) dashed              yellow in Fig. 2(d). In this way, for each pump intensity,
+                                                                                                      ′
+vertical line marks the pump (signal) frequency, while          we obtain a “distribution” of Vout       values, represented
+the cyan dot–dashed line indicates the idle tone at             as points in the Poincaré section. When these points
+frequency νidle = 2νpump − νsign = 8 GHz in the so–             form tightly concentrated clusters, this may indicate the
+called four–wave mixing (4WM) regime. Interestingly,            presence of narrow and stable periodic orbits in the
+even the three–wave mixing (3WM) mode at νidle =                phase portrait. Conversely, when the points are widely
+νpump − νsign = 1 GHz emerges clearly (see the blue dot-        dispersed, it suggests transitions to chaotic behavior,
+dashed vertical line), despite the absence of bias current      which is reflected in a tangled, intricate structure within
+and magnetic field. The horizontal magenta dashed line          the phase portrait. From each distribution at a given
+marks the input–signal level: the amplification affecting       Ppump , we extract the mean and the standard deviation,
+the signal tone is quite evident. Thus, we compute the          which are then used to construct the plot in Fig. 2(e),
+                                                                             ′
+signal gain by ranging the pump intensity in Ppump ∈            showing ⟨VPS   ⟩ as a function of Ppump . The error bars
+                                                                                 ′
+[−80, −45] dBm, see Fig. 2(b). We can identify three            represent the VPS  –standard deviation, σVPS ′ . Once again,
+
+distinct regimes: i ) for Ppump ≲ −62.5 dBm, the gain           the distinct regimes, each exhibiting markedly different
+increases (non–monotonically), reaching values above            responses, are clearly visible.
+∼ 13 dB, then ii ) for Ppump ∈ (−62.5, −59.5) dBm,                 To complement and enrich the study of the JTWPA’s
+the gain smoothly rises again, and iii ) for Ppump ≳            performance, the multimedia file available online presents
+−59.5 dBm, the gain profile becomes highly scattered,           a collection of results, similar to those in Fig. 2. This
+indicating the onset of a chaotic response54 . This             figure is essentially a still frame at Jc2 = −0.6 from the
+distinction is particularly clear when looking at Fourier       animation, which is instead obtained by sweeping Jc2 ∈
+map in Fig. 2(c), i.e., the frequency components in the         [−1, 1] with steps of ∆Jc2 = 0.05, i.e., along the yellow
+output signal, with peaks corresponding to the dominant         dashed line in Fig. 1(a).
+frequencies. At low pump powers, the spectrum is                   To better understand the amplification mechanism as
+relatively sparse, although several harmonics can be            Jc2 changes, Fig. 3 shows (a) the gain and (b) the
+                                                                  ′
+observed.      As Ppump increases, additional spectral          VPS −standard deviation, σVPS    ′ , as a function of Jc
+                                                                                                                         2 ∈
+components appear, and the harmonic peaks become                [−1, 1] and Ppump ∈ [−70, −45] dBm. Specifically, in
+more pronounced, indicating non-linear effects such as          Fig. 3(a) we show the Gain(Ppump , Jc2 ) map: a red
+harmonic generation. For Ppump ≳ −59.5 dBm, the                 region marks parameter combinations that lead to a
+spectrum broadens significantly, implying a higher noise        chaotic response. The value of Jc2 has a significant
+level and a transition towards chaotic behavior in the          impact on both the maximum achievable gain and the
+system’s dynamics54 .                                           range of Ppump values within which the system exhibits
+                                                        ′
+   Figure 2(d) shows the phase-space portraits, Vout            a non-chaotic behavior. In fact, for Jc2 > 0, the gain
+versus Vout , at Ppump = −63.5 dBm. It is characterized         shows little variation as Jc2 changes. In contrast, a
+by a relatively broad trajectory, an aspect tightly             markedly different response emerges for Jc2 < 0. First,
+JTWPA with a 2nd harmonic CPR                                                                                                    5
+
+we observe that the largest range of stable Ppump values        CONFLICT OF INTEREST
+occurs for Jc2 ≃ −0.15. Then, as Jc2 decreases further,
+the gain reaches higher values, in particular close to            The authors have no conflicts to disclose.
+Jc2 = −0.6 (the horizontal, white dashed line), but the
+system becomes more prone to chaotic oscillations, as
+highlighted by the jagged transition between stable and
+unstable regions. This instability manifests as a narrower      DATA AVAILABILITY STATEMENT
+range of Ppump values that allow for a stable response
+as Jc2 decreases. The system’s sensitivity to changes in          The data that support the findings of this study are
+Jc2 is clearly visible in this region of the (Ppump , Jc2 )-    available from the corresponding author upon reasonable
+parameter space, revealing the delicate balance between         request.
+high gain and stability, especially with a non–trivial GS.
+This threshold value emerges also by expanding γ(φ, g)           1 C.  Bartram, T. Braine, R. Cervantes, N. Crisosto, N. Du,
+for small φ, yielding γ(φ, g) ≃ (1 + 2g)φ − (1 + 8g)φ3 . At        G. Leum, P. Mohapatra, T. Nitta, L. J. Rosenberg, G. Rybka,
+g = −1/2 and g = −1/8, the coefficients of the first-              J. Yang, J. Clarke, I. Siddiqi, A. Agrawal, A. V. Dixit, M. H.
+                                                                   Awida, A. S. Chou, M. Hollister, S. Knirck, A. Sonnenschein,
+and third-order terms change sign, respectively. It is             W. Wester, J. R. Gleason, A. T. Hipp, S. Jois, P. Sikivie, N. S.
+therefore reasonable to expect that these points mark              Sullivan, D. B. Tanner, E. Lentz, R. Khatiwada, G. Carosi,
+sharp transitions in the device’s behavior.                        C. Cisneros, N. Robertson, N. Woollett, L. D. Duffy, C. Boutan,
+   Alongside the gain map, we also present a density plot          M. Jones, B. H. LaRoque, N. S. Oblath, M. S. Taubman, E. J.
+to visualize how the clusters of Poincaré section points          Daw, M. G. Perry, J. H. Buckley, C. Gaikwad, J. Hoffman,
+                                                                   K. Murch, M. Goryachev, B. T. McAllister, A. Quiskamp,
+are distributed. Specifically, for each (Ppump , Jc2 ), we         C. Thomson, M. E. Tobar, V. Bolkhovsky, G. Calusine,
+                                           ′
+calculate the standard deviation of the VPS   distribution,        W. Oliver, and K. Serniak, Review of Scientific Instruments 94,
+denoted as σVPS  ′ , see Fig. 3(b).    A stable response           044703 (2023).
+                                                                 2 D. Shiri, H. Renberg Nilsson, P. Telluri, A. F. Roudsari,
+corresponds to a very small value of σVPS          ′   (i.e.,
+                                                                   V. Shumeiko, C. Fager, and P. Delsing, IEEE Microwave
+σVPS
+   ′   ≪ 0.0189 , the yellow area), while a transition             Magazine 25, 54 (2024).
+to chaos is marked by a sudden increase in σVPS      ′  (i.e,    3 R. Citro, C. Guarcello, and S. Pagano, Josephson junctions,
+
+σVPS
+   ′  ≳ 0.01, the green-blue shaded area). The onset of            superconducting circuits, and qubit for quantum technologies,
+                                                                   in New Trends and Platforms for Quantum Technologies, edited
+the different regimes as Jc2 changes is also clearly visible       by R. Aguado, R. Citro, M. Lewenstein, and M. Stern (Springer
+in this σVPS
+           ′ map.                                                  Nature Switzerland, Cham, 2024) pp. 1–59.
+                                                                 4 J. Aumentado, IEEE Microwave Magazine 21, 45 (2020).
+                                                                 5 A. Cullen, Proceedings of the IEE - Part B: Electronic and
+   In summary, we have numerically studied the behavior
+of a JTWPA formed by junctions with a CPR that                     Communication Engineering 107, 101 (1960).
+                                                                 6 A. Sörenssen, Applied Scientific Research, Section B 10, 463
+includes a second–harmonic contribution. The results               (1962).
+show that, by adjusting the balance between the weights          7 M. Esposito, A. Ranadive, L. Planat, and N. Roch, Applied
+
+of the CPR harmonic components, it is possible to                  Physics Letters 119, 120501 (2021).
+                                                                 8 S. Pagano, C. Barone, M. Borghesi, W. Chung, G. Carapella,
+achieve a significant amplification, with gains up to ∼
+                                                                   A. P. Caricato, I. Carusotto, A. Cian, D. D. Gioacchino,
+13 dB, even in the absence of dispersion engineering.
+                                                                   E. Enrico, P. Falferi, L. Fasolo, M. Faverzani, E. Ferri,
+Additionally, we have observed how non–sinusoidal                  G. Filatrella, C. Gatti, A. Giachero, D. Giubertoni, A. Greco,
+contributions in the CPR can lead to a transition                  C. Kutlu, A. Leo, C. Ligi, G. Maccarrone, B. Margesin,
+from stable, periodic behavior to chaotic dynamics,                G. Maruccio, A. Matlashov, C. Mauro, R. Mezzena, A. G.
+particularly for Jc2 < 0. These findings highlight the             Monteduro, A. Nucciotti, L. Oberto, V. Pierro, L. Piersanti,
+                                                                   M. Rajteri, A. Rettaroli, S. Rizzato, Y. K. Semertzidis,
+potential for optimizing JTWPA performance through                 S. Uchaikin, and A. Vinante, IEEE Trans. Appl. Supercond. 32,
+the careful tuning of the harmonic components, offering            1 (2022).
+an additional avenue for improving amplifier designs.            9 C. Bockstiegel,    J. Gao, M. R. Vissers, M. Sandberg,
+                                                                   S. Chaudhuri, A. Sanders, L. R. Vale, K. D. Irwin, and D. P.
+                                                                   Pappas, Journal of Low Temperature Physics 176, 476 (2014).
+                                                                10 M. R. Vissers, R. P. Erickson, H.-S. Ku, L. Vale, X. Wu, G. C.
+ACKNOWLEDGMENTS
+                                                                   Hilton, and D. P. Pappas, Applied Physics Letters 108, 012601
+                                                                   (2016).
+                                                                11 S. Chaudhuri, D. Li, K. D. Irwin, C. Bockstiegel, J. Hubmayr,
+   This work received support in part by PNRR MUR
+projects PE0000023-NQSTI (NbJTWPA and QSENS,                       J. N. Ullom, M. R. Vissers, and J. Gao, Applied Physics Letters
+                                                                   110, 152601 (2017).
+Grant.    No.     H43C22000870001), in part by the              12 L. Ranzani, M. Bal, K. C. Fong, G. Ribeill, X. Wu, J. Long,
+Italian Institute of Nuclear Physics (INFN) through                H.-S. Ku, R. P. Erickson, D. Pappas, and T. A. Ohki, Applied
+the DARTWARS and QUB–IT Projects, in part                          Physics Letters 113, 242602 (2018).
+                                                                13 M. Malnou, M. Vissers, J. Wheeler, J. Aumentado, J. Hubmayr,
+by the European Union’s H2020–MSCA under Grant
+101027746, in part by the University of Salerno–                   J. Ullom, and J. Gao, PRX Quantum 2, 010302 (2021).
+                                                                14 M. Sweeny and R. Mahler, IEEE Transactions on Magnetics 21,
+Italy under Grants FRB21CAVAL, FRB22PAGAN, and                     654 (1985).
+FRB23BARON, and in part by PRIN 2022 PNRR                       15 M. T. Bell and A. Samolov, Phys. Rev. Appl. 4, 024014 (2015).
+
+Project QUESTIONs (Grant No. P2022KWFBH).                       16 A. B. Zorin, Phys. Rev. Appl. 6, 034006 (2016).
+JTWPA with a 2nd harmonic CPR                                                                                                              6
+
+17 L. Fasolo, A. Greco, and E. Enrico, in Advances in Condensed-           A. Nucciotti, L. Oberto, S. Pagano, V. Pierro, L. Piersanti,
+   Matter and Materials Physics, edited by J. Thirumalai and S. I.         M. Rajteri, S. Rizzato, Y. K. Semertzidis, S. Uchaikin, and
+   Pokutnyi (IntechOpen, Rijeka, 2019) Chap. 5.                            A. Vinante, J. Low Temp. Phys. 209, 658 (2022).
+18 M. Esposito, A. Ranadive, L. Planat, S. Leger, D. Fraudet,           34 V. Granata, G. Avallone, C. Barone, M. Borghesi, S. Capelli,
+
+   V. Jouanny, O. Buisson, W. Guichard, C. Naud, J. Aumentado,             G. Carapella, A. P. Caricato, I. Carusotto, A. Cian,
+   F. Lecocq, and N. Roch, Phys. Rev. Lett. 128, 153603 (2022).            D. Di Gioacchino, E. Enrico, P. Falferi, L. Fasolo, M. Faverzani,
+19 K. O’Brien, C. Macklin, I. Siddiqi, and X. Zhang, Phys. Rev.            E. Ferri, G. Filatrella, C. Gatti, A. Giachero, D. Giubertoni,
+   Lett. 113, 157001 (2014).                                               A. Greco, C. Guarcello, D. Labranca, A. Leo, C. Ligi,
+20 T. C. White, J. Y. Mutus, I.-C. Hoi, R. Barends, B. Campbell,           G. Maccarrone, F. Mantegazzini, B. Margesin, G. Maruccio,
+   Y. Chen, Z. Chen, B. Chiaro, A. Dunsworth, E. Jeffrey, J. Kelly,        C. Mauro, R. Mezzena, A. G. Monteduro, A. Nucciotti,
+   A. Megrant, C. Neill, P. J. J. O’Malley, P. Roushan, D. Sank,           L. Oberto, L. Origo, S. Pagano, V. Pierro, L. Piersanti,
+   A. Vainsencher, J. Wenner, S. Chaudhuri, J. Gao, and J. M.              M. Rajteri, A. Rettaroli, S. Rizzato, A. Vinante, and M. Zannoni,
+   Martinis, Applied Physics Letters 106, 242601 (2015).                   IEEE Trans. Appl. Supercond. 33, 1 (2023).
+21 C. Macklin,      K. O’Brien, D. Hover, M. E. Schwartz,               35 M. Borghesi, C. Barone, M. Borghesi, S. Capelli, G. Carapella,
+
+   V. Bolkhovsky, X. Zhang, W. D. Oliver, and I. Siddiqi, Science          A. Caricato, I. Carusotto, A. Cian, D. Di Gioacchino, E. Enrico,
+   350, 307 (2015).                                                        P. Falferi, L. Fasolo, M. Faverzani, E. Ferri, G. Filatrella,
+22 P. Winkel, I. Takmakov, D. Rieger, L. Planat, W. Hasch-                 C. Gatti, A. Giachero, D. Giubertoni, V. Granata, A. Greco,
+   Guichard, L. Grünhaupt, N. Maleeva, F. Foroughi, F. Henriques,         C. Guarcello, D. Labranca, A. Leo, C. Ligi, G. Maccarrone,
+   K. Borisov, J. Ferrero, A. V. Ustinov, W. Wernsdorfer, N. Roch,         F. Mantegazzini, B. Margesin, G. Maruccio, C. Mauro,
+   and I. M. Pop, Phys. Rev. Appl. 13, 024015 (2020).                      R. Mezzena, A. Monteduro, A. Nucciotti, L. Oberto, L. Origo,
+23 L. Planat, A. Ranadive, R. Dassonneville, J. Puertas Martı́nez,         S. Pagano, V. Pierro, L. Piersanti, M. Rajteri, A. Rettaroli,
+   S. Léger, C. Naud, O. Buisson, W. Hasch-Guichard, D. M. Basko,         S. Rizzato, A. Vinante, and M. Zannoni, Nucl. Instrum. Meth.
+   and N. Roch, Phys. Rev. X 10, 021021 (2020).                            A 1047, 167745 (2023).
+24 V. Gaydamachenko, C. Kissling, R. Dolata, and A. B. Zorin,           36 A. Rettaroli, C. Barone, M. Borghesi, S. Capelli, G. Carapella,
+
+   Journal of Applied Physics 132, 154401 (2022).                          A. Caricato, I. Carusotto, A. Cian, D. Di Gioacchino, E. Enrico,
+25 A. Fadavi Roudsari, D. Shiri, H. Renberg Nilsson, G. Tancredi,          P. Falferi, L. Fasolo, M. Faverzani, E. Ferri, G. Filatrella,
+   A. Osman, I.-M. Svensson, M. Kudra, M. Rommel, J. Bylander,             C. Gatti, A. Giachero, D. Giubertoni, V. Granata, A. Greco,
+   V. Shumeiko, and P. Delsing, Applied Physics Letters 122,               C. Guarcello, D. Labranca, A. Leo, C. Ligi, G. Maccarrone,
+   052601 (2023).                                                          F. Mantegazzini, B. Margesin, G. Maruccio, C. Mauro,
+26 J. Y. Qiu, A. Grimsmo, K. Peng, B. Kannan, B. Lienhard,                 R. Mezzena, A. Monteduro, A. Nucciotti, L. Oberto, L. Origo,
+   Y. Sung, P. Krantz, V. Bolkhovsky, G. Calusine, D. Kim,                 S. Pagano, V. Pierro, L. Piersanti, M. Rajteri, S. Rizzato,
+   A. Melville, B. M. Niedzielski, J. Yoder, M. E. Schwartz, T. P.         A. Vinante, and M. Zannoni, Nucl. Instrum. Meth. A 1046,
+   Orlando, I. Siddiqi, S. Gustavsson, K. P. O’Brien, and W. D.            167679 (2023).
+   Oliver, Nature Physics 19, 706 (2023).                               37 L. Fasolo, F. Ahrens, G. Avallone, C. Barone, M. Borghesi,
+27 E. Rizvanov, S. Kern, P. Neilinger, and M. Grajcar, Journal of          L. Callegaro, G. Carapella, A. P. Caricato, I. Carusotto, A. Cian,
+   Applied Physics 136, 174401 (2024).                                     A. D’Elia, D. D. Gioacchino, P. Falferi, M. Faverzani, E. Ferri,
+28 A. Carbone, M. Gilli, P. Mazzetti, and L. Ponta, Journal of             G. Filatrella, C. Gatti, D. Giubertoni, V. Granata, C. Guarcello,
+   Applied Physics 108, 123916 (2010).                                     D. Labranca, A. Leo, C. Ligi, P. Livreri, G. Maccarrone,
+29 M. L. Thompson, M. Castellanos-Beltran, P. F. Hopkins, P. D.            F. Mantegazzini, B. Margesin, G. Maruccio, R. Mezzena, A. G.
+   Dresselhaus, and S. P. Benz, IEEE Transactions on Applied               Monteduro, R. Moretti, A. Nucciotti, L. Oberto, L. Origo,
+   Superconductivity 33, 1 (2023).                                         S. Pagano, A. S. Piedjou, L. Piersanti, A. Rettaroli, S. Rizzato,
+30 A. G. P. Troeman, S. H. W. van der Ploeg, E. Il’Ichev, H.-G.            S. Tocci, A. Vinante, M. Zannoni, A. Giachero, and E. Enrico,
+   Meyer, A. A. Golubov, M. Y. Kupriyanov, and H. Hilgenkamp,              IEEE Trans. Appl. Supercond. 34, 1 (2024).
+   Phys. Rev. B 77, 024509 (2008).                                      38 F. Ahrens, E. Ferri, G. Avallone, C. Barone, M. Borghesi,
+31 C. Guarcello, G. Avallone, C. Barone, M. Borghesi, S. Capelli,          L. Callegaro, G. Carapella, A. P. Caricato, I. Carusotto, A. Cian,
+   G. Carapella, A. P. Caricato, I. Carusotto, A. Cian,                    A. D’Elia, D. D. Gioacchino, E. Enrico, P. Falferi, L. Fasolo,
+   D. Di Gioacchino, E. Enrico, P. Falferi, L. Fasolo, M. Faverzani,       M. Faverzani, G. Filatrella, C. Gatti, A. Giachero, D. Giubertoni,
+   E. Ferri, G. Filatrella, C. Gatti, A. Giachero, D. Giubertoni,          V. Granata, C. Guarcello, D. Labranca, A. Leo, C. Ligi,
+   V. Granata, A. Greco, D. Labranca, A. Leo, C. Ligi,                     G. Maccarrone, F. Mantegazzini, B. Margesin, G. Maruccio,
+   G. Maccarrone, F. Mantegazzini, B. Margesin, G. Maruccio,               R. Mezzena, A. G. Monteduro, R. Moretti, A. Nucciotti,
+   C. Mauro, R. Mezzena, A. G. Monteduro, A. Nucciotti,                    L. Oberto, L. Origo, S. Pagano, A. S. Piedjou, L. Piersanti,
+   L. Oberto, L. Origo, S. Pagano, V. Pierro, L. Piersanti,                A. Rettaroli, S. Rizzato, S. Tocci, A. Vinante, and M. Zannoni,
+   M. Rajteri, A. Rettaroli, S. Rizzato, A. Vinante, and M. Zannoni,       IEEE Trans. Appl. Supercond. 34, 1 (2024).
+   IEEE Trans. Appl. Supercond. 33, 1 (2023).                           39 M. Faverzani, P. Campana, R. Carobene, M. Gobbo, F. Ahrens,
+32 C. Guarcello, F. Ahrens, G. Avallone, C. Barone, M. Borghesi,           G. Avallone, C. Barone, M. Borghesi, S. Capelli, G. Carapella,
+   L. Callegaro, G. Carapella, A. P. Caricato, I. Carusotto, A. Cian,      A. P. Caricato, L. Callegaro, I. Carusotto, A. Celotto, A. Cian,
+   A. D’Elia, D. D. Gioacchino, E. Enrico, P. Falferi, L. Fasolo,          A. D’Elia, D. Di Gioacchino, E. Enrico, P. Falferi, L. Fasolo,
+   M. Faverzani, E. Ferri, G. Filatrella, C. Gatti, A. Giachero,           E. Ferri, G. Filatrella, C. Gatti, D. Giubertoni, V. Granata,
+   D. Giubertoni, V. Granata, A. Leo, D. Labranca, C. Ligi,                C. Guarcello, A. Irace, D. Labranca, A. Leo, C. Ligi,
+   G. Maccarrone, F. Mantegazzini, B. Margesin, G. Maruccio,               G. Maccarrone, F. Mantegazzini, B. Margesin, G. Maruccio,
+   R. Mezzena, A. G. Monteduro, R. Moretti, A. Nucciotti,                  R. Mezzena, A. G. Monteduro, R. Moretti, A. Nucciotti,
+   L. Oberto, L. Origo, A. S. P. Komnang, S. Pagano, L. Piersanti,         L. Oberto, L. Origo, S. Pagano, A. S. Piedjou Komnang,
+   A. Rettaroli, S. Rizzato, S. Tocci, A. Vinante, and M. Zannoni,         L. Piersanti, A. Rettaroli, S. Rizzato, S. Tocci, A. Vinante,
+   IEEE Trans. Appl. Supercond. 34, 1 (2024).                              M. Zannoni, and A. Giachero, Journal of Low Temperature
+33 A. Giachero, C. Barone, M. Borghesi, G. Carapella, A. P.                Physics 216, 156 (2024).
+   Caricato, I. Carusotto, W. Chang, A. Cian, D. D. Gioacchino,         40 A. L. Pankratov, Applied Physics Letters 92, 082504 (2008).
+
+   E. Enrico, P. Falferi, L. Fasolo, M. Faverzani, E. Ferri,            41 A. L. Pankratov, E. V. Pankratova, V. A. Shamporov, and S. V.
+
+   G. Filatrella, C. Gatti, D. Giubertoni, A. Greco, C. Kutlu,             Shitov, Applied Physics Letters 110, 112601 (2017).
+   A. Leo, C. Ligi, G. Maccarrone, B. Margesin, G. Maruccio,            42 W. C. Stewart, Applied Physics Letters 12, 277 (1968).
+
+   A. Matlashov, C. Mauro, R. Mezzena, A. G. Monteduro,                 43 D. E. McCumber, Journal of Applied Physics 39, 3113 (1968).
+JTWPA with a 2nd harmonic CPR                                                                                                             7
+
+44 A.  Barone and G. Paternò, Physics and Applications of the            S. De Franceschi, and F. m. c. Lefloch, Phys. Rev. Res. 6, 033281
+   Josephson Effect (Wiley, New York, 1982).                              (2024).
+45 A. Piedjou Komnang, C. Guarcello, C. Barone, C. Gatti,              70 C. Ciaccia, R. Haller, A. C. C. Drachmann, T. Lindemann, M. J.
+
+   S. Pagano, V. Pierro, A. Rettaroli, and G. Filatrella, Chaos,          Manfra, C. Schrade, and C. Schönenberger, Communications
+   Solitons & Fractals 142, 110496 (2021).                                Physics 7, 41 (2024).
+46 C. Guarcello, A. S. Piedjou Komnang, C. Barone, A. Rettaroli,       71 M. Valentini, O. Sagi, L. Baghumyan, T. de Gijsel, J. Jung,
+   C. Gatti, S. Pagano, and G. Filatrella, Phys. Rev. Appl. 16,           S. Calcaterra, A. Ballabio, J. Aguilera Servin, K. Aggarwal,
+   054015 (2021).                                                         M. Janik, T. Adletzberger, R. Seoane Souto, M. Leijnse,
+47 R. Grimaudo, D. Valenti, B. Spagnolo, G. Filatrella, and
+                                                                          J. Danon, C. Schrade, E. Bakkers, D. Chrastina, G. Isella, and
+   C. Guarcello, Phys. Rev. D 105, 033007 (2022).                         G. Katsaros, Nature Communications 15, 169 (2024).
+48 P. S. Lomdahl, O. H. Soerensen, and P. L. Christiansen, Phys.       72 A. Leblanc, C. Tangchingchai, Z. S. Momtaz, E. Kiyooka, J.-M.
+   Rev. B 25, 5737 (1982).                                                Hartmann, F. Gustavo, J.-L. Thomassin, B. Brun, V. Schmitt,
+49 K. G. Fedorov, A. L. Pankratov, and B. Spagnolo, International
+                                                                          S. Zihlmann, R. Maurand, E. Dumur, S. D. Franceschi, and
+   Journal of Bifurcation and Chaos 18, 2857 (2008).                      F. Lefloch, Gate- and flux-tunable sin(2φ) josephson element
+50 C. Guarcello, P. Solinas, A. Braggio, and F. Giazotto, Scientific
+                                                                          with proximitized ge-based junctions (2024), arXiv:2405.14695
+   Reports 8, 12287 (2018).                                               [cond-mat.mes-hall].
+51 C. Guarcello, Chaos, Solitons & Fractals 153, 111531 (2021).        73 B. Zhang, Z. Li, V. Aguilar, P. Zhang, M. Pendharkar,
+52 C. Guarcello, S. Pagano, and G. Filatrella, Applied Physics
+                                                                          C. Dempsey, J. S. Lee, S. D. Harrington, S. Tan, J. S. Meyer,
+   Letters 124, 162601 (2024).                                            M. Houzet, C. J. Palmstrom, and S. M. Frolov, SciPost Phys.
+53 C. Guarcello, G. Filatrella, D. De Santis, B. Spagnolo, and
+                                                                          18, 013 (2025).
+   D. Valenti, Chaos, Solitons & Fractals 187, 115421 (2024).          74 S. Messelot, N. Aparicio, E. de Seze, E. Eyraud, J. Coraux,
+54 C. Guarcello, C. Barone, G. Carapella, V. Granata, G. Filatrella,
+                                                                          K. Watanabe, T. Taniguchi, and J. Renard, Phys. Rev. Lett.
+   A. Giachero, and S. Pagano, Chaos, Solitons Fractals 189,              133, 106001 (2024).
+   115598 (2024).                                                      75 E. Il’ichev, V. Zakosarenko, R. P. J. IJsselsteijn, H. E. Hoenig,
+55 Y. S. Barash, I. V. Bobkova, and Y. A. Krotov, Physical Review
+                                                                          H.-G. Meyer, M. V. Fistul, and P. Müller, Phys. Rev. B 59, 11502
+   B 52, 665 (1995).                                                      (1999).
+56 Y. Tanaka and S. Kashiwaya, Physical Review B 53, R11957            76 E. Il’ichev, V. Zakosarenko, R. P. J. IJsselsteijn, H. E. Hoenig,
+   (1996).                                                                V. Schultze, H.-G. Meyer, M. Grajcar, and R. Hlubina, Phys.
+57 A. Buzdin and A. E. Koshelev, Physical Review B 67, 220504(R)
+                                                                          Rev. B 60, 3096 (1999).
+   (2003).                                                             77 D. Willsch, D. Rieger, P. Winkel, M. Willsch, C. Dickel,
+58 E. Goldobin, D. Koelle, R. Kleiner, and A. Buzdin, Phys. Rev.
+                                                                          J. Krause, Y. Ando, R. Lescanne, Z. Leghtas, N. T. Bronn,
+   B 76, 224523 (2007).                                                   P. Deb, O. Lanes, Z. K. Minev, B. Dennig, S. Geisert, S. Günzler,
+59 E. Goldobin, H. Sickinger, M. Weides, H. Kohlstedt, R. Kleiner,
+                                                                          S. Ihssen, P. Paluch, T. Reisinger, R. Hanna, J. H. Bae,
+   and D. Koelle, Physical Review Letters 107, 227001 (2011).             P. Schüffelgen, D. Grützmacher, L. Buimaga-Iarinca, C. Morari,
+60 A. Pal, Z. H. Barber, J. W. A. Robinson, and M. G. Blamire,
+                                                                          W. Wernsdorfer, D. P. DiVincenzo, K. Michielsen, G. Catelani,
+   Nature Communications 5, 3340 (2014).                                  and I. M. Pop, Nature Physics 20, 815 (2024).
+61 E. Goldobin, D. Koelle, R. Kleiner, and R. G. Mints, Physical       78 H.-P. Sun,     S.-B. Zhang, C.-A. Li, and B. Trauzettel,
+   Review B 91, 214511 (2015).                                            Tunable second-order josephson response in altermagnets (2024),
+62 H. Sickinger, A. Lipman, M. Weides, H. Kohlstedt, H. Kohlstedt,
+                                                                          arXiv:2407.19413 [cond-mat.supr-con].
+   D. Koelle, R. Kleiner, and E. Goldobin, Physical Review Letters     79 N. O. Birge and N. Satchell, APL Materials 12, 041105 (2024).
+   109, 107002 (2012).                                                 80 A. A. Golubov, M. Y. Kupriyanov, and E. Il’ichev, Rev. Mod.
+63 R. Menditto, H. Sickinger, M. Weides, H. Kohlstedt, D. Koelle,
+                                                                          Phys. 76, 411 (2004).
+   R. Kleiner, and E. Goldobin, Phys. Rev. E 94, 042202 (2016).        81 V. V. Ryazanov, V. A. Oboznov, A. Y. Rusanov, A. V.
+64 M. J. A. Stoutimore, A. J. Vick, M. A. Khasawneh, P. S. Carney,
+                                                                          Veretennikov, A. A. Golubov, and J. Aarts, Phys. Rev. Lett.
+   and N. O. Birge, Physical Review Letters 121, 177702 (2018).           86, 2427 (2001).
+65 C. Baumgartner,      L. Fuchs, A. Costa, J. Picó-Cortés,          82 D. J. Van Harlingen, Rev. Mod. Phys. 67, 515 (1995).
+   S. Reinhardt, S. Gronin, G. C. Gardner, T. Lindemann, M. J.         83 J. R. Kirtley, C. C. Tsuei, and K. A. Moler, Science 285, 1373
+   Manfra, P. E. Faria Junior, D. Kochan, J. Fabian, N. Paradiso,         (1999).
+   and C. Strunk, Journal of Physics: Condensed Matter 34, 154005      84 T. Kontos, M. Aprili, J. Lesueur, and X. Grison, Phys. Rev. Lett.
+   (2022).                                                                86, 304 (2001).
+66 B. Pal, A. Chakraborty, P. K. Sivakumar, M. Davydova, A. K.         85 I. I. Soloviev, V. I. Ruzhickiy, S. V. Bakurskiy, N. V. Klenov,
+   Gopi, A. K. Pandeya, J. A. Krieger, Y. Zhang, M. Date, S. Ju,          M. Y. Kupriyanov, A. A. Golubov, O. V. Skryabina, and V. S.
+   N. Yuan, N. B. M. Schröter, L. Fu, and S. S. P. Parkin, Nature        Stolyarov, Phys. Rev. Appl. 16, 014052 (2021).
+   Physics 18, 1228 (2022).                                            86 T. Jabbari, M. Bocko, and E. G. Friedman, IEEE Transactions
+67 P. K. Sivakumar, M. T. Ahari, J.-K. Kim, Y. Wu, A. Dixit, G. J.
+                                                                          on Applied Superconductivity 33, 1 (2023).
+   de Coster, A. K. Pandeya, M. J. Gilbert, and S. S. P. Parkin,       87 Y. Takeshita, F. Li, M. Higashi, M. Tanaka, T. Yamashita, and
+   Communications Physics 7, 354 (2024).                                  A. Fujimaki, Superconductor Science and Technology 36, 045004
+68 P. Zhang, A. Zarassi, L. Jarjat, V. V. de Sande, M. Pendharkar,
+                                                                          (2023).
+   J. S. Lee, C. P. Dempsey, A. P. McFadden, S. D. Harrington,         88 From here on, both J
+                                                                                                 c1 and Jc2 are to be considered in units of
+   J. T. Dong, H. Wu, A. H. Chen, M. Hocevar, C. J. Palmstrøm,            Ic = 2 µA.
+   and S. M. Frolov, SciPost Phys. 16, 030 (2024).                     89 This value of the V ′ –standard deviation, σ ′ , is used through
+69 A. Leblanc, C. Tangchingchai, Z. S. Momtaz, E. Kiyooka,                                    PS                       VPS
+                                                                          the text as the threshold to distinguish stable from chaotic
+   J.-M. Hartmann, G. T. Fernandez-Bada, Z. Scherübl,                    responses.
+   B. Brun, V. Schmitt, S. Zihlmann, R. Maurand, E. Dumur,
+

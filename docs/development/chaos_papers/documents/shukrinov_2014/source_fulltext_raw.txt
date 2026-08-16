@@ -1,0 +1,1344 @@
+
+
+===== PAGE 1 / 13 =====
+
+
+View
+Online 
+Export
+Citation
+RESEARCH ARTICLE |  JULY 22 2014
+Structured chaos in a devil's staircase of the Josephson
+junction
+Yu. M. Shukrinov; A. E. Botha; S. Yu. Medvedeva; M. R. Kolahchi; A. Irie
+Chaos 24, 033115 (2014)
+https://doi.org/10.1063/1.4890573
+Articles You May Be Interested In
+Devil’s staircase inside shrimp-shaped regions reveals periodicity of plateau spikes and bursts
+Chaos (March 2025)
+Direct observation of a “devil’s staircase” in wave-particle interaction
+Chaos (July 2006)
+Application of the Slater criteria to localize invariant tori in Hamiltonian mappings
+Chaos (September 2022)
+ 12 August 2026 08:57:09
+
+
+===== PAGE 2 / 13 =====
+
+Structured chaos in a devil’s staircase of the Josephson junction
+Yu. M. Shukrinov,1 A. E. Botha,2,a) S. Yu. Medvedeva,1,3 M. R. Kolahchi,4 and A. Irie5
+1BLTP, JINR, Dubna, Moscow Region 141980, Russia
+2Department of Physics, University of South Africa, Science Campus, Private Bag X6, Florida Park 1710,
+South Africa
+3Moscow Institute of Physics and Technology (State University), Dolgoprudny, Moscow Region 141700,
+Russia
+4Institute for Advanced Studies in Basic Sciences, P.O. Box 45195-1159, Zanjan, Iran
+5Department of Electrical and Electronic Systems Engineering, Utsunomiya University, 7-1-2 Yoto,
+Utsunomiya 321-8585, Japan
+(Received 11 March 2014; accepted 8 July 2014; published online 22 July 2014)
+The phase dynamics of Josephson junctions (JJs) under external electromagnetic radiation is
+studied through numerical simulations. Current-voltage characteristics, Lyapunov exponents, and
+Poincare sections are analyzed in detail. It is found that the subharmonic Shapiro steps at certain
+parameters are separated by structured chaotic windows. By performing a linear regression on the
+linear part of the data, a fractal dimension of D ¼ 0.868 is obtained, with an uncertainty of 60.012.
+The chaotic regions exhibit scaling similarity, and it is shown that the devil’s staircase of the sys-
+tem can form a backbone that uniﬁes and explains the highly correlated and structured chaotic
+behavior. These features suggest a system possessing multiple complete devil’s staircases. The
+onset of chaos for subharmonic steps occurs through the Feigenbaum period doubling scenario.
+Universality in the sequence of periodic windows is also demonstrated. Finally, the inﬂuence of the
+radiation and JJ parameters on the structured chaos is investigated, and it is concluded that the
+structured chaos is a stable formation over a wide range of parameter values. V
+C
+2014
+AIP Publishing LLC. [http://dx.doi.org/10.1063/1.4890573]
+If some parameter of an oscillatory system is varied, and
+the interaction between an oscillator and its driver is
+strong enough, the oscillator can resonate at, or “lock”
+onto, an inﬁnity of driving frequencies, giving rise to
+steps (the so-called devil’s staircase) with a fractal dimen-
+sion between 0 and 1. Phase-locking is an inherent prop-
+erty of a large class of oscillatory systems in which the
+steps arise as the oscillator passes through regimes that
+are phase-locked (and not phased-locked) to the driver.
+When system is phase-locked, the ratio between the two
+frequencies is a rational number. For weak coupling, the
+phase-locked intervals are narrow, so that even if there is
+an inﬁnity of intervals, the motion is quasiperiodic for
+most driving frequencies; that is, the ratio between the
+two frequencies is more likely to be irrational. When the
+coupling increases, the phase-locked portions increase,
+and it becomes less likely that the motion is quasiperi-
+odic. This leads to a unique situation, in which it becomes
+important to ask whether a physical quantity is rational
+or irrational. In the present work, we numerically investi-
+gate a peculiar type of phase-locking that occurs in the
+oscillatory system consisting of a single Josephson junc-
+tion, driven by external microwave radiation. Over a cer-
+tain range of parameters, we observe steps belonging to a
+complete devil’s staircase (with fractal dimension close to
+0.87) which has been destroyed in a very systematic way.
+As the parameter is varied, repeated parts of the stair-
+case are destroyed and replaced by self-similar chaotic
+windows, which preserve the scaling properties of the
+original staircase.
+I. INTRODUCTION
+Nonlinear dynamical systems like the Josephson junction
+(JJ) exhibit a wide variety of chaotic phenomena and are an
+interesting ﬁeld of research for both the fundamental and
+applied sciences.1,2 Much progress has been made through nu-
+merical simulations of many important characteristics of
+chaos.3 Investigations of critical exponents in various routes
+to chaos, such as period-doubling bifurcations, intermittency,
+and quasi-periodicity lend support to the universality and scal-
+ing behavior predicted by theoretical models.4 In a Josephson
+junction driven by an external microwave radiation, the dev-
+il’s staircase structure is realized as a consequence of the
+interplay of the Josephson plasma frequency, and the applied
+frequency. (See Refs. 5 and 6 and the references therein.)
+The devil’s staircase appears in other systems, including
+the inﬁnite spin chains with long-range interactions,7 frustrated
+quasi-two-dimensional spin-dimer system in magnetic ﬁelds,8
+systems of strongly interacting Rydberg atoms,9 and in frac-
+tional quantum Hall effect.10 The synchronization of Josephson
+and Bloch oscillations results in the quantization of transresist-
+ance which also leads to a devil’s staircase structure.11 A dev-
+il’s staircase in a spin-torque nano-oscillator driven by a
+microwave ﬁeld was experimentally demonstrated in Ref. 12.
+In earlier studies of the rf-current-driven JJ, it was found
+that, depending on the amplitude of the rf current, the system
+would develop a chaotic character.13–16 It was also shown
+a)Author to whom correspondence should be addressed. Electronic mail:
+bothaae@unisa.ac.za.
+1054-1500/2014/24(3)/033115/12/$30.00
+V
+C 2014 AIP Publishing LLC
+24, 033115-1
+CHAOS 24, 033115 (2014)
+ 12 August 2026 08:57:09
+
+
+===== PAGE 3 / 13 =====
+
+that the onset of chaos as a function of frequency correlated
+with the function that indicated inﬁnite gain, also as a func-
+tion of frequency, for the unbiased parametric ampliﬁer.17
+More recently, the importance of chaos in intrinsic JJs, and
+its effects on the IV-characteristics (CVCs) and the Shapiro
+steps in these systems, was stressed in Refs. 18 and 19.
+In a further comprehensive study, the critical behavior of
+the dynamical equation, in the sense of how it goes from regu-
+lar to chaotic, was investigated.20 It was discovered that the
+critical behavior is that of the circle map. Here, in the subcriti-
+cal state, the resonances are separated by quasi-periodic orbits
+(i.e., having irrational winding number), whereas in the super-
+critical, state the dynamics is composed of chaotic jumps
+between resonances. The chaos appears to be the result of the
+resonance overlap.21 In a similar study, the interaction of the
+JJ with its surroundings was considered by coupling it in par-
+allel with an RLC circuit, modeling a resonant cavity.22 In
+this case, the chaos develops through the familiar inﬁnite
+sequence of period doubling bifurcations.
+Other studies exist that try to understand the irregular
+response of dissipative systems driven by external sources
+when such behavior is interleaved by the synchronized
+motion (Shapiro steps). This so called intermittent chaos is
+modeled by a random walk between the two neighboring
+steps that have become unstable. A simple physical model
+was proposed in Ref. 23 and used for an analytic calculation
+of the power spectrum of the intermittent-type chaos occur-
+ring in rf- and dc-current-driven JJs. It was shown that the
+power spectrum of the voltage correlations has a broadband
+background characterizing the chaotic solution. A similar
+random walk model was developed to explain the phase syn-
+chronization of chaotic rotators.24
+The microwave-induced devil’s staircase structure and
+chaotic behavior in current-fed JJs were studied experimen-
+tally and through analog simulations within the resistively
+and capacitively shunted junction (RCSJ) model in Ref. 25.
+Many externally driven dissipative systems demonstrate the
+occurrence of sequences of periodic states separated by gaps
+of a chaotic or intermittent nature.23 Different features and
+types of intermittent transitions to the chaotic state were
+investigated in Refs. 23 and 26–29. The RCSJ model was
+used to study the onset of chaotic behavior in the over-
+damped JJ, where a transition from unlocked quasiperiodic
+motion via subharmonic locked steps to the chaotic region
+occurs.5,30 In dynamical systems, intermittency is the tempo-
+ral irregular alternation of phases between apparently peri-
+odic
+and
+chaotic
+dynamics.
+Pomeau
+and
+Manneville
+described three routes to intermittency when a nearly peri-
+odic system shows irregularly spaced bursts of chaos.31–33
+These, types I, II, and III, respectively, correspond to the
+approach to a saddle-node bifurcation, a subcritical Hopf
+bifurcation, and an inverse period-doubling bifurcation.
+Type III intermittency was also observed in Ref. 29. In all
+the above mentioned types of intermittency, the width of
+each phase is unpredictable.
+We could also have other physical systems with compet-
+ing frequencies leading to the devil’s staircase structure. In a
+system with magnetic vortex oscillations, the sense of gyra-
+tion of the magnetic vortex depends on the vortex core
+polarity, and can undergo sudden reversals as a critical veloc-
+ity is reached. Driving currents can tune the self-sustained
+vortex oscillations and the frequency of the core reversals,
+resulting in phase-locked or chaotic states, within a devil’s
+staircase structure.34 In two capacitively coupled JJs, the
+phase-locked structure of the oscillations forms a devil’s stair-
+case, and chaotic dynamics develops between the main
+resonances as this coupling capacitance passes a critical
+value.35 Another realizable model that goes chaotic via the
+resonance overlap in the devil’s staircase structure, involves a
+modiﬁed Chua’s circuit.36 A more explicit dynamical mani-
+festation of a devil’s staircase has been observed in the motion
+of charged particles in two electrostatic waves.37 The interac-
+tion of the particles and waves could lead to regular or chaotic
+behavior, and the particle velocity distribution shows resonan-
+ces that lead to chaos as they overlap. There are also other
+models that involve interaction with an external potential,
+with the resonance enhancing the diffusion constant.38 While
+the ﬁrst ﬁnding of the anomalous dynamics in the JJ is due to
+Machura et al.,39 different transport properties are also pre-
+dicted in a system that is modeled by a JJ within a Langevin
+type equation.40 We will study other aspects of such a system.
+In the present paper, we demonstrate a novel type of
+chaos, which for good reasons, is called structured chaos.
+The chaotic behavior we deal with here is set against the
+devil’s staircase structure in the CVCs of an underdamped JJ
+at some parameters of the system, and in the presence of
+external radiation. The positions of the steps in the structure
+is determined by a continued fraction formula,41 so that the
+transformations of the regular behavior in the step’s current
+intervals to the chaotic ones is strongly synchronized. We
+show that in the chaotic windows, we see remnants of this
+staircase, and we present more details of this structurally
+chaotic behavior. We discuss the role of the subharmonic
+subset of steps in the staircase, in bringing about such a
+structure, and discuss ideas having to do with the presence of
+multiple staircases.51
+The paper is organized as follows. In Sec. II, we intro-
+duce the model and brieﬂy describe the simulation procedure
+and parameters of the model and simulations. The IV charac-
+teristics of the JJ under external radiation, demonstrating
+structured chaos (alternating changes of the steps and chaotic
+regions, with changing bias current), are presented. We ana-
+lyze the main features of this structure and calculate its frac-
+tal dimension. The chaotic nature of the CVC portions
+between steps is discussed; based on high-resolution calcula-
+tions of the Lyapunov exponents (LE) and the Poincare sec-
+tions, in Sec. III. In Sec. IV, we describe some unifying
+properties, particularly, the backbone features and Farey sum
+rule. The scaling features and on-step positive LE are ana-
+lyzed in Sec. V. In Sec. VI, we present the results of the
+inﬂuence of the radiation and JJ parameters on the structured
+chaos. Section VII is devoted to reviewing the existing ex-
+perimental results. Finally, Sec. VIII concludes the paper.
+II. SUBHARMONIC STEPS
+First, we discuss features in the CVCs of the JJ under
+external electromagnetic radiation. To simulate the CVCs,
+033115-2
+Shukrinov et al.
+Chaos 24, 033115 (2014)
+ 12 August 2026 08:57:09
+
+
+===== PAGE 4 / 13 =====
+
+we use the RCSJ model42,43 for the JJ driven by both ac and
+dc current sources. This model is equivalent to that for a pen-
+dulum with dissipation, and driven by an external torque
+with both constant and periodic components. The model
+equations for the phase difference u across the junction, tak-
+ing into account the external radiation with frequency x and
+amplitude A, are
+_V þ sinðuÞ þ b _u ¼ I þ A sinðxtÞ;
+(1)
+_u ¼ V:
+(2)
+Here, the dc-bias current I and ac amplitude A are normal-
+ized
+to
+the
+critical
+current
+Ic,
+the
+voltage
+V
+to
+V0 ¼ hxp=ð2eÞ, where xp is the plasma frequency, and time
+t to x1
+p . The dissipation parameter is b ¼ b1=2
+c
+, where bc is
+McCumber’s parameter. Overdot indicates derivative with
+respect to the dimensionless time t.
+To simulate the experimental conditions, we have tested
+the effect of adding white noise to the bias current, with am-
+plitude Inoise ¼ 108. The amplitude of the noise current was
+also normalized to the critical current Ic. We found that the
+features of the CVCs discussed in this paper do not depend
+on the noise in current at this amplitude. The purpose of add-
+ing noise to the simulation is not to distinguish strictly cha-
+otic behavior from noise-induced chaos, but rather to
+simulate the effect of thermal noise that would occur in a
+real experiment. In the units of the present work, the thermal
+noise is likely to be on the order of 108 or lower. The effect
+of thermal noise on chaotic behavior in the rf-biased JJ was
+studied in Refs. 16 and 44.
+To start the integration, the bias current was ﬁrst set to a
+value I > 1, using an arbitrary initial condition for the phases
+and voltages. The system was then integrated for a long time
+(103 units or more) until the junction was in a periodically
+rotating steady state, i.e., the so-called resistive state. The
+bias current was then gradually reduced by a small incre-
+ments ðDI 2 ½108; 105Þ. The initial condition at the
+reduced bias current was obtained from the last step in the
+time integration, at the previous bias current.
+In the numerical simulations for this study, we set
+b ¼ 0.3 (mostly), and Inoise ¼ 0. We make use of a fourth
+order Runge-Kutta integration scheme, using a time step of
+1/32, with 103–105 units before averaging (transient time),
+plus 104–105 units for averaging. The total simulation time is
+the sum of the transient and averaging times. The step in bias
+current ranges from 105–108. Further details concerning
+the simulation procedure can be found in Refs. 45 and 46.
+The CVCs of the JJ with dissipation parameter b < 1 are
+given by the Stewart-McCumber model that predicts the hys-
+teresis.42,43 The result of a simulation of CVCs of a JJ at
+b ¼ 0.3, and without radiation, is presented in the inset to
+Fig. 1(a). The addition of external electromagnetic radiation,
+characterized by the additional current A sinðxtÞ in Eq. (1),
+leads to the appearance of Shapiro steps and their subhar-
+monics. At high amplitude of radiation, the hysteresis disap-
+pears. The CVCs of the JJ at x ¼ 0.5 and A ¼ 0.8 are shown
+in the main part of Fig. 1(a). We see that there is no hysteresis
+in comparison with the case at A ¼ 0 or small A (see Ref. 41)
+and chaos develops within some current intervals. Figure 1(a)
+indicates that the model has the propensity for both resonance
+and chaos. For analysis of the observed Shapiro steps and
+their subharmonics, we use an algorithm proposed in Ref. 41.
+According to it, the steps in the staircase structures form con-
+tinued fractions with voltages determined by
+V ¼
+N6
+1
+n6
+1
+m6
+1
+p6…
+0
+B
+B
+@
+1
+C
+C
+A
+x;
+(3)
+where N; n; m; p; … are positive integers. Truncating Eq. (3)
+at N gives the ﬁrst-level terms of the continued fraction, cor-
+responding
+to
+the
+main
+Shapiro
+step,
+or
+harmonics.
+Similarly, truncating the formula at n gives the second-level
+terms, corresponding to subharmonic Shapiro steps, etc.
+There is a manifestation of a Shapiro step at V ¼ x ¼ 0.5
+and its harmonics at V ¼ 1, 1.5, 2, 2.5, 3, as shown in Fig.
+1(a) by arrows below the corresponding numbers. In the cha-
+otic region, we observe transitions between states related to
+FIG. 1. (a) The IV CVCs of the JJ at b ¼ 0.3, x ¼ 0.5, and A ¼ 0.8. Arrows
+with numbers indicate SS harmonics. The inset shows the CVCs without
+radiation; (b) The enlarged part of the CVCs (“Svetlana”) marked by the
+circle in (a), demonstrating the steps alternating with chaotic regions. These
+subharmonic steps are numbered according to the second level of the contin-
+ued fraction formula V ¼ ð2  ð1=nÞÞx, with n ¼ 1; 2; ….
+033115-3
+Shukrinov et al.
+Chaos 24, 033115 (2014)
+ 12 August 2026 08:57:09
+
+
+===== PAGE 5 / 13 =====
+
+the different SS harmonics, as the current varies. In particu-
+lar, very intensive transitions occur between the second,
+third, and fourth SS harmonics. The IV-curves in Fig. 1 were
+obtained by sweeping the bias current from I ¼ 0 to I ¼ 1.2
+and back to zero. Both curves (obtained by going up and
+down in current) coincide, showing no hysteresis.
+In this paper, we concentrate on that part of the CVC
+marked by circle in Fig. 1(a). An enlarged view of the
+encircled region is shown in Fig. 1(b), where a series of
+steps, in the form of ðN  ð1=nÞÞx, is observed between x
+and 2x, i.e., for N ¼ 2 and n a positive integer. We note that
+these steps approach the second Shapiro step from below.
+An interesting feature of this staircase is the structured chaos
+(alternating changes of the steps and chaotic regions, with
+changing bias current) that materializes along with it, i.e., we
+have alternating windows of resonance and chaos. We name
+this structure “Svetlana.”47 The manifestation of such type of
+structures are present in the numerical simulations of other
+authors as well, although it has not been identiﬁed explicitly
+before. Particularly, in the structure between the fourth and
+ﬁfth SS, shown in the inset to Fig. 13 of Ref. 48, we can see
+the subharmonic steps separated by chaotic parts. But in the
+present case, the Svetlana structure represents the complete
+structure between two SS (i.e., between V ¼ 0.5 and V ¼ 1).
+The steps appear at voltages x, 3x=2, 5x=3, 7x=4, etc., and
+approach the second SS harmonic at V ¼ 1. The regular step
+width (SW) and chaotic part width (CPW) of the subhar-
+monics in Svetlana are presented in Fig. 2(a). We see that
+starting from the step 5/3, the width of the chaotic part to the
+right of each step becomes larger relative to the step width,
+while both parts decrease monotonically. The total width
+(TW), i.e., SW þ CPW, is also shown in the ﬁgure, in this
+case by the square markers.
+In view of the chaos that appears in the Svetlana, it is
+interesting to ask whether or not the structure is still com-
+plete, as in the case of the devil’s staircase. In mathematical
+terminology, the staircase is complete if the set not covered
+by the steps is of measure zero. For the complete devil’s
+staircase, this corresponds to a universal fractal dimension of
+close to 0.87.5 To estimate the fractal dimension of the
+Svetlana, we followed the method described in Ref. 49. Our
+results are summarized in Fig. 2(b), where we have deter-
+mined the dimension D from the slope, as r ! 0, of a log-
+log graph of N(r) against 1/r. Here, N(r) is the minimum
+number of squares of side length r required to contain all the
+points in the geometric object. As can be seen in Fig. 2(b),
+the number of boxes increases as the box size reduces, and in
+the limit as r becomes smaller the slope of the graph
+becomes constant. By performing a linear regression on the
+linear part of the data plotted in Fig. 2(b), i.e., using only the
+six points to the right of the ﬁgure, we obtained a dimension
+of D ¼ 0.868, from the slope of the graph. Assuming
+Student’s t-distribution,50 the 95% conﬁdence interval of the
+dimension was found to be 60.012.
+An interesting phenomenological feature that can be
+used to quantify the results in Fig. 1(b) is the trend that we
+observe in the width of the steps and the chaotic intervals
+interleaving them. We ﬁnd that an equation of the same form
+as that of the Bohr atom, given by
+l ¼ l0ð1=n2  1=ðn þ 1Þ2Þ;
+(4)
+describes the widths of the aforementioned intervals well. In
+this equation, l0 is constant for the whole set of steps, and n
+is particular to a step. As we ascend the staircase, we go to
+higher n, consecutively. We ﬁnd that the formula works to a
+high accuracy, irrespective of whether we only take the
+width of the steps, or we include the width of the chaotic
+windows, as if the staircase was intact. The thick line in Fig.
+2(a) is a ﬁt of Eq. (4) to the simulation data. The curious fact
+that the data are ﬁt so well by Eq. (4) may be understood if
+we view the Bohr equation as a Pade approximant of an
+inverse cubic polynomial. Thus, it has nothing to do with
+quantum mechanics. Such a ﬁtting formula is, nevertheless,
+important for the present work because it determines the
+scaling properties of our results.
+III. STRUCTURED CHAOS
+Portions of the CVCs between neighboring steps in Fig.
+1(b) result from chaotic dynamics. Such chaotic nature is
+conﬁrmed by the calculation of the LE and Poincare section
+(PS). Figure 3(a) shows the two non-trivial LEs (thinner red
+FIG. 2. (a) The width of the steps (SW, circles), chaotic part widths (CPW,
+diamonds), and total width (TW, squares) for the Svetlana. The total width
+is the sum of SW and CPW. The solid black line is ﬁtted from a Bohr,
+hydrogen-atom-type equation; (b) Determination of the fractal dimension D
+and its uncertainty via the box counting method.49 See main text for details.
+033115-4
+Shukrinov et al.
+Chaos 24, 033115 (2014)
+ 12 August 2026 08:57:09
+
+
+===== PAGE 6 / 13 =====
+
+and blue lines) and CVC (thicker black line) as functions of
+the dc-bias current. The two LE obey the sum rule15
+k1 þ k2 ¼ b and are, therefore, mirror images of each other
+with respect to the horizontal line at 0.15 on the left hand
+scale. We see that the steps in the CVC coincide with regular
+behavior, as indicated by the negative regions of the maxi-
+mal LE (shown in red online). On the other hand, in between
+the steps, we see that the maximal LE is positive, indicating
+chaotic behavior.
+We note that PS analysis gives an effective method to
+investigate the Shapiro step subharmonics in the devil’s
+staircase, as well as the chaotic dynamics. In Fig. 3, this is
+complemented by calculation of the LEs, indicating the posi-
+tion of bifurcations (when they touch zero) and chaos (when
+they go positive). The PS provides a vivid expression of syn-
+chronization between the Josephson frequency and the exter-
+nal drive, especially for the subharmonics.
+In Fig. 3(b), we show the PS corresponding to the same
+structure as in (a). Here, the section has been made by plot-
+ting the instantaneous steady state voltage, for each bias cur-
+rent, at precisely the times when the magnitude of the
+(sinusoidal) external radiation changes from negative to pos-
+itive, i.e., a stroboscopic map, removing explicit time de-
+pendence. For each bias current, 1000 voltage points are
+plotted. We note that in the regular on-step regions, these
+voltage values coincide and form continuous curves with
+respect to the changing bias current.
+The number of PS curves within the regular regions, i.e.,
+corresponding to the steps in the CVC, coincides with the de-
+nominator of the related term in the continued fraction
+sequence. This feature reﬂects the origin of the subharmonics
+which appear at voltage steps given by xJ ¼ px=q, where p
+and q are positive integers. These steps occur when the
+Josephson frequency is such that p cycles of the phase corre-
+spond precisely to q cycles of the external radiation. For
+example, the step at V ¼ 5x/3 corresponds to the 3xJ ¼ 5x.
+Looking more closely at the bifurcation diagram, we see
+that an increase of the bias current along any particular step
+causes a series of period doubling bifurcations which do not
+alter the constant value of the average voltage on the step.
+Such on-step period doubling bifurcations have been dis-
+cussed in Ref. 3, for example.
+In general, one might expect that different initial condi-
+tions in the chaotic region might produce completely differ-
+ent CVCs. But, we have noted that this does not occur in the
+case of the Svetlana structure, which adds further impetus
+for introducing the term structured chaos, i.e., although sim-
+ulations with different steps in current DI and noise levels
+automatically lead to different initial conditions at each step,
+the Svetlana structure seen in the chaotic regions is always
+preserved.
+IV. BACKBONE FEATURES AND FAREY SUM RULE
+In this section, we discuss some unifying properties of
+the Svetlana structure; namely, the backbone features and
+Farey sum rule, and conclude with the idea that multiple dev-
+il’s staircases could be associated with each step. Although a
+similar idea was previously proposed for the case of a 1-D
+iterated map with two discontinuous regions,51 the Svetlana
+structure appears to be the ﬁrst concrete example of similar
+dynamics in a continuous system. The distinguishing feature
+of the Svetlana is structured chaos. By structured chaos, we
+mean that the Svetlana can be understood as a set of steps
+belonging to a devil’s staircase that has been destroyed, in a
+systematic way, so as to preserve the scaling properties of
+the original staircase. Here, we present heuristic arguments
+for this assertion, based on the results shown in Figs. 2–5.
+The scaling shared by the various sections of the steps,
+even the irregular parts, is shown in Fig. 2(a). The fractal
+property of the staircase is shown in Fig. 2(b). The latter
+property is a result of the synchronization between the
+Josephson frequency and the external radiation frequency,
+and it has been shown that the resulting structure seen in the
+Shapiro steps can be accurately reproduced by a continued
+fraction formula.41 The different levels of this continued
+fraction form a self-similar structure, called the devil’s stair-
+case.52 In this sense, Svetlana is what is left of a staircase
+that was to form a devil’s staircase, and yet, Svetlana keeps
+the scaling even in the irregular windows, again as seen in
+FIG. 3. (a) Lyapunov exponents (red and blue lines) and IV-CVC of the
+Svetlana structure. The regions in bias current for which the maximal LE
+(red) becomes positive correspond to regions over which the phase-locked
+steps in the underlying devil’s staircase have been replaced by chaotic dy-
+namics. (b) PS and CVC (repeated for clarity) of the Svetlana structure.
+Here, the chaotic dynamics manifests itself as regions of (apparently) ran-
+domly scattered points in the PS. Both ﬁgures were calculated at high resolu-
+tion with respect to steps in the bias current (in this case DI ¼ 107).
+033115-5
+Shukrinov et al.
+Chaos 24, 033115 (2014)
+ 12 August 2026 08:57:09
+
+
+===== PAGE 7 / 13 =====
+
+Fig. 2. This hints at an underlying structure that these appa-
+rently irregular regions have in common. Fig. 3 shows that
+these irregular variations of voltage with current refer to the
+chaotic dynamics of the system. We should note that the cha-
+otic windows do not show monotonic variations of average
+voltage with current. This is in contrast to the structure of a
+complete devil’s staircase; we will return to this aspect of
+Svetlana.
+According to Fig. 2 and Eq. (4), scaling in current can
+provide insight into the behavior of the junction, even when
+comparing the chaotic regions. We can map the chaotic win-
+dows onto each other using a linear mapping. For the pur-
+poses of the following analysis, we consider the ﬁrst ﬁve
+chaotic windows that interleave the six steps: 3/2 (for n ¼ 2),
+5/3 (for n ¼ 3), 7/4 (for n ¼ 4), 9/5 (for n ¼ 5), 11/6 (for
+n ¼ 6), and 13/7 (for n ¼ 7). For simplicity, we will refer to
+these windows as 1 through 5. We can deﬁne a correlation
+function as usual, i.e., by averaging over the product of vol-
+tages at corresponding times, at a given current, and normal-
+izing to the self-correlated values. We have
+C VIia; VIja
+
+ ¼
+Ð T
+0 VIia tð ÞVIja tð Þdt
+ﬃﬃﬃﬃﬃﬃﬃﬃﬃﬃﬃﬃﬃﬃﬃﬃﬃﬃﬃﬃﬃﬃﬃﬃﬃﬃﬃﬃﬃﬃﬃﬃﬃﬃﬃﬃﬃﬃﬃﬃﬃﬃﬃﬃﬃﬃﬃﬃﬃ
+ðÐ T
+0 V2
+IiaðtÞdtÞðÐ T
+0 V2
+IjaðtÞdtÞ
+q
+:
+(5)
+Here, Iia denotes a speciﬁc current within the ith chaotic
+region (i ¼ 1, 2, 3, 4, 5), in which each region has been di-
+vided into N equal current steps, i.e., a ¼ 1; 2; …; N.
+Equivalent currents are then deﬁned by the linear relation-
+ship
+Iia ¼ ajðIja  Ij0Þ þ Ii0,
+where
+the
+aj ¼ ðIiN 
+Ii0Þ=ðIjN  Ij0Þ are scaling factors. In this work, we chose
+N ¼ 550 and made use of Simpson’s 3/8 rule to evaluate the
+integrals over a time domain of T ¼ 2000 dimensionless
+units. We note that in calculating the correlation integrals, it
+is important to ensure that the phase of the driving force, i.e.,
+the sin ðxtÞ term in Eq. (1), is the same at the start of the
+integration (t ¼ 0) for both signals VIiaðtÞ and VIjaðtÞ. If this is
+not the case, the correlations CðVIia; VIjaÞ are practically zero,
+as one might expect.
+To bring out the scaling property of the steps and the
+chaotic regions that replace them (see Figs. 2(a) and 3), we
+compare the chaotic regions 1 through 5, in Fig. 4. In
+Fig. 4(a), we have four of the voltage pair correlation func-
+tions, using Eq. (5) for these ﬁve chaotic regions. Fig. 4(b)
+shows the voltages for the ﬁve chaotic regions on this scaled
+axis, and Fig. 4(c) shows the Lyapunov exponents.
+FIG. 4. The scaling that brings structure to the chaotic windows. This is
+manifested in (a) that shows the pair correlations (1,2), (2,3), (3,4), (4,5),
+each between the consecutive chaotic windows. Another measure for this
+correlation is given in (b), where the average voltage is given on the scaled
+current axis; (c) The Lyapunov exponent for the dynamics at the scaled cur-
+rent. Note that the current axes have all been scaled so that the chaotic
+regions for steps 1 through 5 span the same current interval as step 1.
+FIG. 5. The underlying structure of the IV staircase as characterized by the
+Farey steps, even as part of the staircase has been destroyed by chaos. As an
+example, the Farey sequence 11/7, 8/5, 13/8, can be seen between the main
+steps 3/2 and 5/3.
+033115-6
+Shukrinov et al.
+Chaos 24, 033115 (2014)
+ 12 August 2026 08:57:09
+
+
+===== PAGE 8 / 13 =====
+
+A closer look at Fig. 1(b) with the aim of revealing its
+ﬁne structure is given by Fig. 5. The widest phase-locked
+region, i.e., the widest step, between any two resonances p/q
+and P/Q is known to be given by ðp þ PÞ=ðq þ QÞ known as
+the Farey sum of the two rational numbers.49 The Farey sum
+resonance is included in the continued fraction, but at a level
+further down. The Svetlana steps are used to obtain the
+Farey steps, e.g., the sequence 5/3, 17/10, 12/7, 19/11, 7/4, is
+based on 5/3 and 7/4. In Fig. 5, we have indicated the posi-
+tions of various Farey steps that occur between the main
+steps of the Svetlana. Although the steps given by the Farey
+sum rule are much narrower than the main steps, their exis-
+tence indicates an underlying structure within the chaotic
+regions that form between the main steps.
+The similarity between the results shown in Fig. 2 of
+Ref. 51 and our Fig. 4 suggest a link between the continuous
+model of the present work and the model of a one-
+dimensional
+iterated
+map
+with
+two
+discontinuities.51
+Although it would require additional work to establish this
+link conclusively, we suspect that in the present case, there
+may also be a multiple devil’s staircase associated with each
+step, similar to those found in Ref. 51. The usual devil’s
+staircase is a monotonically increasing function, as mani-
+fested in the circle map. When discontinuities are introduced,
+this monotonicity is lost, and the phase-locked regions com-
+pose tower-like structures. That is, each step forms a plateau
+(mesa), associated with two devil’s staircases, one ascending
+and leading to it; the other descending from it, until it joins
+the ascending staircase leading to the next plateau, given by
+the next step. This non-monotonic behavior in voltage as a
+function of current, as well as the formation of steps as
+mesas, is clearly seen in Fig. 5. Another interesting feature
+of Fig. 5 is the brief presence of the various steps which are
+given by the Farey sum rule. The presence of these steps
+within the chaotic regions is also conﬁrmed by the negative
+Lyapunov exponents, and they signal the remnants of the
+complete staircase. Based on these observations, we conjec-
+ture that each chaotic interval is the result of resonance
+FIG. 6. (a) Maximal Lyapunov exponent (solid red line) and Poincare section of the phase (green dots) for bias currents corresponding to the right edge of the
+5x/3 step; (b) Poincare section of the voltage (green dots) and the average voltage (solid black line) over the same bias current range. In both ﬁgures, the sec-
+tion plane for the PS coincides with times when the sinusoidal rf-bias signal crosses from negative to positive.
+033115-7
+Shukrinov et al.
+Chaos 24, 033115 (2014)
+ 12 August 2026 08:57:09
+
+
+===== PAGE 9 / 13 =====
+
+overlap in this backbone structure. The chaos, thus, seems to
+be the result of deterministically chaotic wandering of the
+dynamics amongst the resulting Farey resonances, as they
+start to overlap. It is this chaotic wandering that appears to
+lead to, what we have termed, structured chaos in the devil’s
+staircase.
+V. CHAOS ON THE SUBHARMONIC STEPS OF THE
+SVETLANA
+Although it has previously been shown that the onset of
+chaos, on certain harmonic steps of a single rf-biased junc-
+tion, occurs through the Feigenbaum scenario,53,54 the onset
+of chaos on subharmonic steps such as those occurring in the
+Svetlana has not been investigated previously. In the present
+section, we will make use of extremely high-resolution simu-
+lation data, with respect to changes in the dc-bias current I, to
+demonstrate that the route to chaos on the subharmonic steps
+of the Svetlana also occurs via the famous Feigenbaum sce-
+nario. Furthermore, our simulations reveal another interesting
+property of the Svetlana; namely, that the subharmonic steps
+are not immediately destroyed as the chaos sets in. We dis-
+cuss this phenomenon in Subsection V C.
+A. Demonstration of Feigenbaum period doubling
+scenario
+In the rf-biased JJ, the Feigenbaum scenario was ﬁrst
+identiﬁed by Huberman et al.13 and later examined by many
+authors (See, for example, Sec. 5.6 of Ref. 3 and the referen-
+ces therein.).
+In Fig. 6, we show the behavior of the maximal LE and
+PS within a current interval corresponding to the transition
+from one of the subharmonic steps in the Svetlana to the cha-
+otic region just to the right of the same step.
+In this case, we are considering the 5x=3 step that was
+previously shown in Figs. 1(b) and 3. As the edge of the step
+is approached with increasing bias current, the transition to
+chaos occurs via a sequence of period-doubling bifurcations.
+This sequence of bifurcations is inﬁnite and, as we will show
+below, it follows Feigenbaum’s the well-known universal
+scaling laws.
+To test the scaling properties for the aforementioned
+bifurcation sequence, we make use of the high-resolution
+simulation data that is plotted in Fig. 6. For this simulation,
+we used a smaller than usual current step ðDI ¼ 108Þ to
+locate the ﬁrst seven values of the currents In at which the
+successive period-doubling bifurcation occur. The seven val-
+ues so-obtained, including the value of current at the onset of
+chaos I1, are listed in Table I. The values for In listed in
+Table I produce successive approximations that converge to
+Feigenbaum’s delta, which is deﬁned as
+d ¼ lim
+n!1
+In  In1
+Inþ1  In
+:
+(6)
+These successive approximations are listed in the third col-
+umn
+of
+Table
+I.
+The
+best
+approximation
+found
+is
+d6 ¼ 4.6713, which is very close to the exact value at that
+precision, d ¼ 4.6692.
+By measuring the maximal voltage differences dn, sepa-
+rating the bifurcated branches shown in the PS, we also
+obtained
+three
+increasingly
+accurate
+estimates
+of
+Feigenbaum’s scaling parameter a, deﬁned as
+a ¼ lim
+n!1
+dn
+dnþ1
+:
+(7)
+Successive values of dn were determined to 5 decimal places,
+as listed in the fourth column of Table I. At this level of
+uncertainty, the values of an could be determined accurately
+up to n ¼ 3, and the estimate so obtained is a3 ¼ 2.503, which
+is also very close to the universal value of a ¼ 2.5029. Thus,
+we have evidence that the onset of chaos on the subharmonic
+steps of the Svetlana occurs through Feigenbaum’s famous
+period-doubling scenario.
+B. Universality in the sequence of periodic windows
+Together with the aforementioned scaling laws for d and
+a, another universal feature of the period doubling route to
+chaos is the sequence of periodic windows that occurs once
+the chaos has set in. In Fig. 6, and in Table I, we see that the
+accumulation point for the bias currents in period doubling
+sequence occurs at I1 ¼ 0.260786. For currents higher than
+I1, the system is chaotic, except within a ﬁnite number of
+so-called periodic windows, which can be observed clearly
+in both the PS and the LE (the maximal LE becomes
+TABLE I. Calculation of the Feigenbaum numbers a and d for the onset of
+chaos on the 5x=3 subharmonic step of the JJ. Entries with three asterisks
+(***) could not be determined from the simulation data to the same uncer-
+tainty as the listed entries.
+n
+In
+dn ¼ InIn1
+Inþ1In
+dn
+an ¼
+dn
+dnþ1
+1
+0.25756981
+***
+0.20707
+2.956
+2
+0.26025001
+6.3363
+0.07004
+2.505
+3
+0.26067300
+4.7500
+0.02796
+2.503
+4
+0.26076205
+4.6943
+0.01117
+***
+5
+0.26078102
+4.6840
+***
+***
+6
+0.26078507
+4.6713
+***
+***
+7
+0.26078594
+***
+***
+***
+..
+.
+..
+.
+..
+.
+..
+.
+..
+.
+1
+0.26078606
+***
+***
+***
+TABLE II. The sequence of periodic windows occurring in the chaotic
+region shown in Fig. 6. The period T, of each window, has been normalized
+to 3s, where s ¼ 2p=x and x is the angular frequency of the external radia-
+tion. For additional details, see Sec. V B of the main text.
+Istart
+Iend
+T=(3s)
+1
+0.260797
+0.260799
+24
+2
+0.260838
+0.260841
+12
+3
+0.260936
+0.260938
+10
+4
+0.261033
+0.261054
+6
+5
+0.261136
+0.261138
+10
+6
+0.261215
+0.261217
+8
+7
+0.261479
+0.261481
+7
+8
+0.261608
+0.261614
+5
+9
+0.261843
+0.261860
+3
+033115-8
+Shukrinov et al.
+Chaos 24, 033115 (2014)
+ 12 August 2026 08:57:09
+
+
+===== PAGE 10 / 13 =====
+
+negative within each periodic window). We have found it
+convenient and more accurate to locate the periodic windows
+by looking for the regions over which the maximal LE drops
+below zero. In the present case, this method has enabled us
+to locate all the periodic windows wider than 106 bias cur-
+rent units. For each window, listed in the order of increasing
+bias current, Table II shows the value of the bias current at
+the start (column 2) and end (column 3) of the window, to-
+gether with the associated period T (column 4). Note that,
+because there are at least three branches in the PS for cur-
+rents corresponding to the regular part of this 5x=3 step (c.f.
+Figs. 3 and 6(a)), we have normalized T to three times the
+external radiation period s ¼ 2p=x.
+With this normalization, the sequence of the larger peri-
+odic windows is 6, 5, and 3, as marked by the downward
+pointing arrows in Fig. 6(a), in the order of increasing bias
+current. This sequence has also been reported in Refs. 49 and
+55, albeit at different parameter values. Because this
+sequence of the main periodic windows has also been
+observed experimentally in a wide variety of other, quite dif-
+ferent dynamical systems, it has become known as a univer-
+sal sequence (U-sequence). Note that in Table I, we have not
+listed the periods of the period-doubling cascades which
+break up the larger periodic windows that have been marked
+in Fig. 6(a). However, closer examination of these windows
+reveals that their breakup also occurs through an inﬁnite
+sequence of period doubling bifurcations, which is self-
+similar to the original sequence described above, in the sense
+that it not only obeys the Feigenbaum scaling laws but also,
+again, contains the universal sequence (6, 5, and 3 etc.) of
+periodic windows at a much ﬁner scale. These tiny periodic
+windows are of course virtually impossible to observe exper-
+imentally. Our simulation data, however, clearly predicts
+that the chaos observed on the subharmonic steps of the
+Svetlana, also contains a U-sequence of stable periodic
+orbits.
+C. On-step positive Lyapunov exponent
+An interesting feature of the chaotic region shown
+between I1 and Ie in Fig. 6, is the on-step positive Lyapunov
+exponent. By this, we are referring to the fact that the aver-
+age voltage throughout this range of bias current remains
+constant, even though the LE becomes positive, i.e., the sys-
+tem becomes chaotic. This type of behavior has also been
+observed in the numerical simulations of Kautz,3 where it
+was reported for a transition to chaos that occurs on a har-
+monic step. In the present case, we observe the same behav-
+ior on a subharmonic.
+The persistence of the average voltage step, even when
+the system trajectory becomes chaotic, can be understood by
+looking at the PS of the initial phases shown in Fig. 6(a).
+Between I1 and Ie, it is clear that the initial phases remain
+range bound, approximately between 0.19 and 0.61. On the
+other hand, for bias currents larger than and Ie, the phases
+span the full range ðp; p, i.e., they are not range bound.
+For this reason, the chaos that occurs between I1 and Ie was
+referred to by Kautz3 as phase-locked chaos. However,
+unlike the case of an harmonic step—where the phase always
+advances by approximately 2p on every rf-cycle—in the
+present case, the rf-amplitude is sufﬁciently large to cause
+reversals, so that in the present case, the phases may either
+advance or reduce by approximately 2p on every rf-cycle. If
+one interprets this behavior in terms of a particle on a wash-
+board potential, then the particle is able to advance or retreat
+by one or two wells on any given rf-cycle, which means that
+it is diffusive in nature, in spite of being phase-locked (Note
+that, as deﬁned by Kautz, the term phased-locked refers to
+the fact that phase is highly correlated (but not strictly-
+speaking locked) to the rf-cycle.). Thus, the distinction made
+between phase-locked and diffusive chaos in Ref. 3, breaks
+down in the present case and more work would be required
+to investigate the transition that occurs here, in going from
+the phased-locked region between I1 and Ie, to the diffusive
+region, for currents above Ie. For the case of an harmonic
+step without reversals, the transition occurred via a chaotic
+crisis.3
+In the present article, we will not investigate the nature
+of this transition in greater detail. It sufﬁces to note that, as
+the current is increased beyond Ie ¼ 0.262177, the 5x/3 step
+breaks up as the average voltage becomes erratic. It can be
+seen in Fig. 6(a), that the disintegration of the step is accom-
+panied by a sharp increase in the already positive LE.
+VI. DEPENDENCE OF SVETLANA ON RADIATION AND
+JJ PARAMETERS
+At a ﬁxed frequency x ¼ 0.5 and dissipation parameter
+b ¼ 0.3, the most pronounced structured chaotic formation
+(Svetlana) is observed around A ¼ 0.8. A natural question
+appears: can changes of JJ or radiation parameters lead to a
+FIG. 7. A-variation of the devil’s staircase structure Svetlana at x ¼ 0.5,
+b ¼ 0.3. (a) A ¼ 0.75, (b) A ¼ 0.8, (c) A ¼ 0.85, and (d) Enlarged part of
+structure at A ¼ 0.85, demonstrating overlapping of subharmonics.
+033115-9
+Shukrinov et al.
+Chaos 24, 033115 (2014)
+ 12 August 2026 08:57:09
+
+
+===== PAGE 11 / 13 =====
+
+devil’s staircase structure without chaotic windows? That is,
+does Svetlana appear as an intermediate structure of
+synchronized steps before transition to chaos, or does what
+we have come to term structured chaos “possess equal
+rights” in JJ dynamics under radiation, as for other types of
+devil’s staircase formations?
+To answer this question, we discuss here the variation of
+the Svetlana with changes in the amplitude of radiation. The
+structures at three values of the amplitude, A ¼ 0.75, 0.8,
+0.85 are presented in Fig. 7. As we have seen in Fig. 1(b),
+the main SS harmonics at V ¼ 0.5 is not stable at the chosen
+JJ and radiation parameters, so we analyze the features
+between the subharmonic 3x=2 and the second SS at
+V ¼ 2x. The known fact is that, with an increase in ampli-
+tude of external radiation, the width of Shapiro harmonics
+changes, following the Bessel function dependence.1,56
+Analysis shows (and it is clear from Fig. 7) that with an
+increase in A, the position of the onset of the second SS har-
+monic at V ¼ 2x is shifting more in comparison to the shift-
+ing of the ﬁrst SS harmonic at V ¼ x. That is, the current
+interval between the beginning of the second SS harmonics
+and the end of the ﬁrst one is reduced at A ¼ 0.8 in compari-
+son to A ¼ 0.75 and increased in comparison to A ¼ 0.85.
+These changes are consistent with the expected Bessel func-
+tion dependence.
+First, we consider the effect of decreasing the radiation
+amplitude by comparing the two structures at A ¼ 0.75 and
+A ¼ 0.80, as shown in Figs. 7(a) and 7(b). We see that the
+decrease in A, from A ¼ 0.80 to A ¼ 0.75, shifts the devil’s
+staircase structure to the right side of the considered current
+interval. The overall structure is stretched, while the widths
+of the steps are decreased, i.e., the widths of the chaotic win-
+dows increased as A decreased from A ¼ 0.80 to A ¼ 0.75.
+This trend continues with a further decrease in the amplitude
+of radiation (not shown here), eventually leading to the dis-
+appearance of the Svetlana structure. Thus, we do not
+observe the structure without chaotic windows. As A is
+reduced, we note the appearance of an additional step
+between 5x=3 and 7x=4, marked by a circle in Fig. 7(a).
+This additional step belongs to the third continued fraction
+level, determined by V ¼ ðN 6 1=ðn 6 1=mÞÞx with N ¼ 2,
+n ¼ 3, and m ¼ 3. It is the 13x=8 step, with the correspond-
+ing value of voltage being 0.8125. This ﬁnding is in agree-
+ment with our hypothesis about the role of the backbone in
+the Svetlana (see Chapter IV).
+Second, we consider the effect of increasing the ampli-
+tude of radiation by comparing the structures at A ¼ 0.8 and
+A ¼ 0.85 as presented in Figs. 7(b) and 7(c). There is a shift
+of the devil’s staircase structure to the left side of considered
+current interval, and then there is a decrease in the width of
+the SS subharmonics. The current interval between the be-
+ginning of the second SS harmonics and the end of the ﬁrst
+one is reduced at A ¼ 0.85 in comparison to A ¼ 0.8. This
+shrinking of the devil’s staircase structure has the same ex-
+planation as the stretching at A ¼ 0.75. We note also the
+appearance of the 3x=2-subharmonics in the current interval
+between 5x=3 and 7x=4 subharmonics in Fig. 7(c) and the
+appearance of the 5x=3 subharmonics in the current interval
+between 7x=4 and 9x=5 subharmonics. The corresponding
+part of the CVC is enlarged in Fig. 7(d). These facts demon-
+strate an overlapping mechanism of the transition of
+synchronized steps to the chaotic state. With further increase
+in A, the chaotic regions are expanded, and devil’s staircase
+structure disappears. So, an increase in the amplitude of radi-
+ation leads to a decrease in the subharmonic widths and a rel-
+ative increase in the chaotic regions.
+The chaotic parts of Svetlana can be essentially modiﬁed
+by changing of JJ parameters. Figure 8 presents the devil’s
+staircase structure in Svetlana at the same radiation parame-
+ters x ¼ 0.5 and A ¼ 0.8, but at a different dissipation param-
+eter b ¼ 0.4. We see that the character of chaotic regions is
+changed, but it still demonstrates regular variation of the
+steps and chaos. We have also observed here the additional
+step 4/3 (taken in the brackets in ﬁgure) which belongs to
+another continued fraction. The inset enlarges the part of the
+structure marked by circle. We see clearly the similar charac-
+ter of the chaotic parts for higher steps.
+Thus, the answer to the question stated at the beginning
+of this section is positive: based on our results, we note that
+the structured chaos is a stable formation over deﬁnite inter-
+vals of A. Analogous results are obtained by changing the
+frequency of radiation x.
+VII. REVIEWING THE EXPERIMENTAL RESULTS
+Let us now brieﬂy discuss the existing experimental
+results. The experimental survey of chaos in the Josephson
+effect was presented in Ref. 48. The authors analyzed the range
+of chaotic behavior in tin tunnel junctions and indium micro-
+bridges subjected to dc and rf bias. An important fact found by
+this detailed analysis was a statement that the experimental
+results agree with simulations based on the RCSJ model and
+theoretical predictions. This fact stresses the necessity for fur-
+ther numerical investigations within the RCSJ model.
+One of the interesting features of the CVCs under exter-
+nal electromagnetic radiation is a fragmentation of Shapiro
+steps and their subharmonics. Such fragmentation was dem-
+onstrated in the numerical results of Kautz and Monaco.15
+Experimental evidence of the fragmented CVCs, particu-
+larly, strongly distorted steps and “wiggles,” which are
+FIG. 8. The devil’s staircase structure at x ¼ 0.5, A ¼ 0.8, and b ¼ 0.4. Inset
+enlarges the part of the structure marked by circle.
+033115-10
+Shukrinov et al.
+Chaos 24, 033115 (2014)
+ 12 August 2026 08:57:09
+
+
+===== PAGE 12 / 13 =====
+
+preceded by subharmonic voltage steps for lower rf powers
+in Pb/ox/PbIn tunnel junctions and in Pb microbridges irradi-
+ated by 70-GHz microwaves were reported in Ref. 57.
+The results of the experimental observation of a devil’s
+staircase on a microwave irradiated JJ prepared from the
+bulk polycrystalline magnetic superconductor GdMo6Se8
+were presented in Ref. 58. Measurements were made at a
+temperature of 1.3 K, under external radiation at 9.5 GHz.
+The authors considered that the possible reason for the
+appearance of the DS was an overlapping of the steps. We
+note that the detailed experimental investigation of the frag-
+mented phases at different conditions and parameters of JJ is
+still lacking. The fragmentation of SS was also observed in
+our simulations at amplitude A < 0.8. An increase in ampli-
+tude leads to the overlapping of the SS and destroys them. It
+can be seen in Fig. 1 for SS with n < 4. Results will be dis-
+cussed in detail, elsewhere.
+Noise rise and negative differential resistance regions in
+a self-resonant circuit consisting of an inductively and resis-
+tively shunted Nb/ox/PbIn tunnel junction were observed by
+Miracky et al.59 Gubankov et al.60,61 investigated the fre-
+quency range of chaotic behavior in Nb/ox/PbBi tunnel junc-
+tions. Their results are in agreement with the simulations
+based on RCSJ model.48 The distorted CVCs and a strong
+noise rise in the distorted regions, which was ascribed to cha-
+otic noise were found in Ref. 63. Reports on measurements
+of dc electron transport and microwave dynamics of thin
+ﬁlm hybrid Nb/Au/CaSrCuO/YBaCuO planar Josephson
+junctions were presented in Ref. 62. The authors observed
+tunnel-like behavior, and oscillations in sync with the
+applied radiation at integer and half-integer steps. For a junc-
+tion fabricated with a c-oriented yttrium barium copper oxide
+(YBCO) ﬁlm, the devil’s staircase structure was observed
+under microwave irradiation at 4.26 GHz.
+In Refs. 64–66, the authors provide further conﬁrmation
+for the existence of chaotic regions in the intermediate- and
+high-McCumber parameter regime. In experiments with
+short Indium microbridges, the devil’s staircase transition to
+chaos was observed. Such data can also be evaluated within
+the framework of the RCSJ model.48
+Based on the analysis of the experimental investigations
+of the chaos in the JJ, we note that at present, the experimen-
+tal observation of structured chaos in the CVCs under exter-
+nal electromagnetic radiation (Svetlana structure) is absent.
+Since our results on numerical simulations of Svetlana were
+obtained by the RCSJ model, it would be very interesting to
+test the formation of the Svetlana structure and its features
+experimentally.
+VIII. CONCLUSION
+We have performed high-resolution numerical simula-
+tions of the Josephson junction under external microwave
+radiation,
+within
+the
+well-established
+RCSJ
+(Stewart-
+McCumber) model. Our simulations have indicated the pres-
+ence of an unusual structure, that occurs within the
+IV-characteristics of the junction. By analyzing the IV-
+characteristics, Lyapunov exponents, and Poincare sections,
+we have identiﬁed a region of experimentally realizable
+parameters for which the subharmonic Shapiro steps are sep-
+arated by structured chaotic windows. We have called this
+formation, Svetlana.
+Interestingly, the dynamics of the system, which follows
+a deterministic path and exhibits synchronization with the
+external drive in the form of constant voltage subharmonic
+steps (Shapiro steps), can be disrupted while a trace of the
+underlying staircase remains. Since the low rationals in the
+subharmonic set are more stable and live longer, we obtain a
+well structured chaos as the steps become interleaved with
+chaotic windows. There is, thus, a gradual disappearance of
+order, as well as resonance overlap. The argument implicitly
+requires a subharmonic region of the staircase.
+An alternative way of looking at this phenomenon is in
+terms of equivalent lower-dimensional chaotic maps that are
+interrupted by the ordered dynamics. Such ideas have been
+conjectured and explored previously.51 Here, we have shown
+that the multiple devil’s staircase property is effectively repro-
+duced by a continuous, differentiable map. We have further-
+more identiﬁed the diffusive chaotic mode as playing a role
+similar to the discontinuity in the map.67 In fact, the diffusive
+chaos contains an indication of such a discontinuity.
+Analysis of the experimental results on chaos in JJ under
+external radiation has indicated that a whole series of impor-
+tant results obtained by numerical calculations are still open
+for experimental investigations. If experimentally conﬁrmed,
+the results obtained in the present paper could, for example,
+be applied to topological superconductivity, a ﬁeld which is
+currently being investigated intensively.68,69 They support
+Majorana fermions which are expected to be used for realiza-
+tion of quantum gates that are topologically protected from
+local sources of decoherence. The authors of Ref. 70 report
+the observation of the fractional a.c. Josephson effect in a
+semiconductor-superconductor nanowire junction as a signa-
+ture of Majorana quasiparticles. The use of subharmonics for
+the detection of the Majorana fermions is a very interesting
+but unsolved problem. Its solution may provide additional in-
+formation on the Majorana physics and may warrant special
+consideration in a more detailed investigation.
+Finally, we have also demonstrated universality within
+the diffusively chaotic windows. Such universality is an
+underlying feature of the chaotic windows, which, while
+being contained within the staircase itself, are effectively
+being “washed” out. We ﬁnd this aspect of the work most
+interesting because it shows some sort of predictability, even
+though we have chaotic dynamics: as if the ghost of the stair-
+case lives on!
+ACKNOWLEDGMENTS
+Yu.M.S. thanks I. Rahmonov, M. Yu. Kupriyanov, K.
+Y. Constantinian, G. A. Ovsyannikov, and V. P. Koshelets
+for helpful discussions and D. V. Kamanin and the JINR-SA
+agreement for the support of this work. He also appreciates
+kind hospitality of Professor Y. Takayama and Professor N.
+Suzuki from Utsunomiya university where part of this work
+was done. Yu.M.S. and M.R.K. wish to thank the Physics
+Department at the University of South Africa for a pleasant
+stay.
+033115-11
+Shukrinov et al.
+Chaos 24, 033115 (2014)
+ 12 August 2026 08:57:09
+
+
+===== PAGE 13 / 13 =====
+
+1W.
+Buckel and R. Kleiner, Superconductivity: Fundamentals and
+Applications (Wiley-VCH, Weinheim, 2004).
+2K. K. Likharev, Dynamics of Josephson Junctions and Circuits (Gordon
+and Breach, Philadelphia, 1986).
+3R. L. Kautz, Rep. Prog. Phys. 59, 935 (1996).
+4D.-R. He, W. J. Yeh, and Y. H. Kao, Phys. Rev. B 31, 1359 (1985).
+5M. H. Jensen, P. Bak, and T. Bohr, Phys. Rev. Lett. 50, 1637 (1983).
+6I. Goldhirsch, Y. Imry, G. Wasserman, and E. Ben-Jacob, Phys. Rev. B
+29, 1218 (1984).
+7V. Nebendahl and W. D€ur, Phys. Rev. B 87, 075413 (2013).
+8M. Takigawa et al., Phys. Rev. Lett. 110, 067210 (2013).
+9H. Weimer and H. P. B€uchler, Phys. Rev. Lett. 105, 230403 (2010).
+10R. B. Laughlin et al., Phys. Rev. B 32, 1311 (1985).
+11A. M. Hriscu and Yu. V. Nazarov, Phys. Rev. Lett. 110, 097002 (2013).
+12S. Urazhdin et al., Phys. Rev. Lett. 105, 104101 (2010).
+13B. A. Huberman, J. P. Crutchﬁeld, and N. H. Packard, Appl. Phys. Lett.
+37, 750 (1980).
+14R. L. Kautz, J. Appl. Phys. 52, 6241 (1981).
+15R. L. Kautz and R. Monaco, J. Appl. Phys. 57, 875 (1985).
+16R. L. Kautz, J. Appl. Phys. 58, 424 (1985).
+17N. F. Pedersen and A. Davidson, Appl. Phys. Lett. 39, 830 (1981).
+18A. Irie, Y. Kurosu, and G. Oya, IEEE Trans. Appl. Supercond. 13, 908
+(2003).
+19J. Scherbel et al., Phys. Rev. B 70, 104507 (2004).
+20T. Bohr, P. Bak, and M. H. Jensen, Phys. Rev. A 30, 1970 (1984).
+21M. H. Jensen, P. Bak, and T. Bohr, Phys. Rev. A 30, 1960 (1984).
+22P. H. Borcherds and G. P. McCauley, J. Phys. C 20, 261 (1987).
+23E. Ben-Jacob, Y. Braiman, R. Shainsky, and Y. Imry, Phys. Rev. Lett. 49,
+1599 (1982).
+24G. V. Osipov, A. S. Pikovsky, and J. Kurths, Phys. Rev. Lett. 88, 054102
+(2002).
+25E. Ben-Jacob, Y. Braiman, R. Shainsky, and Y. Imry, Appl. Phys. Lett. 38,
+822 (1981).
+26W. J. Yeh and Y. H. Kao, Phys. Rev. Lett. 49, 1888 (1982).
+27H. Seifert, Phys. Lett. A 101, 230 (1984).
+28H. Seifert and C. Noeldeke, in Proceedings of the 17th International
+Conference on Low Temperature Physics, edited by U. Eckern, A.
+Schmid, W. Webern, and H. Wiihl, (North-Holland, Amsterdam, 1984), p.
+1135.
+29C. Noeldeke and H. Seifert, Phys. Lett. A 109, 401 (1985).
+30H. Seifert, Phys. Lett. A 98, 213 (1983).
+31P. Manneville and Y. Pomeau, Phys. Lett. A 75, 1 (1979).
+32P. Manneville and Y. Pomeau, Physica D 1, 219 (1980).
+33Y. Pomeau and P. Manneville, Commun. Math. Phys. 74, 189 (1980).
+34S. Petit-Watelot et al., Nat. Phys. 8, 682 (2012).
+35T. P. Valkering, C. L. A. Hooijer, and M. F. Kroon, Physica D 135, 137 (2000).
+36S. Furui and T. Takano, “Strange Attractors of Memristor and Devil’s
+Staircase Route to Chaos,” e-print arXiv:1312.3001v2[nlin.CD].
+37A. Macor, F. Doveil, and Y. Elskens, Phys. Rev. Lett. 95, 264102 (2005).
+38P. Reimann et al., Phys. Rev. E 65, 031104 (2002).
+39L. Machura et al., Phys. Rev. Lett. 98, 040601 (2007).
+40D. Speer, R. Eichhorn, and P. Reimann, Phys. Rev. E 76, 051110 (2007).
+41Yu. M. Shukrinov, S. Yu. Medvedeva, A. E. Botha, M. R. Kolahchi, and
+A. Irie, Phys. Rev. B 88, 214515 (2013).
+42W. C. Stewart, Appl. Phys. Lett. 12, 277 (1968).
+43D. E. McCumber, J. Appl. Phys. 39, 3113 (1968).
+44Yu. M. Shukrinov and F. Mahfouzi, Supercond. Sci. Technol. 20, S38 (2007).
+45Yu. M. Shukrinov and M. A. Gaafar, Phys. Rev. B 84, 094514 (2011).
+46Yu. M. Shukrinov, M. Hamdipour, M. R. Kolahchi, A. E. Botha, and M.
+Suzuki, Phys. Lett. A 376, 3609 (2012).
+47This is the ﬁrst name of the third author, who ﬁrst found it in her numerical
+simulations.
+48C. Noeldeke, R. Gross, M. Bauer, G. Reiner, and H. Seifert, J. Low Temp.
+Phys. 64, 235 (1986).
+49R. C. Hilborn, Chaos and Nonlinear Dynamics: An Introduction, 2nd ed.
+(Oxford University Press, New York, 2000).
+50B. R. Martin, Statistics for Physical Science: An Introduction, 1st ed.
+(Academic Press, Waltham, MA, 2012).
+51S.-X. Qu, S. Wu, and D.-R. He, Phys. Rev. E 57, 402 (1998).
+52P. Bak, Phys. Today 39(12), 38 (1986).
+53M. J. Feigenbaum, J. Stat. Phys. 21, 669 (1979).
+54M. J. Feigenbaum, Los Alamos Sci. 1, 4 (1980).
+55M. Gitterman, The Chaotic Pendulum (Wold Scientiﬁc, Singapore, 2010).
+56A. Barone and G. Paterno, Physics and Applications of the Josephson
+Effect (John Wiley and Sons, New York, 1982).
+57K. Okuyama, H. J. Hartfuss, and K. H. Gundlach, J. Low Temp. Phys. 44,
+283 (1981).
+58J. Kuznik and K. Rogacki, Phys. Lett. A 176, 144 (1993).
+59R. F. Miracky, J. Clarke, and R. H. Koch, Phys. Rev. Lett. 50, 856
+(1983).
+60V. N. Gubankov, K. I. Konstantinyan, V. P. Koshelets, and G. A.
+Ovsyannikov, IEEE Trans. Magn. 19, 637 (1983).
+61V. N. Gubankov, S. L. Ziglin, K. I. Konstantinyan, V. P. Koshelets, and
+G. A. Ovsyannikov, Zh. Eksp. Teor. Fiz. 86, 3453 (1984) [Sov. Phys.
+JETP 59, 198 (1984)].
+62K. Y. Constantinian et al., J. Phys.: Conf. Ser. 234, 042004 (2010).
+63M. Octavio and C. R. Nasser, Phys. Rev. B 30, 1586 (1984).
+64C. Vanneste, C. C. Chi, and D. C. Cronemeyer, Phys. Rev. B 32, 4796
+(1985).
+65M. Iansiti, Q. Hu, R. M. Westerﬁeld, and M. Tinkham, Phys. Rev. Lett.
+55, 746 (1985).
+66D. C. Cronemeyer, C. C. Chi, A. Davidson, and N. F. Pedersen, Phys. Rev.
+B 31, 2667 (1985).
+67M. Bauer, S. Habip, D. R. He, and W. Martienssen, Phys. Rev. Lett. 68,
+1625 (1992).
+68R. M. Lutchyn, J. D. Sau, and S. D. Sarma, Phys. Rev. Lett. 105, 077001
+(2010).
+69J. Alicea, Y. Oreg, G. Refael, F. von Oppen, and M. P. A. Fisher, Nat.
+Phys. 7, 412 (2011).
+70L. P. Rokhinson, X. Liu, and J. K. Furdyna, Nat. Phys. 8, 795 (2012).
+033115-12
+Shukrinov et al.
+Chaos 24, 033115 (2014)
+ 12 August 2026 08:57:09

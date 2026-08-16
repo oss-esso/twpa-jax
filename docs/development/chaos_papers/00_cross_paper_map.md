@@ -1,0 +1,11 @@
+# Cross-paper map: how the eight sources fit together
+
+This corpus deliberately separates three layers of the same technical problem.
+
+**Single-junction nonlinear dynamics and bifurcations.** Levinsen (1982) connects subharmonic generation, spontaneous symmetry breaking, period-doubling cascades and Josephson parametric amplification. Wiesenfeld & McNamara (1986) supplies the general Floquet/bifurcation small-signal theory: gain grows near a loss of stability, with the resonant small-signal frequency fixed by the bifurcation type. Shukrinov et al. (2014) provides a modern numerical protocol for a driven RCSJ junction and shows in detail how subharmonic Shapiro steps, Poincare sections, Lyapunov exponents, Feigenbaum scaling and structured chaotic windows appear.
+
+**Many-mode JTWPA physics.** Dixon et al. (2019) and Dixon's 2022 thesis show that a full Josephson transmission line generates pump harmonics and cascaded sum/difference products that conventional pump/signal/idler CMEs omit. The unrestricted WRspice spectrum is the reference; successively extended CMEs converge toward it. The thesis adds the experimental observations, solver validation chain, and quasi-phase-matching/poling mitigation.
+
+**Full time-domain JTWPA stability with non-sinusoidal CPR.** Guarcello et al. (2024) gives the 990-cell implicit finite-difference/tridiagonal solver in enough detail to implement it, then classifies periodic versus chaotic states with Fourier and Poincare analysis. Guarcello et al. (2025) changes the CPR to a normalized first-plus-second-harmonic form and maps the gain/stability trade-off, including a high-gain region near a negative second harmonic. The 2026 paper adds resonant phase matching in LTspice and shows that RPM can raise gain for sinusoidal and non-sinusoidal CPRs, while non-sinusoidal cases can generate a denser spur spectrum.
+
+For reproduction work, the most useful path through the corpus is: **single RCSJ dynamics -> 990-cell time-domain solver -> unrestricted many-mode spectra -> stability classification -> phase-matching/CPR modifications**. The full text and equation/figure indices make it possible to audit every intermediate step against the supplied PDFs.

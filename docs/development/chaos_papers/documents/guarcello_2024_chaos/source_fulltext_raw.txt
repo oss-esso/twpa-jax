@@ -1,0 +1,2941 @@
+
+
+===== PAGE 1 / 18 =====
+
+Driving a Josephson Traveling Wave Parametric Amplifier into chaos: effects of a
+non–sinusoidal current–phase relation
+Claudio Guarcello
+,1, 2, ∗Carlo Barone
+,1, 2, † Giovanni Carapella
+,1, 2, ‡ Veronica
+Granata
+,1, 2, § Giovanni Filatrella
+,3, ¶ Andrea Giachero
+,4, 5, 6, ∗∗and Sergio Pagano
+1, 2, ††
+1Dipartimento di Fisica “E.R. Caianiello”, Università di Salerno,
+Via Giovanni Paolo II, 132, I-84084 Fisciano (SA), Italy
+2INFN, Sezione di Napoli Gruppo Collegato di Salerno,
+Complesso Universitario di Monte S. Angelo, I-80126 Napoli, Italy
+3Science and Technology Department, University of Sannio, Benevento, Italy
+4Department of Physics, University of Milano Bicocca, Piazza della Scienza, I-20126 Milano, Italy
+5INFN—Milano Bicocca, Piazza della Scienza, I-20126 Milano, Italy
+6Bicocca Quantum Technologies (BiQuTe) Centre, Piazza della Scienza, I-20126 Milano, Italy
+(Dated: October 11, 2024)
+We tackled the numerical analysis of the dynamic response of a Josephson Traveling Wave Para-
+metric Amplifier (JTWPA) by varying the driving parameters, with a focus on the pathways leading
+to chaotic behavior. By tuning the working conditions, we explore the broad spectrum of dynamical
+regimes accessible to JTWPAs, delineating the conditions under which transition to chaos occurs.
+Furthermore, we extend our investigation to junctions characterized by a non–sinusoidal current
+phase relation (CPR) and explore the consequences on the amplifier’s performance. Through the
+study of gain characteristics, Poincaré sections, and Fourier spectra, we provide an in-depth un-
+derstanding of how CPR nonlinearity and nonsinusoidality influence the operational effectiveness
+and stability of JTWPAs. This investigation offers insights into optimizing the device for enhanced
+performance and robustness against chaotic disruptions, in order to establish a framework for pre-
+dicting and controlling JTWPA behavior in practical applications. In fact, we identify the regions
+in the parameter space where the input signal is maximally amplified without excessive noise or un-
+desired harmonics. This effort paves the way for the development of devices with tailored dynamic
+responses and for advancements in quantum computing and precision measurement technologies,
+where stability and high fidelity are of paramount importance.
+I.
+INTRODUCTION
+Amplifying weak microwave signals is crucial across
+numerous applications, including readouts for super-
+conducting qubits, quantum devices, and radio astron-
+omy [1]. Leading low–noise amplifiers in the microwave
+domain approach the quantum limited noise performance
+by operating at mK temperatures and parametric pump-
+ing of nonlinear circuits is achieved with Josephson junc-
+tions (JJs) or high–kinetic–inductance components [2].
+While nonlinear resonator–based parametric amplifiers
+typically have bandwidths in the tens of MHz range,
+constrained by gain and resonator linewidth, traveling-
+wave parametric amplifiers (TWPAs) offer much broader
+bandwidths, reaching several GHz [3–5].
+TWPAs’ in-
+creased bandwidth enables extensive frequency multi-
+plexing, particularly beneficial for qubit readouts and
+single-photon detectors [6].
+Efficiently using hardware
+resources through multiplexed approaches is crucial for
+large quantum devices.
+Challenges in TWPAs include
+∗cguarcello@unisa.it
+† cbarone@unisa.it
+‡ gcarapella@unisa.it
+§ vgranata@unisa.it
+¶ filatr@unisannio.it
+∗∗andrea.giachero@unimib.it
+†† spagano@unisa.it
+material losses and the generation of signal sidebands,
+identified as primary sources of excess noise beyond the
+quantum limit. In addition to minimizing noise at the
+signal frequency, broadband amplifiers must avoid gen-
+erating spurious tones due to intermodulation of inputs,
+especially in frequency-multiplexed scenarios.
+Presently,
+superconducting
+TWPAs
+employ
+two
+sources of nonlinearity. Firstly, through the inherent dis-
+tributed nonlinear kinetic inductance found in supercon-
+ductors [7–11].
+Alternatively, one can incorporate JJs
+into the transmission line, thus introducing a nonlinear
+inductance element, obtaining the so-called Josephson
+TWPAs (JTWPAs) [5, 12–16]. In this study, we focus
+on JTWPAs, using the specific device details from the
+DARTWARS INFN collaboration framework [6, 17–23]
+as our baseline. In particular, we use the specifications
+given in Ref. [6] to theoretically explore the response
+of this device to the simultaneous application of pump
+and signal excitations. Our aim is to scan the parameter
+space to optimize experimental conditions that maximize
+the gain, calculated as the amplification of the output sig-
+nal at the frequency of the input signal tone. To do so,
+it is essential to avoid the noise contribution from the
+chaotic states. In fact, the pump tone and the bias cur-
+rent flowing through the system can exceed the thresh-
+old parameter values above which the system enters a
+regime of chaotic response, which is practically useless
+for the amplification applications we are interested in.
+arXiv:2406.01185v2  [cond-mat.supr-con]  10 Oct 2024
+
+
+===== PAGE 2 / 18 =====
+
+2
+FIG. 1. Outline of the JTWPA electrical circuit: the bottom part contains the input, cyan shaded, and output, green shaded,
+cells, encompassing the pump and signal tones, Vpump and Vsign, respectively, the input and load resistances and capacitances,
+denoted as Ri, Ci, Rℓ, and Cℓ. The output voltage is measured across the load resistor. The top part highlights, within a
+shaded yellow box, an in–depth looking at a cell of the series of N = 990 elements of the device.
+In this way, we can define the system parameter ranges
+that maximise the gain provided by JTWPA without in-
+curring detrimental effects. Fourier transform (FT) and
+Poincaré section (PS) analysis are our primary investiga-
+tive tools to unravel the transitions to chaos. This choice
+is very effective in capturing dynamic spectral proper-
+ties and the geometrical structure of phase space, respec-
+tively. While alternative methods, like the study of Lya-
+punov exponents, can offer insights into JJ stability and
+chaotic behavior [24–27], FT and PSs provide a quite
+intuitive understanding of the complex interactions and
+transitions in JTWPAs.
+The paper is organized as follow. In Sec. II, we intro-
+duce the theoretical approach used to model the behavior
+of the JTWPA, and the values we set for the system pa-
+rameters. In Sec. III, we present the analysis as a func-
+tion of the pump intensity, signal frequency, and bias
+current. In Sec. V, we show how the transparency of the
+junction, i.e., the skewness of the current-phase relation
+(CPR), impacts on the device performances. In Sec. VI,
+conclusions are drawn.
+II.
+MODEL
+We deal with the behavior of the JTWPA sketched
+in Fig. 1 [28, 29]: the parameters for the system, dis-
+cussed herein, are derived in Ref. 6. The yellow-shaded
+part of Fig. 1 focus on the n−th cell of the 990 cells of
+the JTWPA, each of which incorporates an rf–SQUID,
+made by a JJ in parallel with a geometric inductance
+Lg,n = 120 pH, and a capacitance Cg,n = 24 fF. The in-
+put cell (highlighted in blue in Fig. 1) includes a pump
+and signal voltage source, denoted as Vpump and Vsign,
+along with an input resistance and capacitance Ri = 50 Ω
+and Ci = 24 fF, respectively.
+The output cell (high-
+lighted in green in Fig. 1) is supplied with a load re-
+sistance and capacitance, Rℓ= 50 Ωand Cℓ= 1 nF, re-
+spectively.
+Details of the numerical model that we employed are
+given in App. A. Within the framework of the Resistively
+and Capacitively Shunted Junction (RCSJ) model [30],
+the Josephson current through the n-th junction can be
+written as
+IJ,n = CJ
+ℏ
+2e
+d2φn
+dt2
++ 1
+RJ
+ℏ
+2e
+dφn
+dt + Ic sin(φn).
+(1)
+Here, we assume that each JJ has a critical current
+Ic = 2 µA, a quasiparticle resistance RJ = 20 kΩ, and
+a capacitance CJ = 200 fF, thus yielding a plasma oscil-
+lation frequency νp = 27.7 GHz. The phase dependence
+of the Josephson current is firstly taken sinusoidal, i.e.,
+I(φ) = Ic sin(φ); then, in Sec. V, this assumption will be
+relaxed where a transparency–dependent non–sinusoidal
+CPR is considered. From the second Josephson equation,
+V =
+ℏ
+2e
+dφ
+dt , one obtains a current-voltage profile charac-
+teristic for a nonlinear inductor, V = LJ0(φ)dI/dt, where
+LJ0(φ) = ℏ
+2e
+1
+Ic cos(φ)
+(2)
+denotes the intrinsic Josephson inductance. Considering
+a non-zero DC bias current, Ibias, the effective Josephson
+inductance adjusts to LJ(φ) = LJ0(φ)
+r
+1 −
+
+Ibias
+Ic
+2
+.
+Thus, the bias current serves to regulate the Joseph-
+son inductance, enhancing it as Ibias enlarges, until it
+diverges as it approaches Ic.
+The role of the current–
+dependent Josephson inductance is crucial in the process
+of parametric mixing and amplification, in which a high
+amplitude pump tone at frequency νpump and a weaker
+signal at frequency νsign are employed. The large am-
+plitude of the pump tone regulates the nonlinear charac-
+teristics of the Josephson inductance, promoting an in-
+teraction that can lead to the amplification of the sig-
+nal and, at the same time, the generation of an idle
+
+
+===== PAGE 3 / 18 =====
+
+3
+tone at frequency νidle. The nature of this interaction
+is significantly influenced by the way the non-linearity
+of the inductance varies, leading to two main modes of
+operation. In the four–wave mixing (4WM) regime, the
+relation between the operating frequencies is given by
+2νpump = νsign + νidle. On the other hand, the three–
+wave mixing (3WM) mode is described by the relation
+νpump = νsign + νidle. The transition to the 3WM regime
+is often due to an odd current dependence in the induc-
+tance nonlinearity, typically achieved by the application
+of a DC bias and/or a magnetic field. This distinction
+emphasizes the importance of the study of the current-
+dependent Josephson inductance nonlinearity in deter-
+mining the operating mode and the efficiency of the para-
+metric amplification mechanism.
+Theoretical approaches generally linearise the Joseph-
+son inductance [31, 32], towards a simplified scenario
+with lower-order approximations. These analytical treat-
+ments, based on the so-called coupled mode equations and
+their subsequent modifications [14, 33–35], give valuable
+insight into the physics of such devices, but fail to ac-
+curately describe all possible scenarios. Thus, recently,
+other numerical methods have been efficiently pursued,
+often using open–source tools [34, 36–41]. Instead, our
+approach tackles the challenge comprehensively by solv-
+ing a system of coupled differential equations, one for
+each cell constituting the JTWPA, along with appropri-
+ate boundary conditions. The choice of boundary condi-
+tions is quite crucial when studying JJ chains; for exam-
+ple, it has been shown how load-matched boundary con-
+ditions can significantly change the dynamics and also
+suppress chaos [42, 43].
+The system’s dynamics is de-
+rived by integrating these differential equations, employ-
+ing an implicit finite difference method grounded in a
+tridiagonal algorithm – a common choice for investigating
+Josephson transmission lines numerically (see App. A for
+a comprehensive description) – and examining the spec-
+tral components of the output signal through the Math-
+ematica software. The parameters for the time step and
+integration period, normalized to the Josephson plasma
+frequency, are chosen as ∆t = 0.01 and tmax = 20000,
+respectively; these values translate to ∆t = 0.06 ps and
+tmax = 120 ns in physical units. This configuration en-
+sures a wide enough duration for the integration process,
+effectively mitigating transient effects and maintaining
+the numerical integrator’s stability, thereby facilitating a
+robust analysis of steady-state behaviors.
+The different operating method, in addition of giving
+complete control over the effect of individual parame-
+ters and their variations, allows to modify the intrinsic
+characteristics of the JJs. In fact, we will also look at
+the system’s response if, instead of a sinusoidal CPR, we
+take into account a certain junction transparency, which
+induces non-sinusoidal components in the Josephson cur-
+rent.
+III.
+GAIN PROFILES IN THE CASE OF A
+SINUSOIDAL CPR
+Figure 2 presents the JTWPA dynamics by scanning
+the pump tone amplitude (a), the frequency of the sig-
+nal to be amplified (b), and the bias current (c).
+In
+particular, we plot the gain (top panel), PS (middle
+panel), and Fourier spectra of the output voltage (bot-
+tom panel) versus:
+(a) pump power level, Ppump, at
+νsign = 6.42 GHz and Ibias = 0; (b) signal frequency,
+νsign, at Ppump = −54.5 dBm and Ibias = 0; (c) bias cur-
+rent, Ibias, at Ppump = −55 dBm and νsign = 6.42 GHz.
+The signal intensity is set at Psign = −100 dBm, equiva-
+lent to a voltage amplitude of Vsign = 0.032 mV, while the
+frequencies for pump is maintained at νpump = 7 GHz.
+The
+signal
+gain
+is
+defined
+as
+Gain
+=
+20 log[Vout(νsign)/Vsign], while the PSs are constructed
+by collecting, for each combination of parameters, all
+values of V ′
+out at Vout = 0 (for this reason we label this
+quantity with V ′
+PS). If we think at a phase portrait, V ′
+out
+versus Vout, a narrow distribution of V ′
+PS values is the
+result of an elliptical limit cycle, while we expect that
+the V ′
+PS distribution of values enlarges in the case of a
+phase portrait consisting of a closed, tangled skein [28].
+In Fig. 2(a) we explore the impact of the pump in-
+tensity, Ppump, at νsign = 6.42 GHz in the absence of
+bias current, thus setting the working mode within the
+4WM domain, so that an idle tone at νidle = 7.58 GHz
+is expected.
+Under these conditions, signal amplifica-
+tion is observed throughout the investigated pump in-
+tensity range. Distinct amplification regimes are iden-
+tified, demarcated in Fig. 2(a) by different shades of
+cyan–blue.
+For Ppump ≲−54 dBm, a moderately in-
+creasing gain is noted, with Gain ≲8 dB.
+Within
+the range Ppump ∈(−54, −53.5) dBm, the gain shows
+a sort of jump to Gain ∼10 dB.
+Beyond this inten-
+sity, i.e., for Ppump ≳−53.5 dBm, the gain assumes
+quite high values, although further analysis suggests that
+these conditions do not actually give signal amplifica-
+tion. This also reflects in the behavior of V ′
+PS, see middle
+panel of Fig. 2(a). This plot permits to identify tran-
+sition regions where the behavior of the system changes
+markedly, pointed by sudden changes in the density or
+pattern of points, indicating bifurcations or transitions
+between different dynamical states.
+In fact, if we ob-
+serve how the points are distributed in the V ′
+PS plot,
+for Ppump ≲−54 dBm we note concentrated clusters
+of points that might indicate stable periodic orbits in
+the phase portrait; conversely, for higher value of Ppump
+more spread–out points suggest transitions to chaos, see
+Ppump ∈(−54, −53.5) dBm, and the definitive settling of
+a chaotic behavior, see Ppump ≳−53.5 dBm. Thus, in-
+creasing the pump intensity leads to more complex pat-
+terns, suggesting stronger nonlinear interactions within
+the JTWPA; this might correspond to an enhance of the
+amplifier’s gain, but also a potential increase in insta-
+bility or noise. Regions within the V ′
+PS plot where the
+system appears stable over a range of pump intensities
+
+
+===== PAGE 4 / 18 =====
+
+4
+(b)
+(c)
+(a)
+FIG. 2. Gain (top panel), PS (middle panel), and Fourier spectra of the output voltage (bottom panel) versus: (a) pump
+power level, Ppump, at νsign = 6.42 GHz and Ibias = 0; (b) the signal frequency, νsign, at Ppump = −55 dBm and Ibias = 0;
+(c) bias current, Ibias, at Ppump = −55 dBm and νsign = 6.42 GHz. In top and middle panels, different response regimes are
+highlighted by regions shaded in different colors. In the density plots, the color intensity scale represents the amplitude of the
+spectral components whose frequency can be read on the bottom-left vertical axis. The other parameters are: νpump = 7 GHz
+and Psign = −100 dBm.
+are important for practical application, indicating con-
+figurations where the JTWPA can operate efficiently and
+reliably. To better illustrate the effects of changing the
+pump intensity, we include in the Supplementary Mate-
+rial an animation showing the evolution of the FSs, the
+phase portraits, and the Josephson phase as Ppump in-
+creases.
+It is evident that the range of values within
+the Josephson phase oscillates enlarges with Ppump, so
+that |φ| ≲1.5 just before the onset of a chaotic regime;
+this threshold value is in line with the maximum phase
+value beyond which the system may have unpredictable
+behaviour discussed in Ref. [44].
+An in–depth analysis of the output signal’s temporal
+evolution is also warranted, e.g., looking at the Fourier
+analysis of Vout(t), as depicted in the bottom panel of
+Fig. 2(a). This map shows the presence of different fre-
+quency components within the output signal, where the
+peaks indicate the dominant ones. At low pump powers,
+the spectrum is relatively sparse, with only a few har-
+monics, suggesting linear or weakly nonlinear behavior
+where the JTWPA slightly amplifies the signal without
+significantly altering its frequency content. As Ppump in-
+creases, we notice more spectral components, but also the
+emergence/strengthening of harmonic peaks, indicating
+nonlinear effects like harmonic generation. This is a cru-
+cial aspect of parametric amplification, where the non-
+linearity of the JJs can generate new frequency compo-
+nents not present in the input signal. However, changing
+Ppump leads to a spread of the frequency spectrum and
+modifications of the output signal bandwidth. A broader
+spread might suggest an increase in the amplifier’s ef-
+fective bandwidth at higher pump powers, or it could
+indicate increased noise or nonlinear distortion due to
+the onset of a chaotic response. Indeed, at certain pump
+power levels, i.e., for Ppump ≳−53.5 dBm, there is a sud-
+den proliferation of new spectral lines and a noticeable
+broadening of the existing ones. This is typically indica-
+tive of a period–doubling cascade, i.e., a common route
+to chaos [26, 45, 46]. Thus, clear, distinct peaks suggest
+a more stable amplification process, while a very dense,
+broad distribution of frequency components might indi-
+cate a higher noise level, i.e., for Ppump ≳−53.5 dBm the
+system’s dynamics undergo a stark transition to chaos.
+In Fig. 2(b) we inspect the effects produced by a vari-
+ation of the signal frequency.
+In the top panel, the
+amplifier’s gain versus signal frequency characteristic is
+illustrated under a “clean” gain regime, but in work-
+ing conditions close to the onset of a chaotic response,
+
+
+===== PAGE 5 / 18 =====
+
+5
+so as to maximise the gain achieved, i.e., we impose
+Ppump = −54.5 dBm. We achieve Gain ∼8 dB in the
+νsign ∈[6−8] GHz frequency bandwidth. Along this gain
+profile, periodic variations, usually referred to as “rip-
+ples”, are prominently observed (refer to the detailed view
+in the inset); each ripple is associated in this case with
+small gain variations of ∼0.2 dB. Common to all sys-
+tems with impedance mismatches, a ripple forms along
+the length of the waveform in the array due to complex
+interference between the forward and backward propa-
+gating waves encountering multiple reflections [47, 48].
+This ripple has nodes along the length of the array for
+every half-wavelength period of the signal tone, while the
+maximum of the signal gain between nodes depends on
+the particular wave mixing dynamics in the transmis-
+sion line [35]. This emerging ripple pattern depends on
+parameter values and can influence both the gain and
+the bandwidth of the device [29], although these effects
+can be mitigate by implementing dispersion engineering
+strategies [32, 37, 49–54]. However, in this work we are
+mainly interested on finding threshold regimes, which al-
+low reliable operation without the onset of any chaotic re-
+sponse, and on the analysis of the anhamonic effects pro-
+duced by a non-sinusoidal CPR, so we consider a JTWPA
+without any dispersion–engineering strategy.
+The PS plot in middle panel of Fig. 2(b) shows, this
+time, quite dense clusters of points, corresponding to sta-
+ble periodic orbits in a phase portrait; in other words, a
+change of frequency alone is not able to induce a transi-
+tion to a chaotic regime. This is also evident when look-
+ing at the Fourier analysis of the output signal presented
+in the bottom panel of Fig. 2 for νsign ∈[4 −10] GHz.
+This map prominently features peaks associated with
+the pump, signal, and idler frequencies across the entire
+scanned range, including their first and second harmon-
+ics. This observation underscores the amplifier’s exten-
+sive bandwidth. Moreover, additional spectral lines are
+visible, corresponding to various frequency combinations
+arising during the operation. These “extraneous” tones
+detract from the power of the signal to be amplified, po-
+tentially leading to system instability. Notably, vertical
+striations in this density plot are linked to the presence
+of gain ripples discussed above.
+Figure 2(c) illustrates the effects produced by a bias
+current flowing through the JTWPA. It modifies the
+Josephson inductance nonlinearity, making the system
+more receptive to 3WM processes.
+This can enhance
+the device’s capability to mediate energy transfer be-
+tween different frequency components effectively.
+In-
+deed, the presence of both 3WM and 4WM modes al-
+lows for more versatile frequency conversion capabilities:
+3WM can complement 4WM processes by facilitating ad-
+ditional pathways for energy transfer and signal ampli-
+fication.
+Looking at the gain (top panel) and the PS
+(middle panel) profiles versus Ibias, we recognize regions
+of bias current values wherein the response of the system
+is stable, with Gain ∼8 dB, but also clear transitions to
+a chaotic regime. Nevertheless, the system seems to dis-
+play the same behavior every ∼17 µA. We observe that
+the phase matching across the rf–SQUID arms leads to
+the condition
+2π LgIg
+Φ0
+= φ.
+(3)
+When φ = 2πn, with n = 0, ±1, ±2 . . . , the current
+through the inductance is Ig = nΦ0/Lg.
+Put another
+way, in the case of Lg,n = 120 pH, a bias current equal to
+I2π
+bias = nΦ0/Lg ≈n × 17.1 µA induces 2πn-phase rota-
+tions, thus restoring the initial working conditions. This
+mechanism explains the observed periodicity upon vary-
+ing the bias current. To switch between two stable con-
+figurations with a different n, the system has to undergo
+through a 2π–phase rotation and an unstable condition,
+corresponding to the discussed chaotic response.
+This
+beahvior emerges clearly in the animation attached to
+Supplementary Materials.
+The periodicity described so far is quite evident also
+from the FT map in the bottom panel of Fig. 2(c); the
+alternation of stable/unstable zones is clear.
+At lower
+bias currents, the output spectrum is more ordered, with
+distinct spectral lines that show a predictable response to
+changes in Ibias, i.e., a stable regime where the Joseph-
+son inductance is being modulated in a controlled way.
+As the bias current moves away from this stable region,
+the spectra become increasingly complex and disordered.
+There are regions with a dense distribution of spectral
+lines, which could be evidence of a quasiperiodic route to
+chaos–where the introduction of new frequency compo-
+nents leads to a breakdown of periodicity. At the furthest
+extents, the Ibias-dependent FT map shows a very dense
+spectrum, suggesting that the dynamics of the JTWPA
+have become aperiodic and chaotic. Figure 2(c) shows
+also that there is an entire window of Ibias values, i.e.,
+∆Ibias = I2π
+bias ±δIbias with δIbias ≃1.5 µA, within which
+the system shows a stable response. A close look at this
+map also reveals that at low frequencies the characteris-
+tic peak of the 3WM mode at νidle = 0.58 GHz tends to
+emerge.
+It is reasonable to expect that the Ibias range of values
+that ensures the stability of the system may depend on
+the intensity of the pump tone, i.e., we can inspect how
+δIbias varies with Ppump. Since the behavior at n ̸= 0
+is a replica of what happens around Ibias = 0, we focus
+on the system’s response to small bias currents. Thus,
+in Fig. 3 we show (a) the gain and (b) the V ′
+PS–standard
+deviation, σV ′
+PS, as a function of Ibias ∈[0, 6] µA and
+Ppump ∈[−61, −53] dBm. Specifically, in Fig. 3(a) we
+map Gain(Ppump, Ibias): in this graph, it is possible to
+identify a threshold, above which a dark grey area marks
+parameter combinations that give quite high gains, in-
+dicative of a chaotic regime. Below this threshold, we see
+that: i) at fixed Ibias, increasing Ppump increases the gain;
+ii) at fixed Ppump, increasing Ibias induces non-monotonic
+gain trends. For instance, at Ppump = −59 dBm the gain
+goes from ∼3, then drops to 0, then rises again to ∼6
+just before entering a chaotic regime. Alongside the gain
+
+
+===== PAGE 6 / 18 =====
+
+6
+(a)
+(b)
+FIG. 3. (a) Gain and (b) V ′
+PS–standard deviation, σV ′
+PS, as a function of Ibias ∈[0, 6] µA and Ppump ∈[−61, −53] dBm. The
+other parameters are: νsign = 6.42 GHz, νpump = 7 GHz, and Psign = −100 dBm.
+map, we also construct a density plot showing how the
+clusters of PS points distribute; in particular, we calcu-
+late for each parameter combination the standard devia-
+tion of the V ′
+PS distribution, σV ′
+PS, see Fig. 3(b). In this
+way, a stable response will correspond to a very small
+value of σV ′
+PS (i.e., σV ′
+PS ≪0.1, see the yellow area),
+while a transition to chaos is marked by a sudden in-
+crease in σV ′
+PS (i.e, σV ′
+PS ≳0.1, see the gray shaded area).
+Moreover, the σV ′
+PS(Ppump, Ibias) map allow to recognize
+a peculiarity emerging at low Ppump’s: in fact, as the
+current increases, the system first enters a chaotic phase
+(demarcated by a thin gray belt), and then it lands in
+a region of parameter space with a stable response (and
+high gains), marked by a red dashed line containing a
+yellow region at high currents, i.e., at Ibias ∈(4, 5) µA.
+IV.
+THE 3WM AND 4WM NONLINEAR
+COEFFICIENTS
+In this section we investigate the behavior of the 3WM
+and 4WM nonlinear coefficients [14], respectively given
+by
+β = βL
+2 sin(φdc)
+and
+γ = βL
+6 cos(φdc),
+(4)
+where βL = 2πLIc/Φ0 is the screening parameter of the
+rf-SQUID (in our case, βL ≃0.74) and φdc = 2πΦdc/Φ0,
+with Φdc being the magnetic flux inside the loop. The
+parameter β is associated with the quadratic nonlinear-
+ity and plays a role in controlling the JTWPA signal
+gain. An optimal value of β allows maximizing the gain
+while minimizing the influence of cubic nonlinearity [14].
+This is particularly beneficial in the 3WM regime, where
+significant quadratic nonlinearity is necessary to achieve
+exponential gain.
+The parameter γ represents the cu-
+bic (Kerr-like) nonlinearity of the system and affects
+the phase mismatch and both self-phase and cross-phase
+modulations.
+In Zorin’s work [14], these coefficients were computed
+considering an external magnetic flux. Since we have no
+external magnetic drive, we focus on the magnetic flux
+induced by the circulating current, Icirc, in the rf-SQUID
+loop, i.e., Φdc = LgIcirc. This current is determined by
+the balance between those flowing in the upper and lower
+branches of the loop, i.e., Icirc = IL,n −IJ,n in the n-th
+rf-SQUID of the chain, see App. A.
+To study the dependence of the 3WM and 4WM co-
+efficients on the pump power Ppump and bias current
+Ibias, we have computed the time evolution of φdc(t),
+from which we obtain both β(t) and γ(t), looking at
+the last rf-SQUID of the JTWPA, i.e., n ≡N.
+The
+behavior of these quantities is shown in the animations
+included in the Supplementary Materials.
+We observe
+that β(t) oscillates around a mean value of zero, which
+agrees with Zorin’s results in the absence of an exter-
+nal magnetic field [14]. In contrast, γ(t) has initially a
+mean value around 0.12, but, as Ppump increases and the
+system enters into a chaotic regime, it also fluctuates sig-
+nificantly and eventually averages to nearly zero. Given
+the strongly oscillating behaviour of these quantities, it
+is more convenient to extract only the mean value and
+the standard deviation of β(t) and γ(t) from each time
+evolution. In this way, it is possible to plot both ¯β, σβ,
+¯γ, and σγ as Ppump and Ibias vary, see Fig. 4. As Ppump
+increases, ¯β (red curve) remains close to zero, but σβ
+(yellow curve) tends to increase, due to the increasing
+fluctuations of β(t). Once the system enters a chaotic
+regime, also ¯β begins to significantly fluctuate. Instead,
+¯γ (blue curve) remains quite close to the value βL/6 as
+long as the system remains in a non-chaotic condition, af-
+ter which its value tends to decrease significantly, while
+at the same time σγ (cyan curve) increases.
+In Fig. 4(c-d), we scan Ibias at a fixed Ppump = −55
+dBm. One still observes the periodicity noticed in Fig. 2,
+but this time we can also appreciate some trends that
+emerge at those bias currents that set a fully chaotic re-
+sponse. For example, let us focus on the range Ibias ∈
+
+
+===== PAGE 7 / 18 =====
+
+7
+-0.004
+-0.002
+0.000
+0.002
+0.004
+β
+0.00
+0.05
+0.10
+0.15
+0.20
+0.25
+σβ
+-70
+-65
+-60
+-55
+-50
+-45
+0.00
+0.02
+0.04
+0.06
+0.08
+0.10
+0.12
+Ppump [dBm]
+γ
+0.00
+0.02
+0.04
+0.06
+0.08
+σγ
+-0.2
+-0.1
+0.0
+0.1
+0.2
+β
+0.14
+0.16
+0.18
+0.20
+0.22
+0.24
+σβ
+0
+5
+10
+15
+20
+25
+30
+0.00
+0.02
+0.04
+0.06
+0.08
+0.10
+Ibias [μA]
+γ
+0.00
+0.02
+0.04
+0.06
+0.08
+σγ
+(b)
+(a)
+(d)
+(c)
+FIG. 4. Average value (left vertical axes) and standard deviation (right vertical axes) of β(t) and γ(t) by varying Ppump at
+Ibias = 0 (see left panels) and varying Ibias at Ppump = −55 dBm (see right panels). The other parameters are: νsign = 6.42
+GHz, νpump = 7 GHz, and Psign = −100 dBm.
+[0, 17], corrisponding to φ ∈[0 −2π], which can be fur-
+ther divided into three intervals highlighted by different
+colours, see Fig. 4(c-d). These panels include also two
+small strips with gray oblique shading, where the sys-
+tem exhibits a stable dynamics, in contrast with the sur-
+rounding areas dominated by chaotic behavior. Within
+the highlighted bias current range, ¯β switches from pos-
+itive to negative values: this indicates alternating 3WM
+contributions as the bias current is varied. Specifically,
+within the orange–shaded area,
+¯β
+ increases significantly,
+while its standard deviation reaches a sort of plateau; in-
+sted, ¯γ decreases to almost zero, while its standard de-
+viation increases. The average values of β and γ seem
+to follow similar patterns in the orange and blue regions,
+but with opposite trends. This is due to the 2π–phase
+twist occurring around Ibias ≃17 µA. After this twist,
+the system enters a phase regime where the nonlinear co-
+efficients β and γ exhibit similar patterns to those just
+before the twist, but with opposite signs, resulting in the
+mirrored behavior. The green shaded region is centered
+around Ibias ≈17/2 µA, where the system exhibits its
+most pronounced chaotic response. Notably, ¯β crosses
+the zero line at three distinct points within the green re-
+gion, i.e., the 3WM nonlinearity alternates between pos-
+itive and negative values multiple times. The frequent
+changes in the sign of ¯β attest the complex dynamics of
+the system in this regime. Additionally, both σβ and σγ
+are particularly high within the green region, reflecting
+the enhanced variability and chaotic nature of the sys-
+tem. This strong nonlinear response is associated with
+the fact that φ ∼π, where the system is farthest from
+stable behavior.
+These results support further the spectral analysis pre-
+sented previously and the appearance of the 3WM idler
+peak for certain bias current values. The periodic changes
+in the coefficients, especially with varying Ibias, relate to
+the alternating influence of 3WM and 4WM processes,
+which contribute to the intricate nonlinear dynamics ob-
+served in the system.
+V.
+EFFECT OF A NON–SINUSOIDAL CPR
+In this section, we assume a JTWPA formed by rf–
+SQUIDs containing a transparency-dependent junction,
+often embodied in a superconductor–normal conduc-
+tor–superconductor (SNS) junction, showcasing an in-
+trinsically non-sinusoidal CPR, like [55–57]
+Iτ(φ) =
+τ sin φ
+2
+p
+1 −τ sin2 φ
+,
+(5)
+where τ ∈[0, 1] is the transparency. Its limit values lead
+to distinctive behaviors: for τ →1, the junction be-
+comes highly transparent, inducing a skewed CPR with
+Imax = maxφ[Iτ(φ)] →1, while for τ →0, opacity pre-
+vails, yielding a more sinusoidal CPR but at the same
+time Imax →0.
+In general, this type of CPR actu-
+ally contains a sum of such contributions, one for each
+conduction channel, and with channel-dependent trans-
+parencies. Instead, here, as we are mainly interested in
+the effect produced by the anharmonicity of the CPR on
+the JTWPA behavior, we limit ourselves to considering
+only one contribution, as in Eq. (5). In this perspective,
+τ has the meaning of an effective transparency, with the
+sole aim of capturing the skewness of the CPR. Finally,
+we mention that many experimental techniques for mea-
+suring the CPR of JJs exist [58–61].
+Thinking about a specific experimental realisation, we
+must bear in mind that the anharmonic content of CPR
+can be determined not only by the nature and geom-
+etry of the junction, but also by temperature, trans-
+port parameters of the superconducting leads, and de-
+tails of interfaces [55, 62, 63]. Indeed, as well as conven-
+tional SNS junctions, other concrete examples of systems
+show non-sinusoidal CPRs, e.g., based on topological in-
+
+
+===== PAGE 8 / 18 =====
+
+8
+(a)
+(b)
+(c)
+(d)
+FIG. 5. Gain (top panel), PS (middle panel), and Fourier spectra of the output voltage (bottom panel) versus the pump
+power level, Ppump, at different junction transparencies, i.e, τ = {0.25, 0.5, 0.75, and 0.99}, see panels (a), (b), (c), and (d),
+respectively. In middle panels, the inset shows the CPR at the specific τ values considered and a sinusoidal profile, traced
+with a gray dashed curve. In top and middle panels, different response regimes are highlighted by regions shaded in different
+colors. In the density plots, the color intensity scale represents the amplitude of the spectral components whose frequency can
+be read on the bottom–left vertical axis. The other parameters are: νsign = 6.42 GHz, νpump = 7 GHz, Psign = −100 dBm, and
+Ibias = 0.
+sulators [64–66], graphene [67, 68], high-Tc superconduc-
+tors [69–71], spatially inhomogeneous ferromagnetic weak
+link [72, 73], nanobridge [74–76] or nanowire [77, 78],
+superconducting atomic contacts [79], or Cooper pair
+transistors [80]. Nonlinear CPRs occur even in conven-
+tional, i.e., Al–based, junctions [81], for possible CPR
+deviations due to the non-uniformity of the tunnel bar-
+rier [82, 83]. In general, the lower the temperature, the
+more skewed the CPRs are, thereby further supporting
+the need to explore divergences from pure sinusoidal be-
+haviour, as JTWPAs generally operate at very low tem-
+peratures close to the quantum limit.
+Our focus now centers on the impact of transparency
+on JTWPA performance.
+Specifically, we narrow our
+attention to the non–sinusoidal nature of the CPR. To
+this aim, we express the Josephson current as the prod-
+uct of the critical current, Ic, and a dimensionless func-
+tion i(φ, τ) ∈[−1, +1] embodying the joint dependence
+on both the phase and the transparency, i.e., I(φ) =
+Ic·i(φ, τ). The function i(φ, τ), which captures the skew-
+ness of the CPR, is the ratio between Iτ(φ) and its max-
+imum value, that is
+i (φ, τ) = sin φ
+ 1 −√1 −τ
+
+2
+p
+1 −τ sin2 φ
+.
+(6)
+In the following, we assume again a critical current
+equal to Ic = 2 µA, just like in the previous section, and
+we adjust the junction transparency, τ, i.e., the skewness
+of the CPR. In Fig. 5, we collect the gain (top panel), PS
+(middle panel), and Fourier spectra of the output voltage
+(bottom panel) versus the pump power level, Ppump, at
+different τ = {0.25, 0.5, 0.75, and 0.99}, see panels (a),
+τ
+0.75 
+0.99 
+0.999
+-58
+-56
+-54
+-52
+-50
+0
+5
+10
+15
+20
+Gain [dB]
+-58
+-56
+-54
+-52
+-50
+0
+5
+10
+15
+20
+Ppump [dBm]
+Gain [dB]
+(a)
+(b)
+Ibias=17 .1 µA
+Ibias= 0
+0   
+0.25 
+0.5
+FIG. 6. (a) and (b), Gain versus pump power level, Ppump,
+choosing different junction transparency, at Ibias = 0 and
+Ibias = 17.1 µA, respectively.
+The other parameters are:
+νsign = 6.42 GHz, νpump = 7 GHz, and Psign = −100 dBm.
+
+
+===== PAGE 9 / 18 =====
+
+9
+(b), (c), and (d), respectively. The other parameters are:
+νsign = 6.42 GHz, νpump = 7 GHz, Psign = −100 dBm,
+and Ibias = 0. In middle panels, the inset contains the
+CPR at the specific τ values considered and a sinusoidal
+profile, traced with a gray dashed curve.
+Comparing results as the CPR skewness increases (i.e.,
+τ →1) we see qualitatively similar behaviors, that is,
+an increasing trend as Ppump enlarges, until a chaotic
+response is set. As τ increases, the region of φ values
+around φ = 0 in which the linear approximation of the
+CPR progressively enlarges; therefore, mixing processes,
+which need the nonlinearity of the CPR, become less effi-
+cient as τ →1. This is clearly confirmed by comparying
+several gain curves for different values of τ in Fig. 6(a):
+the increase in the skewness of the CPR leads to a de-
+crease in the maximum achievable gain, but on the other
+hand to a widening of the pump amplitude range giving a
+non–chaotic response. Looking at the PS plots, we note
+also that the transition to the chaotic regime is grad-
+ually sharper as τ increases. This is also evident from
+the FT maps in the lower panels of this figure: in fact,
+the area of chaotic response, highlighted by the darker
+blue shades, for τ = 0.99 does not exhibit those patterns
+of more intense peaks at the stable/unstable transition,
+which are instead noticeable in the other cases (and that
+are increasingly more intense as τ decreases).
+There does not appear to be such a strong dependence
+on the frequency of the driving signal when changing τ;
+in particular, even when choosing pump amplitudes just
+below the threshold beyond which a chaotic regime is
+established, a frequency sweep produces responses qual-
+itatively similar to those shown in Fig. 2(b) (data not
+shown).
+In contrast, the situation is more interesting when con-
+sidering the bias current effects at different τ, see Fig. 7.
+Specifically, we explored the system response changing
+Ibias, setting a pump amplitude about a 1 dBm below the
+chaos onset thresholds highlighted in Fig. 5. The increase
+of the anharmonic content of the CPR makes sharper the
+transition to a chaotic regime triggered by a bias current
+change. In particular, for τ = 0.25 and 0.5 we still note
+the structures of more intense peaks in the FT maps once
+the chaotic response is settled, see Figs. 7(a) and (b), re-
+spectively; conversely, when τ = 0.75 we notice that the
+distributions of marked spectral lines, prelude to the on-
+set of chaos, are just barely appreciable, just to vanish
+completely when τ = 0.99, see Figs. 7(c) and (d), respec-
+tively. Furthermore, in the case of highly skewed CPR,
+i.e., τ = 0.99, we note the absence of those regions of
+Ibias values with stable responses around ∼17µA multi-
+ples. In other words, an high anharmonic CPR content
+seems to hinder the restoration of stable conditions once
+high bias currents induced a 2π–phase rotation. Thus,
+we looked at the Ppump dependence of the gain curves,
+at different values of τ, setting this time Ibias = 17.1 µA,
+see Fig. 6(b). Comparing with the results in panel (a)
+obtained for Ibias = 0, it can be seen that the threshold
+pump intensities, above which a chaotic response is trig-
+gered, tends to shift lower and lower as τ increases when
+a bias current Ibias = 17.1 µA is applied: for instance, in
+the case of τ = 0.99 this threshold value is reduced by
+more than 2 dBm compared to the case without current.
+VI.
+CONCLUSIONS
+In this work we have investigated the effects produced
+by variation of the input parameters in the response of
+a JTWPA formed by a sequence of cells, each contain-
+ing an rf–SQUID and a ground capacity. In particular,
+we have characterized the parametric amplification pro-
+cess of a small–amplitude input signal, in the presence
+of a large-amplitude input tone. The Poincaré sections,
+together with the Fourier spectra analysis, reveal the in-
+tertwining between amplification process and the onset
+of chaos as system parameters are varied. In particular,
+we have discussed the effects of the pump intensity, the
+signal frequency, and the bias current, for circuit specifi-
+cations in line with the device developed within the INFN
+DARTWARS collaboration [6].
+This study aims to improve the design of the future
+generation of JTWPAs, towards optimal performance
+and greater stability against chaotic disturbances, by
+deepening our understanding of their operational limits
+and capabilities. This exploration not only contributes
+to the existing body of knowledge on the nonlinear dy-
+namics of superconducting devices, but also underscores
+the importance of examining the broader spectrum of
+dynamic behaviors that can occur in complex quantum
+systems.
+The implications of chaos for JTWPA operation can be
+quite relevant, for it impacts amplifier performance and
+signal integrity. The transition to chaos leaves a spec-
+tral signature on the output voltage that correlates to
+the amplification gain of the input signal. We construct
+Fourier maps, which serve as a guide to identify opti-
+mal operating conditions and to understand the limits
+of the amplification mechanism, before entering chaotic
+regimes. At lower pump intensities, we observe a mini-
+mal signal response, indicating insufficient energy to trig-
+ger a fruitful parametric amplification processes. As the
+pump intensity increases, distinct spectral lines appear,
+corresponding to amplification and possibly mixing pro-
+cesses within the JTWPA. Notably, we recognize regions
+where the spectral lines broaden or split, which may sug-
+gest the onset of nonlinear phenomena or transitions to
+chaotic dynamics. The output signal’s spectrum is quite
+sensitive to the bias current flowing through the trans-
+mission line. We observe regions where the spectrum is
+relatively undisturbed, with high gains, but as the bias
+current moves away from this region, dramatic changes
+in the output emerge, indicative of nonlinear and poten-
+tially chaotic behavior in the JTWPA. The periodicity,
+observed in the device response by changing the bias cur-
+rent, reflects the inherent phase matching condition be-
+tween the two arms of the rf–SQUIDs.
+
+
+===== PAGE 10 / 18 =====
+
+10
+(a)
+(b)
+(c)
+(d)
+τ = 0.25
+τ = 0.5
+τ = 0.75
+τ = 0.99
+FIG. 7.
+Gain (top panel), PS (middle panel), and Fourier spectra of the output voltage (bottom panel) versus the bias
+current, Ibias, at different junction transparencies, i.e, τ = {0.25, 0.5, 0.75, and 0.99}, and pump intensities, i.e., Ppump =
+{−55, −54.5, −53, and −52} dBm, see panels (a), (b), (c), and (d), respectively. In top and middle panels, different response
+regimes are highlighted by regions shaded in different colors.
+In the density plots, the color intensity scale represents the
+amplitude of the spectral components whose frequency can be read on the bottom–left vertical axis. The other parameters are:
+νsign = 6.42 GHz, νpump = 7 GHz, and Psign = −100 dBm.
+Our findings demonstrate that JTWPAs exhibit a sen-
+sitive dependence on drive parameters, for slight varia-
+tions can cause a transition from predictable amplifica-
+tion to unpredictable chaos. This sensitivity underscores
+the critical importance of precision in parameter selection
+for optimal JTWPA operation.
+The exploration has also included non–sinusoidal
+current–phase relations, offering a comprehensive view
+of JTWPAs crafted with diverse junction transparencies.
+We observe a device response quite sensitive to the shape
+of the Josephson current–phase relation. For example,
+increasing its skewness reduces the maximum achievable
+gains, but on the other hand increases the pump–signal
+intensity ranges within which the system behaviour is sta-
+ble. Furthermore, the transition to the chaotic regime is
+much sharper for high skewness, but for very high values
+those windows of bias current values, at integer multi-
+ples of Φ0/Lg, within which the system response is stable
+are lost. We stress the importance of exploring devia-
+tions from pure sinusoidal behavior, since JTWPAs typi-
+cally operate at very low temperatures near the quantum
+limit, where the current-phase relation tends to become
+increasingly skewed. Furthermore, at these low temper-
+atures, the reduction in thermal noise, combined with
+the presence of broadband noise, can enhance chaotic
+dynamics and increase stochasticity, e.g., see Ref. [42].
+These factors underscore the need for a thorough inves-
+tigation of chaotic effects in JTWPAs to optimize their
+low–temperature performance.
+In conclusion, our results are particularly relevant
+to the flourishing field of quantum technologies, where
+JTWPAs are poised to become indispensable tools for
+signal amplification at the quantum limit.
+ACKNOWLEDGMENTS
+This work was supported in part by the Italian In-
+stitute of Nuclear Physics (INFN) through the DART-
+WARS and QUB–IT Projects, in part by the Euro-
+pean Union’s H2020–MSCA under Grant 101027746, in
+part by y the University of Salerno–Italy under Grants
+FRB21CAVAL, FRB22PAGAN, and FRB23BARON,
+and in part by PRIN 2022 PNRR Project QUESTIONs
+(Grant No. P2022KWFBH).
+Appendix A: The numerical approach
+In this appendix we present the numerical scheme used
+to get the solution of the setup in Fig. 1.
+We start considering a generic mesh labeled with “n”.
+The current balance at node n is
+In = ˙qn + In+1
+(A1)
+while the current balance at node nJL is
+In = IJ,n + IL,n
+(A2)
+
+
+===== PAGE 11 / 18 =====
+
+11
+where
+IJ,n = CJ,n
+ℏ
+2e
+d2φn
+dt2
++
+1
+RJ,n
+ℏ
+2e
+dφn
+dt + Ic,n sin φn
+(A3)
+and
+IL,n =
+1
+Lg,n
+ℏ
+2eφn.
+(A4)
+The voltage drop in the mesh “n”, with n ∈[1, ..., N], is
+−qn−1
+Cn−1
++ ℏ
+2e
+dφn
+dt + qn
+Cn
+= 0
+(A5)
+from which
+−˙qn−1
+Cn−1
++ ℏ
+2e
+d2φn
+dt2
++ ˙qn
+Cn
+= 0.
+(A6)
+Inserting Eq. (A1) into Eq. (A6) one obtains
+−In−1 −In
+Cn−1
++ ℏ
+2e
+d2φn
+dt2
++ In −In+1
+Cn
+= 0
+−In−1
+Cn−1
+−In+1
+Cn
++ In
+
+1
+Cn−1
++ 1
+Cn
+
++ ℏ
+2e
+d2φn
+dt2
+= 0.
+Defining the quantities (a tilde over a label indicates the
+normalization to 2e
+ℏ)
+eCJ,n = CJ,n
+ℏ
+2e
+eR−1
+J,n = R−1
+J,n
+ℏ
+2e
+(A7)
+eL−1
+g,n = L−1
+g,n
+ℏ
+2e
+eCn = Cn
+ℏ
+2e
+(A8)
+and inserting Eqs. (A3)-(A4) in Eqs. (A2), one obtains
+In = eCJ,n
+d2φn
+dt2 +
+1
+eRJ,n
+dφn
+dt +Ic,n sin φn +
+1
+eLg,n
+φn (A9)
+and Eq. (A7), defining C−
+n =
+Cn
+Cn−1 , can be recast as
+−C−
+n In−1 +
+ 1 + C−
+n
+
+In + eCn
+d2φn
+dt2
+−In+1 = 0. (A10)
+Inserting Eq. (A9) in Eqs. (A10)
+−C−
+n
+"
+eCJ,n−1
+d2φn−1
+dt2
++
+1
+eRJ,n−1
+dφn−1
+dt
++ Ic,n−1 sin φn−1 +
+1
+eLg,n−1
+φn−1
+#
+(A11)
++
+ 1 + C−
+n
+
+" 
+eCJ,n +
+eCn
+1 + C−
+n
+!
+d2φn
+dt2
++
+1
+eRJ,n
+dφn
+dt + Ic,n sin φn +
+1
+eLg,n
+φn
+#
+(A12)
+−
+"
+eCJ,n+1
+d2φn+1
+dt2
++
+1
+eRJ,n+1
+dφn+1
+dt
++ Ic,n+1 sin φn+1 +
+1
+eLg,n+1
+φn+1
+#
+= 0
+(A13)
+Discretization −For the numerical integration of pre-
+vious equations, the time was divided into many short
+time intervals k = ∆t = tmax/M, where tmax and M
+are the observation time and the number of intervals,
+respectively.
+The partial derivatives are approximated
+using the Euler formalism. The phase φn(t) is labeled by
+φm
+n = φn(mk), where n and m are the discrete mesh and
+time indexes, respectively, that is φm →time index
+n →mesh index . The
+partial derivatives can be expressed as
+∂φn
+∂t
+≃φm+1
+n
+−φm−1
+n
+2k
+(A14)
+∂2φn
+∂t2
+≃φm+1
+n
+−2φm
+n + φm−1
+n
+k2
+.
+(A15)
+In this way, Eq. (A9) can be rewritten as
+In ≃
+eCJ,n
+k2
+ φm+1
+n
+−2φm
+n + φm−1
+n
+
++
+1
+2 eRJ,nk
+ φm+1
+n
+−φm−1
+n
+
++ Ic,n sin φm
+n + φm
+n
+eLg,n
+(A16)
+In ≃φm+1
+n
+ eCJ,n
+k2
++
+1
+2 eRJ,nk
+!
++
+ 
+−2 eCJ,n
+k2
+φm
+n + Ic,n sin φm
+n + φm
+n
+eLg,n
+!
++ φm−1
+n
+ eCJ,n
+k2
+−
+1
+2 eRJ,nk
+!
+,
+(A17)
+which becomes
+In ≃α+
+n φm+1
+n
++ f m
+n + α−
+n φm−1
+n
+(A18)
+after defining the quantities
+α±
+n =
+eCJ,n
+k2
+±
+1
+2 eRJ,nk
+(A19)
+f m
+n =
+ 
+1
+eLg,n
+−2 eCJ,n
+k2
+!
+φm
+n + Ic,n sin φm
+n . (A20)
+
+
+===== PAGE 12 / 18 =====
+
+12
+These coefficients take a slightly different expression
+when considering Eq. (A12), that is
+eα±
+n =
+eC“n”
+k2 ±
+1
+2 eRJ,nk
+(A21)
+ef m
+n =
+ 
+1
+eLg,n
+−2 eC“n”
+k2
+!
+φm
+n + Ic,n sin φm
+n ,
+(A22)
+eC“n” =
+ 
+eCJ,n +
+eCn
+1 + C−
+n
+!
+= ℏ
+2e
+
+CJ,n +
+Cn−1Cn
+Cn−1 + Cn
+
+.
+(A23)
+Similarly, after discretization of the terms in square
+brackets in Eqs. (A11)-(A13), one obtains:
+−C−
+n α+
+n−1φm+1
+n−1 +
+ 1 + C−
+n
+
+eα+
+n φm+1
+n
+−α+
+n+1φm+1
+n+1 =
+C−
+n f m
+n−1 −
+ 1 + C−
+n
+ ef m
+n + f m
+n+1 + C−
+n α−
+n−1φm−1
+n−1 −
+ 1 + C−
+n
+
+eα+
+n φm−1
+n
++ α−
+n+1φm−1
+n+1
+(A24)
+that becomes
+an,1φm+1
+n−1 + an,2φm+1
+n
++ an,3φm+1
+n+1 = bn,1f m
+n−1 + bn,2 ef m
+n + bn,3f m
+n+1 + cn,1φm−1
+n−1 + cn,2φm−1
+n
++ cn,3φm−1
+n+1
+(A25)
+defining the coefficients:
+an,1 = −C−
+n α+
+n−1
+an,2 = (1 + C−
+n ) eα+
+n
+an,3 = −α+
+n+1
+bn,1 = C−
+n
+bn,2 = −(1 + C−
+n )
+bn,3 = 1
+cn,1 = C−
+n α−
+n−1
+cn,2 = −(1 + C−
+n ) eα−
+n
+cn,3 = α−
+n+1
+(A26)
+Left Boundary Conditions −Let’s first consider the left
+side of the circuit including the voltage generator Vi(t).
+The current balances and voltage drops at the leftmost
+mesh in left panel of Fig. 1 gives
+Vi = IiRi + q0
+Ci
+Ii + Ibias = ˙q0 + I1
+(A27)
+I1 = CJ,1
+ℏ
+2e
+d2φ1
+dt2 +
+1
+RJ,1
+ℏ
+2e
+dφ1
+dt + Ic,1 sin φ1 +
+1
+eLg,1
+φ1
+Combining these equations, one obtains
+˙Ii =
+˙Vi
+Ri
+−
+˙q0
+RiCi
+=
+˙Vi
+Ri
+−Ii + Ibias −I1
+RiCi
+(A28)
+and defining ωi = 1/(RiCi) we achieve the equation
+˙Ii = −ωiIi +
+ ˙Vi
+Ri
+−ωiIbias
+!
++ ωi
+ 
+eCJ,1
+d2φ1
+dt2 +
+1
+eRJ,1
+dφ1
+dt + Ic,1 sin φ1 +
+1
+eLg,1
+φ1
+!
+.
+(A29)
+After discretization, this equation becomes
+Im+1
+i
+−Im−1
+i
+2kωi
+=
+−Im
+i +
+ ˙V m
+i
+ωiRi
+−Ibias
+!
++ φm+1
+1
+ eCJ,1
+k2
++
+1
+2 eRJ,1k
+!
++
+ 
+−2 eCJ,1
+k2
+φm
+1 + Ic,1 sin φm
+1 + φm
+1
+eLg,1
+!
++ φm−1
+1
+ eCJ,1
+k2
+−
+1
+2 eRJ,1k
+!
+(A30)
+so that
+Im+1
+i
+2kωi
+−φm+1
+1
+ eCJ,1
+k2
++
+1
+2 eRJ,1k
+!
+=
+−Im
+i +
+ ˙V m
+i
+ωiRi
+−Ibias
+!
++
+" 
+1
+eLg,1
+−2 eCJ,1
+k2
+!
+φm
+1 + Ic,1 sin φm
+1
+#
++Im−1
+i
+2kωi
++ φm−1
+1
+ eCJ,1
+k2
+−
+1
+2 eRJ,1k
+!
+.
+(A31)
+
+
+===== PAGE 13 / 18 =====
+
+13
+and
+Im+1
+i
+2kωi
+−φm+1
+1
+α+
+1 = −Im
+i + f m
+1 + Im−1
+i
+2kωi
++ φm−1
+1
+α−
+1 +
+
+Ci ˙V m
+i
+−Ibias
+
+,
+(A32)
+and finally
+Im+1
+i
+= Im−1
+i
++
+h
+φm+1
+1
+α+
+1 −Im
+i + f m
+1 + φm−1
+1
+α−
+1 +
+
+Ci ˙V m
+i
+−Ibias
+i
+(2kωi) .
+(A33)
+The current balances at nodes and voltage drops at the
+mesh labeled with “1” in the left panel of Fig. 1 gives
+Ii + Ibias −˙q0 −I1 = 0
+(A34)
+I1 −I2 −˙q0 = 0
+(A35)
+−˙q0
+C0 + ℏ
+2e
+d2φ1
+dt2 +
+˙q1
+C1 = 0
+(A36)
+from which
+−(Ii + Ibias) −I1
+C0
++ ℏ
+2e
+d2φ1
+dt2 + ˙q1
+C1
+= 0.
+(A37)
+In other words, we are replacing In−1 with (Ii + Ibias) in
+Eq. (A7), so that
+−C−
+1 (Ii+Ibias)+
+ 1 + C−
+1
+
+I1+ eC1
+d2φ1
+dt2 −I2 = 0, (A38)
+which, making all terms explicit, becomes
+−C−
+1 [Ii + Ibias] +
+ 1 + C−
+1
+
+" 
+eCJ,1 +
+eC1
+1 + C−
+1
+!
+d2φ1
+dt2 +
+1
+eRJ,1
+dφ1
+dt + Ic,1 sin φ1 +
+1
+eLg,1
+φ1
+#
+−
+"
+eCJ,2
+d2φ2
+dt2 +
+1
+eRJ,2
+dφ2
+dt + Ic,2 sin φ2 +
+1
+eLg,2
+φ2
+#
+= 0.
+(A39)
+After discretization, we obtain
+−C−
+1 [Im
+i + Ibias] +
+ 1 + C−
+1
+ h
+eα+
+1 φm+1
+1
++ ef m
+1 + eα−
+1 φm−1
+1
+i
+−
+
+α+
+2 φm+1
+2
++ f m
+2 + α−
+2 φm−1
+2
+
+= 0.
+(A40)
+By slightly manipulating this equation, one obtains
+ 1 + C−
+1
+
+eα+
+1 φm+1
+1
+−α+
+2 φm+1
+2
+= C−
+1 Im
+i −
+ 1 + C−
+1
+ ef m
+1 + f m
+2 −
+ 1 + C−
+1
+
+eα+
+1 φm−1
+1
++ α−
+2 φm−1
+2
++ C−
+1 Ibias
+(A41)
+that can be recast in a compact form as
+a1,2φm+1
+1
++ a1,3φm+1
+2
+= b1,1Im
+i + b1,2 ef m
+1 + b1,3f m
+2 + c1,2φm−1
+1
++ c1,3φm−1
+2
++ C−
+1 Ibias
+(A42)
+by defining the coefficients
+a1,1 = 0
+a1,2 =
+ 1 + C−
+1
+
+eα+
+1
+a1,3 = −α+
+2
+b1,1 = C−
+1
+b1,2 = −
+ 1 + C−
+1
+
+b1,3 = 1
+c1,1 = 0
+c1,2 = −
+ 1 + C−
+1
+
+eα−
+1
+c1,3 = α−
+2 .
+(A43)
+Comparing with the coefficients in Eq. (A26), it means
+to impose α±
+0 = 0.
+Right Boundary Conditions −Let’s look now at the
+right side of the circuit, including Rℓ(t) and Cℓ(t). The
+current balances at nodes and voltage drops at the right-
+most mesh of Fig. 1 gives
+IN = Ibias + ˙qN + ˙qℓ
+,
+qN
+CN
+= qℓ
+Cℓ
++ ˙qℓRℓ(A44)
+IN = eCJ,N
+d2φN
+dt2
++
+1
+eRJ,N
+dφN
+dt
++ Ic,N sin φN +
+1
+eLg,n
+φN.
+Through the time derivative of Eq. (A44), the following
+
+
+===== PAGE 14 / 18 =====
+
+14
+first-order differential equation for Iℓ= ˙qℓis obtained
+CNRℓ˙Iℓ= −
+
+1 + CN
+Cℓ
+
+Iℓ−Ibias +
+ 
+eCJ,N
+d2φN
+dt2
++
+1
+eRJ,N
+dφN
+dt
++ Ic,N sin φN +
+1
+eLg,n
+φN
+!
+,
+(A45)
+from which, after discretization, one obtains
+CNRℓ
+Im+1
+ℓ
+−Im−1
+ℓ
+2k
+= −
+
+1 + CN
+Cℓ
+
+Im
+ℓ−Ibias + φm+1
+N
+ eCJ,N
+k2
++
+1
+2 eRJ,Nk
+!
++
+ 
+−2 eCJ,N
+k2
+φm
+N + Ic,N sin φm
+N + φm
+N
+eLg,n
+!
++ φm−1
+N
+ eCJ,N
+k2
+−
+1
+2 eRJ,Nk
+!
+,
+(A46)
+that can be recast in
+−φm+1
+N
+ eCJ,N
+k2
++
+1
+2 eRJ,Nk
+!
++ CNRℓ
+2k
+Im+1
+ℓ
+= f m
+N −
+
+1 + CN
+Cℓ
+
+Im
+ℓ
++ φm−1
+N
+ eCJ,N
+k2
+−
+1
+2 eRJ,Nk
+!
++ CNRℓ
+2k
+Im−1
+ℓ
+−Ibias.
+(A47)
+Im+1
+ℓ
+= Im−1
+ℓ
++
+"
+f m
+N −
+
+1 + CN
+Cℓ
+
+Im
+ℓ+ φm+1
+N
+α+
+N + φm−1
+N
+α−
+N −Ibias
+#
+2k
+CNRℓ
+.
+The output voltage is finally equal to
+V m+1
+out
+= Im+1
+ℓ
+Rℓ.
+(A48)
+The balances of the currents at nodes and voltage
+drops at the mesh labeled with “N” in the right panel
+of Fig. 1 gives
+IN −(Iℓ+ Ibias) = ˙qN
+(A49)
+IN−1 −IN =
+˙
+qN−1
+(A50)
+−˙qN−1
+CN−1
++ ℏ
+2e
+d2φN
+dt2
++ ˙qN
+CN
+= 0
+(A51)
+from which
+−IN−1 −IN
+CN−1
++ ℏ
+2e
+d2φN
+dt2
++ IN −(Iℓ+ Ibias)
+CN
+= 0.
+−C−
+NIN−1 +
+ 1 + C−
+N
+
+IN + eCN
+d2φN
+dt2
+−(Iℓ+ Ibias) = 0.
+that can be recast as
+−C−
+N
+"
+eCJ,N−1
+d2φN−1
+dt2
++
+1
+eRJ,N−1
+dφN−1
+dt
++ Ic,N−1 sin φN−1 +
+1
+eLg,N−1
+φN−1
+#
+(A52)
++
+ 1 + C−
+N
+
+" 
+eCJ,N +
+eCN
+1 + C−
+N
+!
+d2φN
+dt2
++
+1
+eRJ,N
+dφN
+dt
++ Ic,N sin φN +
+1
+eLg,n
+φN
+#
+−(Iℓ+ Ibias) = 0
+(A53)
+or alternatively as
+−C−
+n
+
+α+
+n−1φm+1
+n−1 + f m
+n−1 + α−
+n−1φm−1
+n−1
+
++
+ 1 + C−
+n
+ h
+eα+
+n φm+1
+n
++ ef m
+n + eα−
+n φm−1
+n
+i
+−(Im
+ℓ+ Ibias) = 0.
+(A54)
+and collecting the terms appropriately, we obtain
+−C−
+Nα+
+N−1φm+1
+N−1+
+ 1 + C−
+N
+
+eα+
+Nφm+1
+N
+=C−
+Nf m
+N−1−
+ 1 + C−
+N
+ ef m
+N +Im
+ℓ+C−
+Nα−
+N−1φm−1
+N−1−
+ 1 + C−
+N
+
+eα+
+Nφm−1
+N
++Ibias
+
+
+===== PAGE 15 / 18 =====
+
+15
+which can be written as
+aN,1φm+1
+N−1 + aN,2φm+1
+N
+= bN,1f m
+N−1 + bN,2 ef m
+N + bn,3Im
+ℓ+ cN,1φm−1
+N−1 + cN,2φm−1
+N
++ Ibias
+(A55)
+where
+aN,1 = −C−
+Nα+
+N−1
+aN,2 =
+ 1 + C−
+N
+
+eα+
+N
+aN,3 = 0
+bN,1 = C−
+N
+bN,2 = −
+ 1 + C−
+N
+
+bN,3 = 1
+cN,1 = C−
+Nα−
+N−1
+cN,2 = −
+ 1 + C−
+N
+
+eα−
+N
+cn,3 = 0
+(A56)
+In other words, we are imposing α±
+N+1 = 0 in Eq. (A26).
+Matrix Representation of the System of Differential
+Equations −The matrix representing Eqs. (A25)-(A42)-
+(A55) has non-zero elements only in the main, upper mi-
+nor, and lower minor diagonals. This tridiagonal matrix
+has a form given by:
+
+a1,2
+a1,3
+0
+. . .
+0
+a2,1
+a2,2
+a2,3
+. . .
+0
+...
+...
+...
+...
+...
+0
+. . .
+aN−1,1
+aN−1,2
+aN−1,3
+0
+. . .
+0
+aN,1
+aN,2
+
+
+φm+1
+1
+φm+1
+2
+...
+φm+1
+N−1
+φm+1
+N
+
+=
+
+A1
+A2
+...
+AN−1
+AN
+
+,
+(A57)
+where
+An = bn,1f m
+n−1 + bn,2 ef m
+n + bn,3f m
+n+1 + cn,1φm−1
+n−1 + cn,2φm−1
+n
++ cn,3φm−1
+n+1
+(A58)
+for
+n = 1, ..., N −1,
+m = 1, 2, ...M,
+A1 = b1,1Im
+i + b1,2 ef m
+1 + b1,3f m
+2 + c1,2φm−1
+1
++ c1,3φm−1
+2
++ C−
+1 Ibias
+for
+n = 0,
+m = 1, 2, ...M,
+AN = bN,1f m
+N−1 + bN,2 ef m
+N + bn,3Im
+ℓ+ cN,1φm−1
+N−1 + cN,2φm−1
+N
++ Ibias.
+for
+n = N,
+m = 1, 2, ...M.
+Equations (A57) are solved through a tridiagonal algo-
+rithm, which is a simplified form of Gaussian elimination.
+The solutions correspond to the Josephson phases φm+1
+n
+,
+while the currents flowing through the input resistance
+Ii and the load resistance Iℓare given by
+Im+1
+i
+= Im−1
+i
++
+h
+φm+1
+1
+α+
+1 −Im
+i + f m
+1 + φm−1
+1
+α−
+1 +
+
+Ci ˙V m
+i
+−Ibias
+i
+(2kωi)
+(A59)
+Im+1
+ℓ
+= Im−1
+ℓ
++
+"
+f m
+N −
+
+1 + CN
+Cℓ
+
+Im
+ℓ−φm+1
+N
+α+
+N + φm−1
+N
+α−
+N −Ibias
+#
+2k
+CNRℓ
+.
+(A60)
+The initial conditions chosen in the simulation are
+φm
+n = 0 and φm−1
+n
+= 0 for n = 1, 2...N.
+The coefficients ai,j, bi,j, and ci,j, with i, j ∈[1, N],
+are arranged in square tridiagonal matrices as
+
+
+x1,2 x1,3
+0
+. . .
+0
+x2,1 x2,2
+x2,3
+. . .
+0
+...
+...
+...
+...
+...
+0
+. . .
+xN−1,1 xN−1,2 xN−1,3
+0
+. . .
+0
+xN,1
+xN,2
+
+
+,
+(A61)
+
+
+===== PAGE 16 / 18 =====
+
+16
+where x
+≡
+{a, b, c},
+which elements are listed in
+Eqs. (A25)-(A42)-(A55), and depends on the vectors
+eCJ,n = CJ,n
+ℏ
+2e
+1
+eRJ,n
+=
+1
+RJ,n
+ℏ
+2e
+1
+eLn
+= 1
+Ln
+ℏ
+2e
+eCn = Cn
+ℏ
+2e
+C−
+n =
+Cn
+Cn−1
+eC“n” = ℏ
+2e
+
+CJ,n +
+Cn−1Cn
+Cn−1 + Cn
+
+α±
+n =
+eCJ,n
+k2
+±
+1
+2 eRJ,nk
+eα±
+n =
+eC“n”
+k2 ±
+1
+2 eRJ,nk
+,
+(A62)
+with n ∈[1, N] and C0 ≡Ci.
+[1] C. Bartram, T. Braine, R. Cervantes, N. Crisosto, N. Du,
+G. Leum, P. Mohapatra, T. Nitta, L. J. Rosenberg,
+G. Rybka, J. Yang, J. Clarke, I. Siddiqi, A. Agrawal,
+A. V. Dixit, M. H. Awida, A. S. Chou, M. Hollister,
+S. Knirck, A. Sonnenschein, W. Wester, J. R. Gleason,
+A. T. Hipp, S. Jois, P. Sikivie, N. S. Sullivan, D. B. Tan-
+ner, E. Lentz, R. Khatiwada, G. Carosi, C. Cisneros,
+N. Robertson, N. Woollett, L. D. Duffy, C. Boutan,
+M. Jones, B. H. LaRoque, N. S. Oblath, M. S. Taub-
+man, E. J. Daw, M. G. Perry, J. H. Buckley, C. Gaikwad,
+J. Hoffman, K. Murch, M. Goryachev, B. T. McAllister,
+A. Quiskamp, C. Thomson, M. E. Tobar, V. Bolkhovsky,
+G. Calusine, W. Oliver, and K. Serniak, Review of Sci-
+entific Instruments 94, 044703 (2023).
+[2] J. Aumentado, IEEE Microwave Magazine 21, 45 (2020).
+[3] A. Cullen, Proceedings of the IEE - Part B: Electronic
+and Communication Engineering 107, 101 (1960).
+[4] A. Sörenssen, Applied Scientific Research, Section B 10,
+463 (1962).
+[5] M. Esposito, A. Ranadive, L. Planat, and N. Roch, Ap-
+plied Physics Letters 119, 120501 (2021).
+[6] S. Pagano, C. Barone, M. Borghesi, W. Chung, G. Cara-
+pella, A. P. Caricato, I. Carusotto, A. Cian, D. D.
+Gioacchino, E. Enrico, P. Falferi, L. Fasolo, M. Faverzani,
+E. Ferri, G. Filatrella, C. Gatti, A. Giachero, D. Giuber-
+toni, A. Greco, C. Kutlu, A. Leo, C. Ligi, G. Maccarrone,
+B. Margesin, G. Maruccio, A. Matlashov, C. Mauro,
+R. Mezzena, A. G. Monteduro, A. Nucciotti, L. Oberto,
+V. Pierro, L. Piersanti, M. Rajteri, A. Rettaroli, S. Riz-
+zato, Y. K. Semertzidis, S. Uchaikin,
+and A. Vinante,
+IEEE Trans. Appl. Supercond. 32, 1 (2022).
+[7] C. Bockstiegel, J. Gao, M. R. Vissers, M. Sandberg,
+S. Chaudhuri, A. Sanders, L. R. Vale, K. D. Irwin, and
+D. P. Pappas, Journal of Low Temperature Physics 176,
+476 (2014).
+[8] M. R. Vissers, R. P. Erickson, H.-S. Ku, L. Vale, X. Wu,
+G. C. Hilton, and D. P. Pappas, Applied Physics Letters
+108, 012601 (2016).
+[9] S. Chaudhuri, D. Li, K. D. Irwin, C. Bockstiegel, J. Hub-
+mayr, J. N. Ullom, M. R. Vissers, and J. Gao, Applied
+Physics Letters 110, 152601 (2017).
+[10] L. Ranzani, M. Bal, K. C. Fong, G. Ribeill, X. Wu,
+J. Long, H.-S. Ku, R. P. Erickson, D. Pappas, and T. A.
+Ohki, Applied Physics Letters 113, 242602 (2018).
+[11] M. Malnou, M. Vissers, J. Wheeler, J. Aumentado,
+J. Hubmayr, J. Ullom,
+and J. Gao, PRX Quantum 2,
+010302 (2021).
+[12] M. Sweeny and R. Mahler, IEEE Transactions on Mag-
+netics 21, 654 (1985).
+[13] M. T. Bell and A. Samolov, Phys. Rev. Appl. 4, 024014
+(2015).
+[14] A. B. Zorin, Phys. Rev. Appl. 6, 034006 (2016).
+[15] L. Fasolo, A. Greco,
+and E. Enrico, in Advances
+in Condensed-Matter and Materials Physics, edited by
+J. Thirumalai and S. I. Pokutnyi (IntechOpen, Rijeka,
+2019) Chap. 5.
+[16] M.
+Esposito,
+A.
+Ranadive,
+L.
+Planat,
+S.
+Leger,
+D. Fraudet, V. Jouanny, O. Buisson, W. Guichard,
+C. Naud, J. Aumentado, F. Lecocq, and N. Roch, Phys.
+Rev. Lett. 128, 153603 (2022).
+[17] A. Giachero, C. Barone, M. Borghesi, G. Carapella,
+A. P. Caricato, I. Carusotto, W. Chang, A. Cian, D. D.
+Gioacchino, E. Enrico, P. Falferi, L. Fasolo, M. Faverzani,
+E. Ferri, G. Filatrella, C. Gatti, D. Giubertoni, A. Greco,
+C. Kutlu, A. Leo, C. Ligi, G. Maccarrone, B. Margesin,
+G. Maruccio, A. Matlashov, C. Mauro, R. Mezzena,
+A. G. Monteduro, A. Nucciotti, L. Oberto, S. Pagano,
+V. Pierro, L. Piersanti, M. Rajteri, S. Rizzato, Y. K. Se-
+mertzidis, S. Uchaikin,
+and A. Vinante, J. Low Temp.
+Phys. 209, 658 (2022).
+[18] V. Granata, G. Avallone, C. Barone, M. Borghesi,
+S. Capelli, G. Carapella, A. P. Caricato, I. Carusotto,
+A. Cian, D. Di Gioacchino, E. Enrico, P. Falferi, L. Fa-
+solo, M. Faverzani, E. Ferri, G. Filatrella, C. Gatti,
+A.
+Giachero,
+D.
+Giubertoni,
+A.
+Greco,
+C.
+Guar-
+cello, D. Labranca, A. Leo, C. Ligi, G. Maccarrone,
+F. Mantegazzini, B. Margesin, G. Maruccio, C. Mauro,
+R. Mezzena, A. G. Monteduro, A. Nucciotti, L. Oberto,
+L. Origo, S. Pagano, V. Pierro, L. Piersanti, M. Rajteri,
+A. Rettaroli, S. Rizzato, A. Vinante,
+and M. Zannoni,
+IEEE Trans. Appl. Supercond. 33, 1 (2023).
+[19] M. Borghesi,
+C. Barone,
+M. Borghesi,
+S. Capelli,
+G. Carapella, A. Caricato, I. Carusotto, A. Cian, D. Di
+Gioacchino, E. Enrico, P. Falferi, L. Fasolo, M. Faverzani,
+E. Ferri, G. Filatrella, C. Gatti, A. Giachero, D. Giuber-
+toni, V. Granata, A. Greco, C. Guarcello, D. Labranca,
+A. Leo, C. Ligi, G. Maccarrone, F. Mantegazzini, B. Mar-
+gesin, G. Maruccio, C. Mauro, R. Mezzena, A. Mont-
+eduro, A. Nucciotti, L. Oberto, L. Origo, S. Pagano,
+V. Pierro, L. Piersanti, M. Rajteri, A. Rettaroli, S. Riz-
+zato, A. Vinante, and M. Zannoni, Nucl. Instrum. Meth.
+A 1047, 167745 (2023).
+[20] A. Rettaroli,
+C. Barone,
+M. Borghesi,
+S. Capelli,
+G. Carapella,
+A. Caricato,
+I. Carusotto,
+A. Cian,
+D. Di Gioacchino, E. Enrico, P. Falferi, L. Fasolo,
+M. Faverzani, E. Ferri, G. Filatrella, C. Gatti, A. Gi-
+achero, D. Giubertoni, V. Granata, A. Greco, C. Guar-
+cello, D. Labranca, A. Leo, C. Ligi, G. Maccarrone,
+F. Mantegazzini, B. Margesin, G. Maruccio, C. Mauro,
+R. Mezzena, A. Monteduro, A. Nucciotti, L. Oberto,
+
+
+===== PAGE 17 / 18 =====
+
+17
+L. Origo, S. Pagano, V. Pierro, L. Piersanti, M. Rajteri,
+S. Rizzato, A. Vinante, and M. Zannoni, Nucl. Instrum.
+Meth. A 1046, 167679 (2023).
+[21] L. Fasolo, F. Ahrens, G. Avallone, C. Barone, M. Borgh-
+esi, L. Callegaro, G. Carapella, A. P. Caricato, I. Caru-
+sotto, A. Cian, A. D’Elia, D. D. Gioacchino, P. Falferi,
+M. Faverzani, E. Ferri, G. Filatrella, C. Gatti, D. Giu-
+bertoni, V. Granata, C. Guarcello, D. Labranca, A. Leo,
+C. Ligi, P. Livreri, G. Maccarrone, F. Mantegazzini,
+B. Margesin, G. Maruccio, R. Mezzena, A. G. Mont-
+eduro, R. Moretti, A. Nucciotti, L. Oberto, L. Origo,
+S. Pagano, A. S. Piedjou, L. Piersanti, A. Rettaroli,
+S. Rizzato, S. Tocci, A. Vinante, M. Zannoni, A. Gi-
+achero,
+and E. Enrico, IEEE Trans. Appl. Supercond.
+34, 1 (2024).
+[22] F. Ahrens, E. Ferri, G. Avallone, C. Barone, M. Borgh-
+esi, L. Callegaro, G. Carapella, A. P. Caricato, I. Caru-
+sotto, A. Cian, A. D’Elia, D. D. Gioacchino, E. En-
+rico, P. Falferi, L. Fasolo, M. Faverzani, G. Filatrella,
+C. Gatti, A. Giachero, D. Giubertoni, V. Granata,
+C. Guarcello, D. Labranca, A. Leo, C. Ligi, G. Mac-
+carrone, F. Mantegazzini, B. Margesin, G. Maruccio,
+R. Mezzena, A. G. Monteduro, R. Moretti, A. Nucciotti,
+L. Oberto, L. Origo, S. Pagano, A. S. Piedjou, L. Pier-
+santi, A. Rettaroli, S. Rizzato, S. Tocci, A. Vinante, and
+M. Zannoni, IEEE Trans. Appl. Supercond. 34, 1 (2024).
+[23] M. Faverzani, P. Campana, R. Carobene, M. Gobbo,
+F. Ahrens,
+G. Avallone,
+C. Barone,
+M. Borghesi,
+S. Capelli, G. Carapella, A. P. Caricato, L. Callegaro,
+I. Carusotto, A. Celotto, A. Cian, A. D’Elia, D. D.
+Gioacchino, E. Enrico, P. Falferi, L. Fasolo, E. Ferri,
+G. Filatrella, C. Gatti, D. Giubertoni, V. Granata,
+C. Guarcello, A. Irace, D. Labranca, A. Leo, C. Ligi,
+G. Maccarrone, F. Mantegazzini, B. Margesin, G. Maruc-
+cio, R. Mezzena, A. G. Moneduro, R. Moretti, A. Nuc-
+ciotti, L. Oberto, L. Origo, S. Pagano, A. S. P. Kom-
+nang, L. Piersanti, A. Rettaroli, S. Rizzato, S. Tocci,
+A. Vinante, M. Zannoni,
+and A. Giachero, “Broad-
+band parametric amplification in dartwars,”
+(2024),
+arXiv:2402.12045 [quant-ph].
+[24] Y. Shukrinov, M. Hamdipour, M. Kolahchi, A. Botha,
+and M. Suzuki, Physics Letters A 376, 3609 (2012).
+[25] A. Botha, Y. Shukrinov, and M. Kolahchi, Chaos, Soli-
+tons Fractals 48, 32 (2013).
+[26] Y. M. Shukrinov, A. E. Botha, S. Y. Medvedeva, M. R.
+Kolahchi, and A. Irie, Chaos: An Interdisciplinary Jour-
+nal of Nonlinear Science 24, 033115 (2014).
+[27] I. Sokolović, P. Mali, J. Odavić, S. Radošević, S. Y.
+Medvedeva, A. E. Botha, Y. M. Shukrinov, and J. Tekić,
+Phys. Rev. E 96, 022210 (2017).
+[28] C. Guarcello, G. Avallone, C. Barone, M. Borghesi,
+S. Capelli,
+G. Carapella,
+A. P. Caricato,
+I. Caru-
+sotto, A. Cian, D. Di Gioacchino, E. Enrico, P. Falferi,
+L.
+Fasolo,
+M.
+Faverzani,
+E.
+Ferri,
+G.
+Filatrella,
+C. Gatti, A. Giachero, D. Giubertoni, V. Granata,
+A. Greco, D. Labranca, A. Leo, C. Ligi, G. Maccarrone,
+F. Mantegazzini, B. Margesin, G. Maruccio, C. Mauro,
+R. Mezzena, A. G. Monteduro, A. Nucciotti, L. Oberto,
+L. Origo, S. Pagano, V. Pierro, L. Piersanti, M. Rajteri,
+A. Rettaroli, S. Rizzato, A. Vinante,
+and M. Zannoni,
+IEEE Trans. Appl. Supercond. 33, 1 (2023).
+[29] C. Guarcello,
+F. Ahrens,
+G. Avallone,
+C. Barone,
+M. Borghesi, L. Callegaro, G. Carapella, A. P. Cari-
+cato, I. Carusotto, A. Cian, A. D’Elia, D. D. Gioacchino,
+E. Enrico, P. Falferi, L. Fasolo, M. Faverzani, E. Ferri,
+G. Filatrella, C. Gatti, A. Giachero, D. Giubertoni,
+V. Granata, A. Leo, D. Labranca, C. Ligi, G. Mac-
+carrone, F. Mantegazzini, B. Margesin, G. Maruccio,
+R. Mezzena, A. G. Monteduro, R. Moretti, A. Nuc-
+ciotti,
+L.
+Oberto,
+L.
+Origo,
+A.
+S.
+P.
+Komnang,
+S. Pagano, L. Piersanti, A. Rettaroli, S. Rizzato, S. Tocci,
+A. Vinante, and M. Zannoni, IEEE Trans. Appl. Super-
+cond. 34, 1 (2024).
+[30] A. Barone and G. Paternò, Physics and Applications of
+the Josephson Effect (Wiley, New York, 1982).
+[31] O. Yaakobi, L. Friedland, C. Macklin,
+and I. Siddiqi,
+Phys. Rev. B 87, 144301 (2013).
+[32] K. O’Brien, C. Macklin, I. Siddiqi, and X. Zhang, Phys.
+Rev. Lett. 113, 157001 (2014).
+[33] S. Chaudhuri, J. Gao, and K. Irwin, IEEE Transactions
+on Applied Superconductivity 25, 1 (2015).
+[34] T. Dixon, J. Dunstan, G. Long, J. Williams, P. Meeson,
+and C. Shelly, Phys. Rev. Appl. 14, 034058 (2020).
+[35] S.
+Kern,
+P.
+Neilinger,
+E.
+Il’ichev,
+A.
+Sultanov,
+M. Schmelz, S. Linzen, J. Kunert, G. Oelsner, R. Stolz,
+A. Danilov, S. Mahashabde, A. Jayaraman, V. Antonov,
+S. Kubatkin, and M. Grajcar, Phys. Rev. B 107, 174520
+(2023).
+[36] T. Sweetnam, D. Banys, V. Gilles, M. A. McCulloch, and
+L. Piccirillo, Superconductor Science and Technology 35,
+095011 (2022).
+[37] V. Gaydamachenko, C. Kissling, R. Dolata,
+and A. B.
+Zorin, Journal of Applied Physics 132, 154401 (2022).
+[38] S. O. Peatáin, T. Dixon, P. J. Meeson, J. M. Williams,
+S. Kafanov, and Y. A. Pashkin, Superconductor Science
+and Technology 36, 045017 (2023).
+[39] A.
+Y.
+Levochkina,
+H.
+G.
+Ahmad,
+P.
+Mastrovito,
+I. Chatterjee, D. Massarotti, D. Montemurro, F. Tafuri,
+G. Pepe,
+and M. Esposito, IEEE Transactions on Ap-
+plied Superconductivity 34, 1 (2024).
+[40] K. Krause and M. C. Hamilton, IEEE Transactions on
+Applied Superconductivity 34, 1 (2024).
+[41] S. T. Elkin, M. Haider, and T. E. Roth, “Multiphysics
+numerical method for modeling josephson traveling-
+wave parametric amplifiers,”
+(2024), arXiv:2403.15217
+[physics.comp-ph].
+[42] A. L. Pankratov, E. V. Pankratova, V. A. Shamporov,
+and S. V. Shitov, Applied Physics Letters 110, 112601
+(2017).
+[43] A. Pankratov, L. Revin, E. Pankratova, and S. Shitov,
+Chaos, Solitons Fractals 182, 114819 (2024).
+[44] C. Kissling, V. Gaydamachenko, F. Kaap, M. Khabipov,
+R. Dolata, A. B. Zorin, and L. Grünhaupt, IEEE Trans-
+actions on Applied Superconductivity 33, 1 (2023).
+[45] M. T. Levinsen, Journal of Applied Physics 53, 4294
+(1982).
+[46] O. H. Olsen and M. R. Samuelsen, Applied Physics Let-
+ters 47, 1007 (1985).
+[47] S. O. Peatáin, T. Dixon, P. J. Meeson, J. M. Williams,
+S. Kafanov, and Y. A. Pashkin, Superconductor Science
+and Technology 36, 045017 (2023).
+[48] Y. Zheng, K. Xiong, J. Feng,
+and H. Yang, Chinese
+Physics B 33, 040401 (2024).
+[49] T. C. White, J. Y. Mutus, I.-C. Hoi, R. Barends,
+B.
+Campbell,
+Y.
+Chen,
+Z.
+Chen,
+B.
+Chiaro,
+A. Dunsworth, E. Jeffrey, J. Kelly, A. Megrant, C. Neill,
+P. J. J. O’Malley, P. Roushan, D. Sank, A. Vainsencher,
+J. Wenner, S. Chaudhuri, J. Gao,
+and J. M. Martinis,
+
+
+===== PAGE 18 / 18 =====
+
+18
+Applied Physics Letters 106, 242601 (2015).
+[50] C. Macklin, K. O’Brien, D. Hover, M. E. Schwartz,
+V. Bolkhovsky, X. Zhang, W. D. Oliver, and I. Siddiqi,
+Science 350, 307 (2015).
+[51] P. Winkel, I. Takmakov, D. Rieger, L. Planat, W. Hasch-
+Guichard, L. Grünhaupt, N. Maleeva, F. Foroughi,
+F. Henriques, K. Borisov, J. Ferrero, A. V. Ustinov,
+W. Wernsdorfer, N. Roch,
+and I. M. Pop, Phys. Rev.
+Appl. 13, 024015 (2020).
+[52] L. Planat, A. Ranadive, R. Dassonneville, J. Puer-
+tas Martínez, S. Léger, C. Naud, O. Buisson, W. Hasch-
+Guichard, D. M. Basko, and N. Roch, Phys. Rev. X 10,
+021021 (2020).
+[53] A. Fadavi Roudsari,
+D. Shiri,
+H. Renberg Nilsson,
+G. Tancredi, A. Osman, I.-M. Svensson, M. Kudra,
+M. Rommel, J. Bylander, V. Shumeiko, and P. Delsing,
+Applied Physics Letters 122, 052601 (2023).
+[54] J. Y. Qiu, A. Grimsmo, K. Peng, B. Kannan, B. Lien-
+hard, Y. Sung, P. Krantz, V. Bolkhovsky, G. Calusine,
+D. Kim, A. Melville, B. M. Niedzielski, J. Yoder, M. E.
+Schwartz, T. P. Orlando, I. Siddiqi, S. Gustavsson, K. P.
+O’Brien,
+and W. D. Oliver, Nature Physics 19, 706
+(2023).
+[55] A. A. Golubov, M. Y. Kupriyanov, and E. Il’ichev, Rev.
+Mod. Phys. 76, 411 (2004).
+[56] C. W. J. Beenakker, Phys. Rev. Lett. 67, 3836 (1991).
+[57] C. W. J. Beenakker, in Transport Phenomena in Meso-
+scopic Systems, edited by H. Fukuyama and T. Ando
+(Springer Berlin Heidelberg, 1992) pp. 235–253.
+[58] Waldram, J.R. and Lumley, J.M., Rev. Phys. Appl.
+(Paris) 10, 7 (1975).
+[59] D. J. Van Harlingen, Rev. Mod. Phys. 67, 515 (1995).
+[60] J.
+Basset,
+R.
+Delagrange,
+R.
+Weil,
+A.
+Kasumov,
+H. Bouchiat, and R. Deblock, Journal of Applied Physics
+116, 024311 (2014).
+[61] L. V. Ginzburg, I. E. Batov, V. V. Bol’ginov, S. V.
+Egorov, V. I. Chichkov, A. E. Shchegolev, N. V. Klenov,
+I. I. Soloviev, S. V. Bakurskiy, and M. Y. Kupriyanov,
+JETP Letters 107, 48 (2018).
+[62] K. K. Likharev, Rev. Mod. Phys. 51, 101 (1979).
+[63] F. Tafuri, Fundamentals and Frontiers of the Josephson
+Effect, Vol. 286 (Springer, Cham, Switzerland, 2019).
+[64] I. Sochnikov, L. Maier, C. A. Watson, J. R. Kirtley,
+C. Gould, G. Tkachov, E. M. Hankiewicz, C. Brüne,
+H. Buhmann, L. W. Molenkamp, and K. A. Moler, Phys.
+Rev. Lett. 114, 066801 (2015).
+[65] M. Kayyalha, A. Kazakov, I. Miotkowski, S. Khlebnikov,
+L. P. Rokhinson, and Y. P. Chen, npj Quantum Mate-
+rials 5, 7 (2020).
+[66] M. Endres, A. Kononov, H. S. Arachchige, J. Yan,
+D. Mandrus, K. Watanabe, T. Taniguchi, and C. Schö-
+nenberger, Nano Letters 23, 4654 (2023).
+[67] C. D. English, D. R. Hamilton, C. Chialvo, I. C. Moraru,
+N. Mason, and D. J. Van Harlingen, Phys. Rev. B 94,
+115435 (2016).
+[68] G. Nanda, J. L. Aguilera-Servin, P. Rakyta, A. Ko-
+rmányos,
+R.
+Kleiner,
+D.
+Koelle,
+K.
+Watanabe,
+T. Taniguchi, L. M. K. Vandersypen, and S. Goswami,
+Nano Letters 17, 3396 (2017).
+[69] E.
+Il’ichev,
+V.
+Zakosarenko,
+R.
+P.
+J.
+IJsselsteijn,
+V. Schultze, H.-G. Meyer, H. E. Hoenig, H. Hilgenkamp,
+and J. Mannhart, Phys. Rev. Lett. 81, 894 (1998).
+[70] E. Il’ichev, M. Grajcar, R. Hlubina, R. P. J. IJssel-
+steijn, H. E. Hoenig, H.-G. Meyer, A. Golubov, M. H. S.
+Amin, A. M. Zagoskin, A. N. Omelyanchouk, and M. Y.
+Kupriyanov, Phys. Rev. Lett. 86, 5369 (2001).
+[71] L. S. Revin, A. L. Pankratov, D. V. Masterov, A. E.
+Parafin, S. A. Pavlov, A. V. Chiginev,
+and E. V. Sko-
+rokhodov, IEEE Transactions on Applied Superconduc-
+tivity 28, 1 (2018).
+[72] A. A. Golubov, M. Y. Kupriyanov, and Y. V. Fominov,
+Journal of Experimental and Theoretical Physics Letters
+75, 588 (2002).
+[73] S. M. Frolov, D. J. Van Harlingen, V. A. Oboznov, V. V.
+Bolginov, and V. V. Ryazanov, Phys. Rev. B 70, 144505
+(2004).
+[74] P. E. Lindelof, Reports on Progress in Physics 44, 949
+(1981).
+[75] A. G. P. Troeman, S. H. W. van der Ploeg, E. Il’Ichev,
+H.-G. Meyer, A. A. Golubov, M. Y. Kupriyanov,
+and
+H. Hilgenkamp, Phys. Rev. B 77, 024509 (2008).
+[76] Y. Wang, L. Chen, Y. Pan, D. Zhang, S. Yu, G. Wu,
+X. Liu, L. Wu, W. Shi, G. Zhang, L. Zhang, W. Peng,
+J. Ren, and Z. Wang, ACS Nano 17, 15466 (2023).
+[77] E. M. Spanton, M. Deng, S. Vaitiek˙enas, P. Krogstrup,
+J. Nygård, C. M. Marcus,
+and K. A. Moler, Nature
+Physics 13, 1177 (2017).
+[78] S. Hart, Z. Cui, G. Ménard, M. Deng, A. E. Antipov,
+R. M. Lutchyn, P. Krogstrup, C. M. Marcus, and K. A.
+Moler, Phys. Rev. B 100, 064523 (2019).
+[79] M. L. Della Rocca, M. Chauvin, B. Huard, H. Pothier,
+D. Esteve, and C. Urbina, Phys. Rev. Lett. 99, 127005
+(2007).
+[80] A. Paila, D. Gunnarsson, J. Sarkar, M. A. Sillanpää, and
+P. J. Hakonen, Phys. Rev. B 80, 144520 (2009).
+[81] Dennis
+Willsch,
+Dennis
+Rieger,
+Patrick
+Winkel,
+Madita
+Willsch,
+Christian
+Dickel,
+Jonas
+Krause,
+Yoichi
+Ando,
+Raphaël
+Lescanne,
+Zaki
+Leghtas,
+Nicholas
+T.
+Bronn,
+Pratiti
+Deb,
+Olivia
+Lanes,
+Zlatko
+K.
+Minev,
+Benedikt
+Dennig,
+Simon
+Geis-
+ert,
+Simon Günzler,
+Sören Ihssen,
+Patrick Paluch,
+Thomas
+Reisinger,
+Roudy
+Hanna,
+Jin
+Hee
+Bae,
+Peter Schüffelgen, Detlev Grützmacher, Luiza Buimaga-
+Iarinca,
+Cristian
+Morari,
+Wolfgang
+Wernsdorfer,
+David P. DiVincenzo, Kristel Michielsen, Gianluigi Cate-
+lani,
+and Ioan M. Pop, Nature Physics 20, 815–821
+(2024).
+[82] T.
+Aref,
+A.
+Averin,
+S.
+van
+Dijken,
+A.
+Ferring,
+M. Koberidze, V. F. Maisi, H. Q. Nguyend, R. M. Niem-
+inen, J. P. Pekola,
+and L. D. Yao, Journal of Applied
+Physics 116, 073702 (2014).
+[83] L. J. Zeng, S. Nik, T. Greibe, P. Krantz, C. M. Wilson,
+P. Delsing, and E. Olsson, Journal of Physics D: Applied
+Physics 48, 395308 (2015).

@@ -1,0 +1,681 @@
+                                                      Capturing Complex Behaviour in Josephson Travelling Wave Parametric Amplifiers
+
+                                                               T. Dixon,1, 2 J. W. Dunstan,2 G. B. Long,1 J. M. Williams,1 P. J. Meeson,2 and C. D. Shelly1, ∗
+                                                                      1
+                                                                          National Physical Laboratory, Hampton Road, Teddington, TW11 0LW, United Kingdom
+                                                                           2
+                                                                             Royal Holloway University of London, Egham, Surrey, TW20 0EX, United Kingdom
+                                                                                                        (Dated: December 12, 2019)
+                                                                     We present an analysis of wave-mixing in recently developed Josephson Travelling Wave Paramet-
+                                                                  ric Amplifiers (JTWPAs). Circuit simulations performed using WRspice show the full behaviour of
+                                                                  the JTWPA allowing propagation of all tones. The Coupled Mode Equations (CMEs) containing
+                                                                  only pump, signal, and idler propagation are shown to be insufficient to completely capture complex
+arXiv:1912.05349v1 [cond-mat.supr-con] 11 Dec 2019
+
+
+
+
+                                                                  mixing behaviour in the JTWPA. Extension of the CMEs through additional state vectors in the
+                                                                  analytic solutions allows closer agreement with WRspice. We consider an ordered framework for the
+                                                                  systematic inclusion of extended eigenmodes and make a qualitative comparison with WRspice at
+                                                                  each step. The agreement between the two methods validates both approaches and provides insight
+                                                                  into the operation of the JTWPA. We show that care should be taken when using the CMEs and
+                                                                  propose that WRspice should be used as a design tool for non-linear superconducting circuits such
+                                                                  as the JTWPA.
+
+
+                                                                       I.    INTRODUCTION
+
+                                                          A.   Josephson Travelling Wave Parametric
+                                                                          Amplifiers
+
+                                                        Josephson junction (JJ) based parametric amplifiers
+                                                     (JPAs) [1–3] have been used in recent years to pro-
+                                                     vide quantum-limited noise performance for quantum op-
+                                                     tics experiments [4], single microwave photon detection
+                                                     [5], high-fidelity qubit readout for quantum information        FIG. 1. Circuit schematic showing 3 cells of an N-cell array of
+                                                                                                                     rf-SQUIDs implemented in a microwave transmission line de-
+                                                     technologies [6, 7], as well as producing squeezed states
+                                                                                                                     sign as proposed by Zorin [16]. The blue dotted line highlights
+                                                     [8]. These microwave, small signal, amplifiers have been        one of the repeating cell elements. An externally applied mag-
+                                                     shown to exhibit large gain (> 20 dB) [9, 10], and ap-          netic field is used to shift the operation of the JTWPA to the
+                                                     proach the quantum noise limit [11]. Typically these am-        3WM regime (in the WRspice simulations, flux coupling to
+                                                     plifiers have utilised high-Q superconducting resonators        the rf-SQUID is used to bias the JTWPA). Each cell consists
+                                                     which have a limited bandwidth and dynamic range.               of an rf-SQUID with geometric inductance Lg and a Joseph-
+                                                     Removing the resonant architecture and allowing non-            son junction (Josephson inductance LJ , and junction capac-
+                                                     linear interactions along a transmission line can increase      itance CJ ). Each cell has a capacitance to ground C0 . The
+                                                     both the dynamic range and bandwidth [12]. More re-             parameters of the circuit presented in this work are Ic = 5 µA
+                                                     cently, the Josephson Travelling Wave Parametric Am-            CJ = 60 fF, C0 = 100 fF, and Lg = 57 pH.
+                                                     plifier (JTWPA), based on JJs embedded in a microwave
+                                                     transmission line has been shown to provide large gain
+                                                     without the bandwidth limitation of the JPAs [13–15].           regime rf-SQUIDs are embedded in the transmission line
+                                                        Implementing unbiased JJs along the transmission line        and an externally applied magnetic field modifies the cen-
+                                                     leads to a centrosymmetry of the system and four wave           trosymmetry of the circuit. The circuit as proposed in
+                                                     mixing (4WM) whereby the signal and idler frequencies           Ref. 16 is shown in Fig. 1.
+                                                     are close to the frequency of the pump, fs + fi = 2fp .
+                                                     In this paper we focus primarily on the three wave mix-
+                                                     ing (3WM) scheme, fs + fi = fp which shifts the pump                       II.   MODELLING THE JTWPA
+                                                     frequency away from that of the signal and idler allow-
+                                                     ing the pump to be filtered more easily from the sig-                            A.   WRspice Simulations
+                                                     nal. The 3WM regime also takes advantage of the in-
+                                                     herently stronger interactions than the 4WM regime. In             In order to capture the full behaviour of the JTWPA,
+                                                     this regime the phase modulation effect and the signal          we use WRspice to simulate the circuit design shown in
+                                                     gain are controlled independently, the process of which         Fig. 1. WRspice is a SPICE-like circuit simulator which
+                                                     is described in detail by Zorin [16]. To access the 3WM         includes a Josephson junction model [17]. Conventional
+                                                                                                                     analytical models describing three-wave mixers consider
+                                                                                                                     only three mixing tones, the pump fp , signal fs , and idler
+                                                                                                                     fi [18]. Using WRspice we observe that other mixing
+                                                     ∗ connor.shelly@npl.co.uk
+                                                                                                                     tones, especially the harmonics of the pump, are gener-
+                                                                                                                            2
+
+ated in the JTWPA. In this work we show that generation
+of other mixing tones has a strong reduction on the signal
+gain that can be achieved. In WRspice we implement a
+2000 cell version of the circuit shown in Fig. 1. The rf-
+SQUIDs are flux-biased such that we operate in the 3WM
+regime. A strong (Iprms (0) ≈ 1.97 µA ≈ −70 dBm), pump
+current at fp = 12 GHz and a weak (Isrms (0) ≈ 0.07 µA ≈
+−96 dBm) signal current at fs = 7.2 GHz are input to the
+JTWPA at node 0. The values replicate those used as ex-
+ample parameters in the analytical model by Zorin [16].
+By performing an FFT of the current entering each node
+n we observe the behaviour of all tones propagating along
+the amplifier. We observe wave mixing processes includ-
+ing generation of the idler tone (fi = 4.8 GHz) at the dif-
+ference of the pump and signal tones. This wave mixing
+derives solely from the non-linear current phase relation
+of the Josephson junction I = Ic sin(φ) and demonstrates
+the ability of WRspice to model the non-linear behaviour
+of the system. Fig. 2 shows a colourmap of the current at
+each node of the JTWPA as simulated by WRspice. Note
+that as well as the signal, pump, and idler, we observe
+significant generation of pump harmonics f2p , f3p , f4p ,
+and f5p . In addition to the pump harmonics, we observe
+sum-frequency generation associated with the pump and
+the pump harmonics.
+   The signal tone amplifies along the JTWPA from an
+input amplitude of Isrms (0) ≈ 0.10 µA to Isrms (399) ≈       FIG. 2. Colourmap showing the current at each node of the
+0.19 µA representing a signal gain of 5.5 dB. This gain is    JTWPA circuit, as simulated in WRspice. The colourmap
+                                                              shows the expected pump, signal, and idler tones as well as
+less than a third of that predicted in Ref. 16 for the same
+                                                              generation of additional tones. The harmonics of the pump
+pump and signal input amplitudes and JTWPA length.            (second-, third-, fourth- and fifth-harmonic generation shown)
+We show here that the generation of the additional terms      are clearly observed. Sum frequency generation (pump +
+seen in the WRspice simulations accounts for most of the      idler, pump + signal, etc) are also observed. Pump harmonic
+reduction in amplifier gain observed in WRspice when          terms labelled in red, pump-mediated sum-frequency genera-
+compared to the gain expected from the analytical theory      tion labelled in blue.
+described in Ref. 16. It is therefore clear that for the
+given circuit parameters additional tones must be taken
+into account in the analytical theory.                        TABLE I. Tones included in each Coupled Mode Equation
+                                                              (CME) set. (CME-k) contains all pump-mediated mixing
+                                                              tones up to, and including the kth -harmonic of the pump.
+   B.   Extension of the Coupled Mode Equations
+                                                              CME-1        CME-2         CME-3        CME-4         CME-5
+
+   To allow the analytical theory to capture more of the      fi           fi            fi           fi            fi
+behaviour demonstrated by the JTWPA simulations we            fs           fs            fs           fs            fs
+extend the coupled mode equations (CMEs) to include           fp           fp            fp           fp            fp
+additional tones. The theory extension method is similar                   fp+i          fp+i         fp+i          fp+i
+to that considered by Chaudhuri et al for the 4WM case                     fp+s          fp+s         fp+s          fp+s
+[19]. In Table I the conventional theory as presented in                   f2p           f2p          f2p           f2p
+                                                                                         f2p+i        f2p+i         f2p+i
+Ref. 16 is denoted as ‘CME-1’ and includes the pump, sig-
+                                                                                         f2p+s        f2p+s         f2p+s
+nal and idler tones. Each further CME extension (CME-                                    f3p          f3p           f3p
+k) contains all pump-mediated mixing tones up to and                                                  f3p+i         f3p+i
+including the k th -harmonic of the pump. Here we extend                                              f3p+s         f3p+s
+up to CME-5. The constituent tones of each CME set                                                    f4p           f4p
+are shown in Table I.                                                                                               f4p+i
+   The inclusion of tones in the extended CMEs is de-                                                               f4p+s
+scribed in detail below for the case of CME-2 (inclusion                                                            f5p
+of the second harmonic of the pump, f2p , and the pump-
+mediated sum-frequency generations, fp+i and fp+s ). We
+introduce additional propagators ∂Ap+i /∂x, ∂Ap+s /∂x,
+                                                                                                                                      3
+
+and ∂A2p /∂x in the allowed space of states Φ where,                    and,
+                     X                                                                  1                              2πLg Ic
+         Φ=                        Aj (x)ei(kj x−ωj t) + c.c.,    (1)             β = βL sin(φdc ),      and βL =              ,
+              j=i,s,p,p+i,p+s,2p
+                                                                                        2                                Φ0
+
+where Aj (x) is the amplitude at dimensionless coordinate
+x along the JTWPA of the j th -tone in the space of states.             where ωJ is the plasma frequency, ω0 is the cutoff fre-
+   We treat these additional tones as a generated tone in               quency, with Lg the geometric inductance of the SQUID
+the same way as the idler, that is, Ap+i (0) = Ap+s (0) =               loop, C0 capacitance to ground of the line, CJ the junc-
+A2p (0) = Ai (0) = 0. We then idealise our SQUID embed-                 tion capacitance, Ic the junction critical current and Φ0
+ded transmission line to be purely non-centrosymmetric.                 is the magnetic flux quantum. By assuming the non-
+This is the 3WM regime, where the coefficient of the cu-                linear component of Eq. (2) acts as a perturbation to the
+bic non-linearity γ = 0. We follow the process outlined                 super-linear equation,
+in Refs 15 and 16 to obtain the wave equation describing
+                                                                                      ∂2Φ       ∂2Φ      ∂4Φ
+our transmission line of the form,
+                                                                                        2
+                                                                                          − ω0−2 2 + ωJ2 2 2 = 0                     (3)
+                                                                                      ∂x        ∂t      ∂x ∂t
+         ∂2Φ          2
+                 −2 ∂ Φ
+                                  4
+                             −2 ∂ Φ                                     we take the resulting super-linear dispersion solution,
+             − ω 0       + ωJ
+         ∂x2         ∂t2        ∂x2 ∂t2
+                                             i 0                  (2)                                     ω
+                   ∂ h ∂Φ 2
+                            i     ∂ h ∂Φ
+                                         
+                                           3
+                                             :                                             k(ω) =       p             ,              (4)
+             +β                +γ         = 0,                                                  ω0 ( 1 − ω2/ωJ2 )
+                 ∂x ∂x             ∂x ∂x
+where,                                                                  and the space of allowed states in Eq. (1) as a trial solu-
+                                                                        tion to generate the coupled mode equations CME-2.
+                       1                            1                      For frequencies much lower than the junction plasma
+           ω0 = p           ,   and ωJ = p               ,              frequency ω 2 /ωJ2 ≈ 0, therefore Eq. (4) can be simplified
+                      Lg C0                        Lg CJ
+                                                                        to k(ω) ≈ ω/ω0 . We now construct a simple set of CMEs
+                                                                        including the tones fp+i , fp+s , and f2p to find,
+
+
+
+              dAi   β                                                                                                 
+                  =    kp ks Ap A∗s ei(kp −ks )x + kp kp+i Ap+i A∗p ei(kp+i −kp )x + k2p kp+s A2p A∗p+s ei(k2p −kp+s )x e−iki x ,    (5)
+               dx   2
+              dAs   β                                                                                                 
+                  =    kp ki Ap A∗i ei(kp −ki )x + kp kp+s Ap+s A∗p ei(kp+s −kp )x + k2p kp+i A2p A∗p+i ei(k2p −kp+i )x e−iks x ,    (6)
+               dx   2
+              dAp   β
+                  =     − ks ki Ai As ei(ks +ki )x + kp+s ks Ap+s A∗s ei(kp+s −ks )x + kp+i ki Ap+i A∗i ei(kp+i −ki )x               (7)
+               dx   2                                  
+                           + k2p kp A2p A∗p ei(k2p −kp )x e−ikp x ,
+          dAp+i   β                                                          
+                =    − kp ki Ap Ai ei(kp +ki )x + k2p ks A2p A∗s ei(k2p −ks )x e−ikp+i x ,                                           (8)
+            dx    2
+          dAp+s   β                                                          
+                =    − kp ks Ap As ei(kp +ks )x + k2p ki A2p A∗i ei(k2p −ki )x e−ikp+s x ,                                           (9)
+            dx    2
+           dA2p   β  kp2 A2p i(kp +kp )x                                                                   
+                =    −        e            − kp+i ks Ap+i As ei(kp+i +ks )x − kp+s ki Ap+s Ai ei(kp+s +ki )x e−ik2p x .             (10)
+             dx   2       2
+
+
+
+  Neglecting all terms proportional to Ap+i , Ap+s , and                           dAp    β                       
+                                                                                       = − ks ki As Ai ei(ks +ki )x e−ikp x .       (13)
+A2p , as well as their derivatives shows that we recover                            dx    2
+the conventional CMEs used to describe the three wave
+parametric amplification,
+                                                                        A similar set of extended equations are constructed for
+                                                                        CMEs-3, 4, and 5 (see Appendices A–C for a full list of
+                                                                        the equations). Each set of equations, CME-1 (Eqs. (11)–
+           dAi   β                                                    (13)), CME-2 (Eqs. (5)–(10)), CME-3 (Eqs. (A1)–(A9)),
+               =    kp ks Ap A∗s ei(kp −ks )x e−iki x ,          (11)   CME-4 (Eqs. (B1)–(B12)), and CME-5 (Eqs. (C1)–
+            dx   2
+           dAs   β                                                    (C15)) are solved numerically using the ode45 function
+               =    kp ki Ap A∗i ei(kp −ki )x e−iks x ,          (12)   in MATLAB.
+            dx   2
+                                                                                                                           4
+
+
+
+
+FIG. 3. Comparison between the extended CME-5 and the
+WRspice simulations of the pump (fp ) and second harmonic
+of the pump (f2p ). Iprms (0) ≈ 1.97 µA. The amplitude of both
+tones measured at each node as simulated in WRspice are well
+described using CME-5 up to node 250.
+
+
+    C.   Comparison of WRspice Simulations and
+          Coupled Mode Equation Solutions
+                                                                 FIG. 4. Plots of WRspice junction phase between nodes 500
+  In order to compare the WRspice simulations with the           and 1000. Taken at t = 15 ns. (a) Iprms (0) ≈ 1.97 µA as per
+solutions to the Coupled Mode Equations it is necessary          Ref 16. Phase set to ϕdc = π/2. Strong pump current causes
+to relate the current I(n) used in WRspice to the ampli-         large phase swing (≈ ±π/4) and dc bias moves away from
+tude A(x) used in the CMEs with the following relation,          optimal position. (b) Pump current reduced to Iprms (0) ≈
+                                                                 1.40 µA. Both phase swing and dc offset reduced. (c) Pump
+                                                                 current used in simulations to investigate JTWPA signal gain
+                                    ωLg Ic                       Iprms (0) ≈ 0.67 µA. Minimal phase swing observed, dc bias
+                 I rms (n) = |A(x)| √       ,            (14)
+                                      2βL Z                      position remaining at optimal position (ϕdc = π/2).
+             p
+where Z = L/C0 is the impedance of the line.
+   To compare the WRspice simulations results with the
+                                                                 bias point such that the device no longer operates in the
+solutions to the CMEs we focus first on the interaction
+                                                                 purely non-centrosymmetric regime.
+between the pump fp and the second harmonic of the
+pump f2p . From the WRspice output shown in Fig. 2                  Note also that for such high input pump currents as
+it is clear that the f2p tone is of large amplitude and          shown in Fig. 2 for which Iprms (0) ≈ 1.97 µA, pump har-
+thus the second harmonic generation of the pump is a             monic generation up to f7p is observed (not shown in fig-
+dominant mixing mechanism not accounted for in the               ure). As we only extend the CMEs to CME-5 we choose
+CME-1 theory. Fig. 3 shows the solution to CME-5 for             to reduce the input pump current such that pump har-
+the fp and f2p tones compared to the WRspice output.             monics beyond f5p are insignificant, and that the assump-
+The amplitude of both tones is well described by the             tion that ϕac is small compared to ϕdc is upheld. Fig. 4
+CME-5 solutions up to node 250, beyond which there is            shows that reducing the pump power from Iprms (0) ≈
+significant disagreement.                                        1.97 µA to Iprms (0) ≈ 0.67 µA reduces the amplitude of
+   There are a number of assumptions made in the orig-           ϕac , and maintains a bias point ϕdc = 1.57 = π/2 (non-
+inal CME-1 theory (and carried through our CME ex-               centrosymmetric regime).
+tensions) that are now considered to ensure we are per-             Fig. 5 shows the current of the pump, and the cur-
+forming WRspice simulations in a regime in which these           rent of the second harmonic of the pump along the
+assumptions are broadly satisfied. The phase of the junc-        JTWPA. The fit of CME-5 to the WRspice data is greatly
+tion is set by a dc bias of ϕdc = π/2 in order to operate in     improved with the pump power reduced to Iprms (0) ≈
+a purely non-centrosymmetric regime. The ac phase ϕac            0.67 µA, and remains in agreement over more nodes.
+is assumed to be small with respect to ϕdc . Fig. 4 shows        Fig. 5 also shows that reducing the number of allowed
+that for high pump currents, approaching 2 µA, ϕac can           states in the set of equations (i.e.,CME-5 → CME-4 →
+no longer be considered to be small in comparison to ϕdc .       CME-3 → CME-2 → CME-1) results in an increased de-
+In addition, so called optical rectification is absent in the    viation of the agreement between the CME solutions and
+CMEs. Optical rectification is a dc offset generated by          the WRspice output. These results show the risk of re-
+all other tones. The consequence of significant optical          ducing the number of tones represented in the CME set.
+rectification is a deviation from the optimal ϕdc = π/2          As the number of tones are reduced the behaviour of the
+                                                                                                                         5
+
+
+
+
+                                                               FIG. 6. (a) Signal current at each node of the JTWPA cir-
+                                                               cuit for the WRspice simulations and each CME extension.
+                                                               With increasing CME extension we see improved agreement
+                                                               between the CME theory and the WRspice simulations. The
+                                                               traditional analytical theory CME-1 predicts a maximum sig-
+                                                               nal at node n = 1175 corresponding to a gain of 20 dB. We
+                                                               calculate the JTWPA gain for each CME set from the current
+                                                               measured at this node. (b) Gain measured at n = 1175 for
+                                                               each CME extension. The WRspice simulation result is shown
+                                                               with a horizontal dashed line (G = 8.9 dB). The measured
+                                                               gain from each CME is reduced as the number of equations in
+                                                               the CME set increases. The gain measured approaches that
+                                                               of the value calculated from the WRspice simulations.
+
+
+                                                               and WRspice are in fair agreement and exhibit the least
+                                                               gain.
+                                                                  To quantify the reduction in gain observed as the
+                                                               CMEs are extended, we choose the optimal gain node of
+                                                               CME-1 (n = 1175) and compare to the other CMEs and
+                                                               the WRspice simulation at this node. Fig. 6(b) shows
+                                                               as the number of terms in the CMEs increase we cap-
+                                                               ture more complex behaviour of the signal as well as
+                                                               the detrimental effect on the gain. WRspice includes
+                                                               all tones propagating along the JTWPA, as noted ear-
+FIG. 5. Pump, and the second harmonic of the pump cur-         lier, and shows an even lower gain than CME-5 at node
+rents as a function of node number. Iprms (0) ≈ 0.67 µA. The   n = 1175.
+WRspice simulation of the pump and second harmonic of the         Fig. 6(a) also shows deamplification of the signal at the
+pump are shown with dashed lines, and are the same for each    beginning of the JTWPA up to approximately node 300.
+panel. The CME-k solutions are shown with solid lines. Each
+                                                               We believe this deamplification is due to conservation of
+panel shows a decreasing extension of CME. The agreement
+between the WRspice simulations and the CMEs reduces as        energy and the signal power dispersing into some of the
+the number of included tones in the CME are reduced. (a)       other mixing tones. All tones, with the exception of the
+CME-5, (b) CME-4, (c) CME-3, (d) CME-2, (e) CME-1.             pump and the signal, are input to the equations with
+                                                               zero initial amplitude, and thus the power required to
+                                                               generate these tones must initially come from the pump
+pump and the second harmonic of the pump are less well         and signal. It is observed that as the number of tones
+described. Indeed, Fig. 5(d) shows no depletion of the         included in the CMEs increases, the number of nodes
+pump due to second harmonic generation and that the            over which the signal deamplifies increases though the
+CME-1 solutions do not capture the behaviour of the            gradient is unchanged.
+pump tone as simulated by WRspice.
+
+                                                                     III.   DISCUSSION AND CONCLUSION
+               D.   Effect on Signal Gain
+                                                                 Our extension of the CMEs show that CME-1 (includ-
+  Fig. 6(a) shows the signal current at each node of the       ing only the pump, signal, and idler) is insufficient to
+JTWPA for the WRspice simulations and for CME-1 to             capture the complex behaviour of the JTWPA. As we
+CME-5. It can be seen that the presence of additional          increase the number of terms in the CMEs we approach
+tones in the CMEs leads to a reduction in gain. CME-5          the behaviour and gain figures observed in WRspice sim-
+                                                                                                                              6
+
+ulations. We note that whilst good agreement between                der to design an amplifier, and to obtain representative
+CME-5 and WRspice is achieved, there is still not full              gain figures all of the behaviour of the JTWPA should
+agreement. We now speculate below on the sources of                 be included. In this regard WRspice should be consid-
+the remaining discrepancy.                                          ered as the most reliable design tool. Both the simu-
+   Only the quadratic term in the current-phase relation            lations and the extended CME analytical theory show
+of the flux-biased SQUID is included in the formation               clearly that the generation of pump harmonics and the
+of the CMEs. Inclusion of the quartic (and higher-order)            pump-mediated sum frequency generation terms must be
+terms may bring the WRspice and CME results into even               considered when designing such a broadband device. In
+better agreement. The dc offset generated by all other              order to achieve the gains required for a usable JTWPA
+tones (optical rectification) is also not included in the           sufficient for quantum-limited amplification, engineering
+CMEs whilst a dc current is seen in the WRspice for high            to suppress the pump harmonic generation may need be
+pump currents. Finally, our choice of CME extensions are            implemented. Some of this engineering is already consid-
+based on the WRspice results which show large amplitude             ered in the form of stop-band engineering [14, 16, 20].
+pump harmonic and pump-mediated tones. Only these
+tones are included in the CME extensions we have pre-                  This work realises a simple, computationally inexpen-
+sented in this work. Additional tones, including higher             sive, method for extension of the CMEs describing propa-
+harmonics of the signal, may need consideration for im-             gators which have been previously neglected and demon-
+proved agreement between WRspice and the CMEs.                      strates the utility of WRspice for simulation of non-linear
+   We believe these results will have practical conse-              superconducting circuits, in particular as a design tool for
+quences for the design and operation of JTWPAs, in                  JTWPAs.
+particular for considerations of measurement bandwidth,                               ACKNOWLEDGMENTS
+tone reflections, and optimisation procedures.
+   To conclude, we demonstrate that a simple consider-
+ation of only three tones is insufficient to describe the              This project has received funding from the EMPIR
+complex behaviour of the JTWPA. We have presented                   programme co-financed by the Participating States and
+four further extensions of the coupled mode equations,              from the European Unions Horizon 2020 research and
+increasing the number of interacting tones included with            innovation programme. This work is part of the the
+each extension. We also used WRspice to simulate the                Joint Research Project PARAWAVE, and we would
+JTWPA and compared its output to that of the extended               like to thank members of the consortium, in particular
+coupled mode equations. Each further extension of the               R. Dolata, M. Khabipov, C. Kißling, and A. B. Zorin
+CMEs agreed more accurately with the WRspice simula-                for useful discussions on the operation of the JTWPA.
+tion.                                                               The work is partially supported by the UK Department
+   We note that whilst good agreement between CME-5                 of Business, Energy and Industrial Strategy (BEIS). We
+and WRspice is achieved, there is still not full agreement          thank J. Burnett and J. C. Gallop for critical review of
+and we have discussed possible reasons for this. In or-             the manuscript.
+
+
+
+
+                                            Appendix A: Extension to CME-3
+
+
+  CME-3 extends CME-2 by including the third harmonic of the pump f3p , and the sum-frequency terms f2p+i and
+f2p+s . We show in detail all of the terms included in the coupled mode equation forming CME-3.
+
+
+              dAp   β
+                  =    − ks ki As Ai ei(ks +ki )x + k2p A2p kp A∗p ei(k2p −kp ) + kp+s ks Ap+s A∗s ei(kp+s −ks )x          (A1)
+               dx   2
+                       + kp+i ki Ap+i A∗i ei(kp+i −ki )x + k3p k2p A3p A∗2p ei(k3p −k2p )x
+                                                                                                                
+                           + k2p+s kp+s A2p+s A∗p+s ei(k2p+s −kp+s )x + k2p+i kp+i A2p+i A∗p+i ei(k2p+i −kp+i )x e−ikp x
+              dAs   β
+                  =    ki kp A∗i Ap ei(kp −ki )x + kp kp+s A∗p Ap+s ei(kp+s −kp )x + k2p kp+i A∗p+i A2p ei(k2p −kp+i )x    (A2)
+               dx   2                                                                                    
+                           + k3p k2p+i A3p A∗2p+i ei(k3p −k2p+i )x + k2p+s k2p A2p+s A∗2p ei(k2p+s −k2p )x e−iks x
+              dAi   β
+                  =    ks kp A∗s Ap ei(kp −ks )x + kp kp+i A∗p Ap+i ei(kp+i −kp )x + k2p kp+s A∗p+s A2p ei(k2p −kp+s )x    (A3)
+              dx    2                                                                                    
+                           + k3p k2p+s A3p A∗2p+s ei(k3p −k2p+s )x + k2p+i k2p A2p+i A∗2p ei(k2p+i −k2p )x e−iki x
+                                                                                                                         7
+
+            dA2p   β  2 2 i(2kp )x
+                 =    k A e          − ki kp+s Ai Ap+s ei(ki +kp+s )x − kp+i ks Ap+i As ei(kp+i +ks )x                (A4)
+              dx   4 p p
+                      + kp k3p A∗p A3p ei(k3p −kp )x + k2p+s ks A2p+s A∗s ei(k2p+s −ks )x
+                                                          
+                      + k2p+i ki A2p+i A∗i ei(k2p+i −ki )x e−ik2p x
+           dAp+s   β
+                 =    − kp ks Ap As ei(kp +ks )x + ki k2p A∗i A2p ei(k2p −ki )x                                       (A5)
+             dx    2                                                                            
+                      + k3p kp+i A3p A∗p+i ei(k3p −kp+i )x + k2p+s kp A2p+s A∗p ei(k2p+s −kp )x e−ikp+s x
+           dAp+i   β
+                 =    − kp ki Ap Ai ei(kp +ki )x + ks k2p A∗s A2p ei(k2p −ks )x                                       (A6)
+             dx    2                                                                            
+                      + k3p kp+s A3p A∗p+s ei(k3p −kp+s )x + k2p+i kp A2p+i A∗p ei(k2p+i −kp )x e−ikp+i x
+            dA3p   β
+                 =    − kp k2p Ap A2p ei(kp +k2p )x − kp+s kp+i Ap+s Ap+i ei(kp+s +kp+i )x                            (A7)
+              dx   2                                                                         
+                      − ks k2p+i As A2p+i ei(ks +k2p+i )x − ki k2p+s Ai A2p+s ei(ki +k2p+s )x e−ik3p x
+          dA2p+s   β
+                 =    − kp kp+s Ap Ap+s ei(kp +kp+s )x − ks k2p As A2p ei(ks +k2p )x                                  (A8)
+            dx     2                                
+                      + k3p ki A3p A∗i ei(k3p −ki )x e−ik2p+s x
+          dA2p+i   β
+                 =    − kp kp+i Ap Ap+i ei(kp +kp+i )x − ki k2p Ai A2p ei(ki +k2p )x                                  (A9)
+            dx     2                                
+                      + k3p ks A3p A∗s ei(k3p −ks )x e−ik2p+i x
+
+
+
+
+                                            Appendix B: Extension to CME-4
+
+  The penultimate coupled mode equation extension that we present in full is the extension from CME-3 to CME-4
+by inclusion of the fourth harmonic of the pump f4p , and the sum-frequency terms f3p+i and f3p+s . The full list of
+tones included in CME-4 is shown in Table I. We show below in detail all of the terms included in the coupled mode
+equation forming CME-4.
+
+          dAp   β
+              =    − ks ki As Ai ei(ks +ki )x + k2p A2p kp A∗p ei(k2p −kp )x + kp+s ks Ap+s A∗s ei(kp+s −ks )x        (B1)
+           dx   2
+                   + kp+i ki Ap+i A∗i ei(kp+i −ki )x + k3p k2p A3p A∗2p ei(k3p −k2p )x
+                       + k2p+s kp+s A2p+s A∗p+s ei(k2p+s −kp+s )x + k2p+i kp+i A2p+i A∗p+i ei(k2p+i −kp+i )x
+                       + k4p k3p A4p A∗3p ei(k4p −k3p )x + k3p+s k2p+s A3p+s A∗2p+s ei(k3p+s −k2p+s )x
+                                                                    
+                       + k3p+i k2p+i A3p+i A∗2p+i ei(k3p+i −k2p+i )x e−ikp x
+          dAs   β
+              =    ki kp A∗i Ap ei(kp −ki )x + kp kp+s A∗p Ap+s ei(kp+s −kp )x + k2p kp+i A∗p+i A2p ei(k2p −kp+i )x   (B2)
+           dx   2
+                   + k3p k2p+i A3p A∗2p+i ei(k3p −k2p+i )x + k2p+s k2p A2p+s A∗2p ei(k2p+s −k2p )x
+                                                                                                     
+                   + k4p k3p+i A4p A∗3p+i ei(k4p −k3p+i )x + k3p k3p+s A3p+s A∗3p ei(k3p+s −k3p )x e−iks x
+          dAi   β
+              =    ks kp A∗s Ap ei(kp −ks )x + kp kp+i A∗p Ap+i ei(kp+i −kp )x + k2p kp+s A∗p+s A2p ei(k2p −kp+s )x   (B3)
+           dx   2
+                   + k3p k2p+s A3p A∗2p+s ei(k3p −k2p+s )x + k2p+i k2p A2p+i A∗2p ei(k2p+i −k2p )x
+                                                                                                     
+                   + k4p k3p+s A4p A∗3p+s ei(k4p −k3p+s )x + k3p k3p+i A3p+i A∗3p ei(k3p+i −k3p )x e−iki x
+                                                                                                                    8
+
+  dA2p   β  kp2 A2p i(kp +kp )x
+       =            e            − ki kp+s Ai Ap+s ei(ki +kp+s )x − kp+i ks Ap+i As ei(kp+i +ks )x                (B4)
+   dx    2      2
+             + kp k3p A∗p A3p ei(k3p −kp )x + k2p+s ks A2p+s A∗s ei(k2p+s −ks )x
+                + k2p+i ki A2p+i A∗i ei(k2p+i −ki )x + k4p k2p+i A4p A∗2p ei(k4p −k2p )x
+                                                                                                     
+                + k3p+s kp+s A3p+s A∗p+s ei(k3p+s −kp+s )x + k3p+i kp+i A3p+i A∗p+i ei(k3p+i −kp+i )x e−ik2p x
+ dAp+s   β
+       =    − kp ks Ap As ei(kp +ks )x + ki k2p A∗i A2p ei(k2p −ki )x                                             (B5)
+  dx     2
+            + k3p kp+i A3p A∗p+i ei(k3p −kp+i )x + k2p+s kp A2p+s A∗p ei(k2p+s −kp )x
+                                                                                               
+                + k4p k2p+i A4p A∗2p+i ei(k4p −k2p+i )x + k3p+s k2p A3p+s A∗2p ei(k3p+s −k2p )x e−ikp+s x
+ dAp+i   β
+       =    − kp ki Ap Ai ei(kp +ki )x + ks k2p A∗s A2p ei(k2p −ks )x                                             (B6)
+  dx     2
+            + k3p kp+s A3p A∗p+s ei(k3p −kp+s )x + k2p+i kp A2p+i A∗p ei(k2p+i −kp )x
+                                                                                               
+                + k4p k2p+s A4p A∗2p+s ei(k4p −k2p+s )x + k3p+i k2p A3p+i A∗2p ei(k3p+i −k2p )x e−ikp+i x
+  dA3p   β
+       =    − kp k2p Ap A2p ei(kp +k2p )x − kp+s kp+i Ap+s Ap+i ei(kp+s +kp+i )x                                  (B7)
+   dx    2
+            − ks k2p+i As A2p+i ei(ks +k2p+i )x − ki k2p+s Ai A2p+s ei(ki +k2p+s )x
+                + k4p kp A4p A∗p ei(k4p −kp )x + k3p+s ks A3p+s A∗s ei(k3p+s −ks )x
+                                                    
+                + k3p+i ki A3p+i A∗i ei(k3p+i −ki )x e−ik3p x
+dA2p+s   β
+       =    − kp kp+s Ap Ap+s ei(kp +kp+s )x − ks k2p As A2p ei(ks +k2p )x                                        (B8)
+  dx     2
+            + k3p ki A3p A∗i ei(k3p −ki )x + k4p kp+i A4p A∗p+i ei(k4p −kp+i )x
+                                                  
+            + k3p+s kp A3p+s A∗p ei(k3p+s −kp )x e−ik2p+s x
+dA2p+i   β
+       =    − kp kp+i Ap Ap+i ei(kp +kp+i )x − ki k2p Ai A2p ei(ki +k2p )x                                        (B9)
+  dx     2
+            + k3p ks A3p A∗s ei(k3p −ks )x + k4p kp+s A4p A∗p+s ei(k4p −kp+s )x
+                                                 
+            + k3p+i kp A3p+i A∗p ei(k3p+i −kp )x e−ik2p+i x
+  dA4p   β
+       =    − kp k3p Ap A3p ei(kp +k3p )x − ks k3p+i As A3p+i ei(k3p+i +ks )x                                    (B10)
+   dx    2
+                                                     2
+                                                    k2p A22p i(k2p +k2p )x
+            − ki k3p+s Ai A3p+s ei(ki +k3p+s )x −           e
+                                                       2                                           
+                − kp+s k2p+i Ap+s A2p+i ei(kp+s +k2p+i )x − kp+i k2p+s Ap+i A2p+s ei(kp+i +k2p+s )x e−ik4p x
+dA3p+s   β
+       =    − kp k2p+s Ap A2p+s ei(kp +k2p+s )x − k2p kp+s A2p Ap+s ei(k2p +kp+s )x                              (B11)
+  dx     2                                                       
+                − ks k3p As A3p ei(ks +k3p )x + ki k4p A∗i A4p ei(k4p −ki )x e−ik3p+s x
+dA3p+i   β
+       =    − kp k2p+i Ap A2p+i ei(kp +k2p+i )x − k2p kp+i A2p Ap+i ei(k2p +kp+i )x                              (B12)
+  dx     2                                                        
+                − ki k3p Ai A3p ei(ki +k3p )x + ks k4p A∗s A4p ei(k4p −ks )x e−ik3p+i x
+                                                                                                                             9
+
+                                            Appendix C: Extension to CME-5
+
+
+
+
+  The final coupled mode equation extension that we present in full is the extension from CME-4 to CME-5 by
+inclusion of the fifth harmonic of the pump f5p , and the sum-frequency terms f4p+i and f4p+s . The full list of tones
+included in CME-5 is shown in Table I. We show below in detail all of the terms included in the coupled mode equation
+forming CME-5.
+
+
+
+
+               dAi   β
+                   =    ks kp Ap A∗s ei(kp −ks )x + kp+i kp Ap+i A∗p ei(kp+i −kp )x                                       (C1)
+               dx    2
+                        + k2p kp+s A2p A∗p+s ei(k2p −kp+s )x + k2p+i k2p A2p+i A∗2p ei(k2p+i −k2p )x
+                            + k3p k2p+s A3p A∗2p+s ei(k3p −k2p+s )x + k3p+i k3p A3p+i A∗3p ei(k3p+i −k3p )x
+                            + k4p k3p+s A4p A∗3p+s ei(k4p −k3p+s )x + k4p+i k4p A4p+i A∗4p ei(k4p+i −k4p )x
+                                                                   
+                            + k5p k4p+s A5p A∗4p+s ei(k5p −k4p+s )x e−iki x
+               dAs   β
+                   =    ki kp Ap A∗i ei(kp −ki )x + kp+s kp Ap+s A∗p ei(kp+s −kp )x                                       (C2)
+                dx   2
+                        + k2p kp+i A2p A∗p+i ei(k2p −kp+i )x + k2p+s k2p A2p+s A∗2p ei(k2p+s −k2p )x
+                            + k3p k2p+i A3p A∗2p+i ei(k3p −k2p+i )x + k3p+s k3p A3p+s A∗3p ei(k3p+s −k3p )x
+                            + k4p k3p+i A4p A∗3p+i ei(k4p −k3p+i )x + k4p+s k4p A4p+s A∗4p ei(k4p+s −k4p )x
+                                                                   
+                            + k5p k4p+i A5p A∗4p+i ei(k5p −k4p+i )x e−iks x
+               dAp   β
+                   =    − ki ks Ai As ei(ki +ks )x + kp+i ki Ap+i A∗i ei(kp+i −ki )x                                      (C3)
+                dx   2
+                        + kp+s ks Ap+s A∗s ei(kp+s −ks )x + k2p kp A2p A∗p ei(k2p −kp )x
+                            + k2p+i kp+i A2p+i A∗p+i ei(k2p+i −kp+i )x + k2p+s kp+s A2p+s A∗p+s ei(k2p+s −kp+s )x
+                            + k3p k2p A3p A∗2p ei(k3p −k2p )x + k3p+i k2p+i A3p+i A∗2p+i ei(k3p+i −k2p+i )x
+                            + k3p+s k2p+s A3p+s A∗2p+s ei(k3p+s −k2p+s )x + k4p k3p A4p A∗3p ei(k4p −k3p )x
+                            + k4p+i k3p+i A4p+i A∗3p+i ei(k4p+i −k3p+i )x + k4p+s k3p+s A4p+s A∗3p+s ei(k4p+s −k3p+s )x
+                                                             
+                            + k5p k4p A5p A∗4p ei(k5p −k4p )x 2e−ikp x
+             dAp+i   β
+                   =    − ki kp Ai Ap ei(ki +kp )x + k2p ks A2p A∗s ei(k2p −ks )x                                         (C4)
+              dx     2
+                        + k2p+i kp A2p+i A∗p ei(k2p+i −kp )x + k3p kp+s A3p A∗p+s ei(k3p −kp+s )x
+                            + k3p+i k2p A3p+i A∗2p ei(k3p+i −k2p )x + k4p k2p+s A4p A∗2p+s ei(k4p −k2p+s )x
+                                                                                                           
+                            + k4p+i k3p A4p+i A∗3p ei(k4p+i −k3p )x + k5p k3p+s A5p A∗3p+s ei(k5p −k3p+s )x e−ikp+i x
+             dAp+s   β
+                   =    − ks kp As Ap ei(ks +kp )x + k2p ki A2p A∗i ei(k2p −ki )x                                         (C5)
+              dx     2
+                        + k2p+s kp A2p+s A∗p ei(k2p+s −kp )x + k3p kp+i A3p A∗p+i ei(k3p −kp+i )x
+                            + k3p+s k2p A3p+s A∗2p ei(k3p+s −k2p )x + k4p k2p+i A4p A∗2p+i ei(k4p −k2p+i )x
+                                                                                                           
+                            + k4p+s k3p A4p+s A∗3p ei(k4p+s −k3p )x + k5p k3p+i A5p A∗3p+i ei(k5p −k3p+i )x e−ikp+s x
+                                                                                                               10
+
+  dA2p   β
+       =    − ki kp+s Ai Ap+s ei(ki +kp+s )x − ks kp+i As Ap+i ei(ks +kp+i )x                               (C6)
+   dx    2
+              kp2 A2p i(kp +kp )x
+            −        e            + k2p+i ki A2p+i A∗i ei(k2p+i −ki )x
+                 2
+            + k2p+s ks A2p+s A∗s ei(k2p+s −ks )x + k3p kp A3p A∗p ei(k3p −kp )x
+                 + k3p+i kp+i A3p+i A∗p+i ei(k3p+i −kp+i )x + k3p+s kp+s A3p+s A∗p+s ei(k3p+s −kp+s )x
+                 + k4p k2p A4p A∗2p ei(k4p −k2p )x + k4p+i k2p+i A4p+i A∗2p+i ei(k4p+i −k2p+i )x
+                                                                                                
+                 + k4p+s k2p+s A4p+s A∗2p+s ei(k4p+s −k2p+s )x + k5p k3p A5p A∗3p ei(k5p −k3p )x e−ik2p x
+dA2p+i   β
+       =    − ki k2p Ai A2p ei(ki +k2p )x − kp kp+i Ap Ap+i ei(kp +kp+i )x                                  (C7)
+  dx     2
+            + k3p ks A3p A∗s ei(k3p −ks )x + k3p+i kp A3p+i A∗p ei(k3p+i −kp )x
+                 + k4p kp+s A4p A∗p+s ei(k4p −kp+s )x + k4p+i k2p A4p+i A∗2p ei(k4p+i −k2p )x
+                                                        
+                 + k5p k2p+s A5p A∗2p+s ei(k5p −k2p+s )x e−ik2p+i x
+dA2p+s   β
+       =    − ks k2p As A2p ei(ks +k2p )x − kp kp+s Ap Ap+s ei(kp +kp+s )x                                  (C8)
+  dx     2
+            + k3p ki A3p A∗i ei(k3p −ki )x + k3p+s kp A3p+s A∗p ei(k3p+s −kp )x
+                 + k4p kp+i A4p A∗p+i ei(k4p −kp+i )x + k4p+s k2p A4p+s A∗2p ei(k4p+s −k2p )x
+                                                        
+                 + k5p k2p+i A5p A∗2p+i ei(k5p −k2p+i )x e−ik2p+s x
+  dA3p   β
+       =    − ki k2p+s Ai A2p+s ei(ki +k2p+s )x − ks k2p+i As A2p+i ei(ks +k2p+i )x                         (C9)
+   dx    2
+            − kp k2p Ap A2p ei(kp +k2p )x − kp+i kp+s Ap+i Ap+s ei(kp+i +kp+s )x
+                 + k3p+i ki A3p+i A∗i ei(k3p+i −ki )x + k3p+s ks A3p+s A∗s ei(k3p+s −ks )x
+                 + k4p kp A4p A∗p ei(k4p −kp )x + k4p+i kp+i A4p+i A∗p+i ei(k4p+i −kp+i )x
+                                                                                             
+                 + k4p+s kp+s A4p+s A∗p+s ei(k4p+s −kp+s )x + k5p k2p A5p A∗2p ei(k5p −k2p )x e−ik3p x
+dA3p+i   β
+       =    − ki k3p Ai A3p ei(ki +k3p )x − kp k2p+i Ap A2p+i ei(kp +k2p+i )x                               (C10)
+  dx     2
+            − kp+i k2p Ap+i A2p ei(kp+i +k2p )x + k4p ks A4p A∗s ei(k4p −ks )x
+                 + k4p+i kp A4p+i A∗p ei(k4p+i −kp )x + k5p kp+s A5p A∗p+s ei(k5p −kp+s )x )e−ik3p+i x
+dA3p+s      β
+       =   − ks k3p As A3p ei(ks +k3p )x − kp k2p+s Ap A2p+s ei(kp +k2p+s )x                                (C11)
+  dx     2
+           − kp+s k2p Ap+s A2p ei(kp+s +k2p )x + k4p ki A4p A∗i ei(k4p −ki )x
+                                                                                          
+                 + k4p+s kp A4p+s A∗p ei(k4p+s −kp )x + k5p kp+i A5p A∗p+i ei(k5p −kp+i )x e−ik3p+s x
+  dA4p   β
+       =    − ki k3p+s Ai A3p+s ei(ki +k3p+s )x − ks k3p+i As A3p+i ei(ks +k3p+i )x                         (C12)
+   dx    2
+            − kp k3p Ap A3p ei(kp +k3p )x − kp+i k2p+s Ap+i A2p+s ei(kp+i +k2p+s )x
+                                                                  2
+                                                                k2p A22p i(k2p +k2p )x
+                 − kp+s k2p+i Ap+s A2p+i ei(kp+s +k2p+i )x −            e
+                                                                    2
+                 + k4p+i ki A4p+i A∗i ei(k4p+i −ki )x + k4p+s ks A4p+s A∗s ei(k4p+s −ks )x
+                                               
+                 + k5p kp A5p A∗p ei(k5p −kp )x e−ik4p x
+dA4p+i   β
+       =    − ki k4p Ai A4p ei(ki +k4p )x − kp k3p+i Ap A3p+i ei(kp +k3p+i )x                               (C13)
+  dx     2
+            − kp+i k3p Ap+i A3p ei(kp+i +k3p )x − k2p k2p+i A2p A2p+i ei(k2p +k2p+i )x
+                                          
+            + k5p ks A5p A∗s ei(k5p −ks )x ei(−k4p+i )x
+                                                                                                                              11
+
+            dA4p+s   β
+                   =    − ks k4p As A4p ei(ks +k4p )x − kp k3p+s Ap A3p+s ei(kp +k3p+s )x                                 (C14)
+              dx     2
+                        − kp+s k3p Ap+s A3p ei(kp+s +k3p )x − k2p k2p+s A2p A2p+s ei(k2p +k2p+s )x
+                                                      
+                        + k5p ki A5p A∗i ei(k5p −ki )x e−ik4p+s x
+              dA5p   β
+                   =    − ki k4p+s Ai A4p+s ei(ki +k4p+s )x − ks k4p+i As A4p+i ei(ks +k4p+i )x                           (C15)
+               dx    2
+                        − kp k4p Ap A4p ei(kp +k4p )x − kp+i k3p+s Ap+i A3p+s ei(kp+i +k3p+s )x
+                            − kp+s k3p+i Ap+s A3p+i ei(kp+s +k3p+i )x − k2p k3p A2p A3p ei(k2p +k3p )x
+                                                                        
+                            − k2p+i k2p+s A2p+i A2p+s ei(k2p+i +k2p+s )x e−ik5p x
+
+
+
+
+[1] B. Yurke, L. R. Corruccini, P. G. Kaminsky, L. W.              [10] X. Zhou, V. Schmitt, P. Bertet, D. Vion, W. Wustmann,
+    Rupp, A. D. Smith, A. H. Silver, R. W. Simon, and                   V. Shumeiko, and D. Esteve, High-gain weakly nonlinear
+    E. A. Whittaker, Observation of parametric amplification            flux-modulated josephson parametric amplifier using a
+    and deamplification in a josephson parametric amplifier,            squid array, Phys. Rev. B 89, 214517 (2014).
+    Phys. Rev. A 39, 2519 (1989).                                  [11] J. D. Teufel, T. Donner, M. Castellanos-Beltran, J. W.
+[2] T. Yamamoto, K. Inomata, M. Watanabe, K. Mat-                       Harlow, and K. W. Lehnert, Nanomechanical motion
+    suba, T. Miyazaki, W. D. Oliver, Y. Nakamura, and                   measured with an imprecision below that at the standard
+    J. Tsai, Flux-driven josephson parametric amplifier, Ap-            quantum limit, Nature nanotechnology 4, 820 (2009).
+    plied Physics Letters 93, 042510 (2008).                       [12] B. H. Eom, P. K. Day, H. G. LeDuc, and J. Zmuidzinas, A
+[3] J. Y. Mutus, T. C. White, R. Barends, Y. Chen,                      wideband, low-noise superconducting amplifier with high
+    Z. Chen, B. Chiaro, A. Dunsworth, E. Jeffrey, J. Kelly,             dynamic range, Nature Physics 8, 623 (2012).
+    A. Megrant, et al., Strong environmental coupling in a         [13] C. Macklin, K. O’Brien, D. Hover, M. E. Schwartz,
+    josephson parametric amplifier, Applied Physics Letters             V. Bolkhovsky, X. Zhang, W. D. Oliver, and I. Siddiqi,
+    104, 263513 (2014).                                                 A near–quantum-limited josephson traveling-wave para-
+[4] F. Mallet, M. A. Castellanos-Beltran, H. S. Ku,                     metric amplifier, Science 350, 307 (2015).
+    S. Glancy, E. Knill, K. D. Irwin, G. C. Hilton, L. R.          [14] T. C. White, J. Y. Mutus, I.-C. Hoi, R. Barends,
+    Vale, and K. W. Lehnert, Quantum state tomography of                B. Campbell, Y. Chen, Z. Chen, B. Chiaro,
+    an itinerant squeezed microwave field, Phys. Rev. Lett.             A. Dunsworth, E. Jeffrey, J. Kelly, A. Megrant, C. Neill,
+    106, 220502 (2011).                                                 P. J. J. O’Malley, P. Roushan, D. Sank, A. Vainsencher,
+[5] W. F. Kindel, M. D. Schroer, and K. W. Lehnert, Gen-                J. Wenner, S. Chaudhuri, J. Gao, and J. M. Martinis,
+    eration and efficient measurement of single photons from            Traveling wave parametric amplifier with josephson junc-
+    fixed-frequency superconducting qubits, Phys. Rev. A                tions using minimal resonator phase matching, Applied
+    93, 033817 (2016).                                                  Physics Letters 106, 242601 (2015).
+[6] S. Hacohen-Gourgy, L. P. Garcı́a-Pintos, L. S. Martin,         [15] O. Yaakobi, L. Friedland, C. Macklin, and I. Siddiqi,
+    J. Dressel, and I. Siddiqi, Incoherent qubit control using          Parametric amplification in josephson junction embed-
+    the quantum zeno effect, Phys. Rev. Lett. 120, 020505               ded transmission lines, Phys. Rev. B 87, 144301 (2013).
+    (2018).                                                        [16] A. B. Zorin, Josephson traveling-wave parametric am-
+[7] Z. Lin, K. Inomata, W. Oliver, K. Koshino, Y. Naka-                 plifier with three-wave mixing, Phys. Rev. Applied 6,
+    mura, J. Tsai, and T. Yamamoto, Single-shot readout of              034006 (2016).
+    a superconducting flux qubit with a flux-driven joseph-        [17] S. R. Whiteley, Josephson junctions in spice3, IEEE 23S,
+    son parametric amplifier, Applied Physics Letters 103,              2902 (1991).
+    132602 (2013).                                                 [18] A. L. Cullen, Theory of the travelling-wave parametric
+[8] M. A. Castellanos-Beltran, K. D. Irwin, G. C. Hilton,               amplifier, Proceedings of the IEE - Part B: Electronic
+    L. R. Vale, and K. W. Lehnert, Amplification and squeez-            and Communication Engineering 107, 101 (1960).
+    ing of quantum noise with a tunable josephson metama-          [19] S. Chaudhuri, J. Gao, and K. Irwin, Simulation and anal-
+    terial, Nature Physics 4, 929 (2008).                               ysis of superconducting traveling-wave parametric ampli-
+[9] M. A. Castellanos-Beltranand K. W. Lehnert, Widely                  fiers, IEEE Transactions on Applied Superconductivity
+    tunable parametric amplifier based on a super-                      25, 1 (2015).
+    conducting quantum interference device array res-              [20] A. Zorin, Flux-driven josephson traveling-wave paramet-
+    onator, Applied Physics Letters 91, 083509 (2007),                  ric amplifier, Phys. Rev. Applied 12, 044051 (2019).
+    https://doi.org/10.1063/1.2773988.
+
