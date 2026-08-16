@@ -39,6 +39,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+from scipy.optimize import linear_sum_assignment
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
@@ -55,6 +56,13 @@ from twpa_solver.signal.stability import (  # noqa: E402
 )
 from twpa_solver.stability import track_multiplier_branches  # noqa: E402
 from twpa_solver.signal.floquet import assemble_khat_conversion_base  # noqa: E402
+
+
+def _atomic_write_json(path: Path, payload: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    temporary.replace(path)
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -99,6 +107,18 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                         "secant search) to get an actual growth/decay "
                         "verdict instead of just a real-omega proxy. "
                         "Refuses to run against NON_ANALYTIC_LOSS_MODELS.")
+    p.add_argument(
+        "--initial-root-json",
+        default=None,
+        help="Optional prior setting JSON whose converged complex roots seed "
+             "the first target refinement.",
+    )
+    p.add_argument(
+        "--track-refinement-seeds",
+        action="store_true",
+        help="Seed each target refinement from the adjacent lower setting's "
+             "converged roots before branch tracking.",
+    )
     p.add_argument("--refine-max-iters", type=int, default=30)
     p.add_argument("--refine-tol", type=float, default=1e-9)
     p.add_argument(
@@ -142,6 +162,7 @@ def track_complex_resonance_branches(
 ) -> list[dict[str, Any]]:
     """Order refined roots continuously across the supplied power sequence."""
     previous: np.ndarray | None = None
+    previous_branch_ids: list[int] = []
     for sweep in sweeps:
         roots = sweep.get("complex_resonances", [])
         if not roots:
@@ -150,13 +171,31 @@ def track_complex_resonance_branches(
             complex(root["floquet"]["multiplier_real"], root["floquet"]["multiplier_imag"])
             for root in roots
         ])
-        tracked = values if previous is None else track_multiplier_branches(previous, values)
-        order = [int(np.argmin(np.abs(values - value))) for value in tracked]
+        if previous is None:
+            tracked = values
+            order = list(range(len(values)))
+            branch_ids = list(range(len(values)))
+        elif len(values) >= len(previous):
+            tracked = track_multiplier_branches(previous, values)
+            order = [int(np.argmin(np.abs(values - value))) for value in tracked]
+            branch_ids = previous_branch_ids + list(
+                range(max(previous_branch_ids, default=-1) + 1,
+                      max(previous_branch_ids, default=-1) + 1 + len(values) - len(previous))
+            )
+        else:
+            scale = 1.0 + np.abs(previous)[:, None] + np.abs(values)[None, :]
+            cost = np.abs(previous[:, None] - values[None, :]) / scale
+            matched_rows, matched_columns = linear_sum_assignment(cost)
+            pairs = sorted(zip(matched_rows.tolist(), matched_columns.tolist()))
+            order = [column for _row, column in pairs]
+            tracked = values[order]
+            branch_ids = [previous_branch_ids[row] for row, _column in pairs]
         sweep["complex_resonances"] = [roots[index] for index in order]
         for branch_index, root in enumerate(sweep["complex_resonances"]):
-            root["tracked_branch_index"] = branch_index
+            root["tracked_branch_index"] = branch_ids[branch_index]
         sweep["max_abs_lambda"] = float(np.max(np.abs(tracked)))
         previous = tracked
+        previous_branch_ids = branch_ids
     return sweeps
 
 
@@ -185,7 +224,14 @@ def _load_pump_and_khat(circuit, pump_dir: Path, fallback_freq_ghz: float, sideb
     return pump, ms, khat
 
 
-def _run_sweep(circuit, pump_dir: Path, fallback_freq_ghz: float, args: argparse.Namespace) -> dict[str, Any]:
+def _run_sweep(
+    circuit,
+    pump_dir: Path,
+    fallback_freq_ghz: float,
+    args: argparse.Namespace,
+    refinement_seeds: list[complex] | None = None,
+    include_tier1_candidates: bool = False,
+) -> dict[str, Any]:
     pump, ms, khat = _load_pump_and_khat(
         circuit, pump_dir, fallback_freq_ghz, args.sidebands, args.gamma_nt,
     )
@@ -220,12 +266,24 @@ def _run_sweep(circuit, pump_dir: Path, fallback_freq_ghz: float, args: argparse
         "convergence_ratio": ratio,
         "resonances": resonances,
         "runtime_s": runtime_s,
+        "refinement_seed_source": (
+            "adjacent_lower_converged_roots_plus_current_tier1"
+            if refinement_seeds is not None and include_tier1_candidates
+            else "adjacent_lower_converged_roots"
+            if refinement_seeds is not None
+            else "current_tier1_candidates"
+        ),
+        "refinement_seed_count": (
+            len(refinement_seeds) if refinement_seeds is not None else 0
+        ),
     }
 
-    def serialize_resonance(seed: float, resonance: Any) -> dict[str, Any]:
+    def serialize_resonance(seed: float | complex, resonance: Any) -> dict[str, Any]:
         floquet = classify_floquet_resonance(resonance, pump.omega_p)
+        seed_complex = complex(seed)
         return {
-            "seed_signal_ghz": seed,
+            "seed_signal_ghz": seed_complex.real,
+            "seed_signal_ghz_imag": seed_complex.imag,
             "signal_ghz_real": resonance.signal_ghz.real,
             "signal_ghz_imag": resonance.signal_ghz.imag,
             "growth_rate_per_s": resonance.growth_rate_per_s,
@@ -246,7 +304,17 @@ def _run_sweep(circuit, pump_dir: Path, fallback_freq_ghz: float, args: argparse
 
     if args.refine_complex and resonances:
         t1 = time.perf_counter()
-        candidates = [r["signal_ghz"] for r in resonances]
+        if refinement_seeds is None:
+            candidates = [r["signal_ghz"] for r in resonances]
+        else:
+            candidates = list(refinement_seeds)
+            if include_tier1_candidates:
+                for resonance in resonances:
+                    candidate = float(resonance["signal_ghz"])
+                    if not any(math.isclose(candidate, float(complex(seed).real), rel_tol=0.0, abs_tol=1.0e-9)
+                               for seed in candidates):
+                        candidates.append(candidate)
+        result["refinement_seed_count"] = len(candidates)
         refined = refine_resonances(
             circuit=circuit, khat=khat, omega_p=pump.omega_p, ms=ms,
             candidates_ghz=candidates, loss_model=args.loss_model,
@@ -326,38 +394,85 @@ def run_namespace(args: argparse.Namespace) -> dict[str, Any]:
     out_path = Path(args.out)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     targets: list[dict[str, Any]] = []
+    previous_target: dict[str, Any] | None = None
+    if args.initial_root_json:
+        initial_path = Path(args.initial_root_json)
+        initial_payload = json.loads(initial_path.read_text(encoding="utf-8"))
+        previous_target = initial_payload.get("target", initial_payload)
+        if not isinstance(previous_target, dict):
+            raise ValueError(
+                f"initial root JSON target is not an object: {initial_path}"
+            )
+        if not previous_target.get("complex_resonances"):
+            raise ValueError(
+                f"initial root JSON has no converged complex roots: {initial_path}"
+            )
     for setting_index, pump_dir in enumerate(args.pump_dir):
-        targets.append(
-            _run_sweep(circuit, Path(pump_dir), args.pump_freq_ghz, args)
-        )
+        refinement_seeds = None
+        if args.track_refinement_seeds and previous_target is not None:
+            seed_roots = [
+                root
+                for root in previous_target.get("complex_resonances", [])
+                if root.get("converged")
+            ]
+            seed_roots.sort(key=lambda root: int(root.get("tracked_branch_index", 10**9)))
+            refinement_seeds = []
+            for root in seed_roots[:16]:
+                seed = complex(
+                    float(root["signal_ghz_real"]),
+                    float(root.get("signal_ghz_imag", 0.0)),
+                )
+                if not any(abs(seed - prior) < 1.0e-9 for prior in refinement_seeds):
+                    refinement_seeds.append(seed)
+            if not refinement_seeds:
+                raise ValueError(
+                    "adjacent setting has no converged roots for refinement seeding"
+                )
+        if refinement_seeds is None:
+            target = _run_sweep(
+                circuit,
+                Path(pump_dir),
+                args.pump_freq_ghz,
+                args,
+            )
+        else:
+            target = _run_sweep(
+                circuit,
+                Path(pump_dir),
+                args.pump_freq_ghz,
+                args,
+                refinement_seeds=refinement_seeds,
+                include_tier1_candidates=(setting_index == 0),
+            )
+        if args.track_refinement_seeds and previous_target is not None:
+            track_complex_resonance_branches([previous_target, target])
+        targets.append(target)
+        previous_target = target
         setting_path = out_path.with_name(
             f"{out_path.stem}.setting_{setting_index:02d}.json"
         )
-        setting_path.write_text(
-            json.dumps(
-                {
-                    "setting_index": setting_index,
-                    "pump_dir": str(pump_dir),
-                    "target": targets[-1],
-                },
-                indent=2,
-            )
+        _atomic_write_json(
+            setting_path,
+            {
+                "setting_index": setting_index,
+                "pump_dir": str(pump_dir),
+                "target": targets[-1],
+            },
         )
-    track_complex_resonance_branches(targets)
+    if not args.track_refinement_seeds:
+        track_complex_resonance_branches(targets)
 
     for setting_index, target in enumerate(targets):
         setting_path = out_path.with_name(
             f"{out_path.stem}.setting_{setting_index:02d}.json"
         )
-        setting_path.write_text(
-            json.dumps(
-                {
-                    "setting_index": setting_index,
-                    "pump_dir": str(args.pump_dir[setting_index]),
-                    "target": target,
-                },
-                indent=2,
-            )
+        _atomic_write_json(
+            setting_path,
+            {
+                "setting_index": setting_index,
+                "pump_dir": str(args.pump_dir[setting_index]),
+                "target": target,
+            },
         )
 
     baseline = None
@@ -380,11 +495,13 @@ def run_namespace(args: argparse.Namespace) -> dict[str, Any]:
             "non_analytic_loss_model_warning": args.loss_model in NON_ANALYTIC_LOSS_MODELS,
             "refine_bifurcations": args.refine_bifurcations,
             "bifurcation_fractions": args.bifurcation_fractions,
+            "initial_root_json": args.initial_root_json,
+            "track_refinement_seeds": args.track_refinement_seeds,
         },
         "target": targets[0] if len(targets) == 1 else targets,
         "baseline": baseline,
     }
-    out_path.write_text(json.dumps(out, indent=2))
+    _atomic_write_json(out_path, out)
     for power_index, target in enumerate(targets):
         print(f"[target {power_index}] pump_freq_ghz={target['pump_freq_ghz']:.6f} "
               f"n_points={len(target['signal_ghz'])} runtime_s={target['runtime_s']:.2f}")

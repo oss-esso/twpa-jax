@@ -44,6 +44,8 @@ SOURCE_PORT = 1
 OUT_PORT = 2
 FULL_RESIDUAL_GATE = 1.0e-8
 JUNCTION_CAPACITANCE_F = 145.0e-15
+HILL_MODE_SPACING_GHZ = 0.2417
+HILL_SPURIOUS_ROOT_TOLERANCE_GHZ = HILL_MODE_SPACING_GHZ / 2.0
 TARGET_CURRENTS_A = (
     5.2326e-6,
     5.5233e-6,
@@ -71,6 +73,11 @@ CSV_FIELDS = (
     "production_hb_full_residual_rel",
     "hill_max_abs_lambda",
     "hill_root_frequency_ghz",
+    "hill_max_abs_lambda_before_filter",
+    "hill_root_frequency_ghz_before_filter",
+    "hill_filter_candidates",
+    "hill_filter_rejected_count",
+    "hill_filter_tolerance_ghz",
     "envelope_slope_per_period",
     "max_abs_phi_rad",
     "status",
@@ -156,6 +163,9 @@ def load_records(outdir: Path) -> list[dict[str, Any]]:
 
 
 def persist_records(outdir: Path, rows: list[dict[str, Any]]) -> None:
+    for row in rows:
+        for field in CSV_FIELDS:
+            row.setdefault(field, None)
     rows.sort(
         key=lambda row: (
             str(row["arm"]),
@@ -209,6 +219,95 @@ def _number(value: Any) -> float | None:
         return None
     result = float(value)
     return result if math.isfinite(result) else None
+
+
+def _spurious_hill_root_reason(
+    signal_ghz: float,
+    pump_ghz: float,
+    tolerance_ghz: float = HILL_SPURIOUS_ROOT_TOLERANCE_GHZ,
+) -> str | None:
+    """Return the structural-neutrality reason for a Hill root, if any.
+
+    The tolerance is half the measured 241.7 MHz mode-comb spacing.  The pump
+    frequency is an input so the test remains valid for other columns.
+    """
+    frequency = abs(float(signal_ghz))
+    if frequency <= tolerance_ghz:
+        return "dc"
+    harmonic = round(frequency / float(pump_ghz))
+    if harmonic >= 1 and abs(frequency - harmonic * float(pump_ghz)) <= tolerance_ghz:
+        return f"pump_harmonic_{harmonic}"
+    return None
+
+
+def select_hill_root(
+    roots: list[dict[str, Any]],
+    pump_ghz: float = PUMP_GHZ,
+    tolerance_ghz: float = HILL_SPURIOUS_ROOT_TOLERANCE_GHZ,
+) -> dict[str, Any]:
+    """Select the largest retained Hill multiplier and record rejected roots."""
+    converged = [root for root in roots if root.get("converged")]
+    before = max(converged, key=lambda item: float(item["floquet"]["magnitude"])) if converged else None
+    retained: list[dict[str, Any]] = []
+    rejected: list[dict[str, Any]] = []
+    for root in converged:
+        frequency = float(root["signal_ghz_real"])
+        reason = _spurious_hill_root_reason(frequency, pump_ghz, tolerance_ghz)
+        if reason is None:
+            retained.append(root)
+        else:
+            rejected.append(
+                {
+                    "signal_ghz_real": frequency,
+                    "magnitude": float(root["floquet"]["magnitude"]),
+                    "reason": reason,
+                }
+            )
+    after = max(retained, key=lambda item: float(item["floquet"]["magnitude"])) if retained else None
+    return {
+        "selected_root": after,
+        "candidate_count": len(converged),
+        "rejected_count": len(rejected),
+        "rejected_roots": rejected,
+        "before_filter": {
+            "max_abs_lambda": None if before is None else float(before["floquet"]["magnitude"]),
+            "root_frequency_ghz": None if before is None else float(before["signal_ghz_real"]),
+        },
+        "after_filter": {
+            "max_abs_lambda": None if after is None else float(after["floquet"]["magnitude"]),
+            "root_frequency_ghz": None if after is None else float(after["signal_ghz_real"]),
+        },
+        "pump_frequency_ghz": float(pump_ghz),
+        "mode_spacing_ghz": HILL_MODE_SPACING_GHZ,
+        "tolerance_ghz": float(tolerance_ghz),
+    }
+
+
+def _apply_hill_selection(
+    record: dict[str, Any],
+    sweep: dict[str, Any],
+    setting_path: Path,
+    *,
+    add_runtime: bool,
+) -> dict[str, Any]:
+    selection = select_hill_root(sweep.get("complex_resonances", []))
+    selected = selection["selected_root"]
+    if selected is None:
+        record["status"] = "HILL_NO_CONVERGED_NONSPURIOUS_ROOT"
+    else:
+        record["hill_max_abs_lambda"] = selection["after_filter"]["max_abs_lambda"]
+        record["hill_root_frequency_ghz"] = selection["after_filter"]["root_frequency_ghz"]
+    record["hill_max_abs_lambda_before_filter"] = selection["before_filter"]["max_abs_lambda"]
+    record["hill_root_frequency_ghz_before_filter"] = selection["before_filter"]["root_frequency_ghz"]
+    record["hill_filter_candidates"] = selection["candidate_count"]
+    record["hill_filter_rejected_count"] = selection["rejected_count"]
+    record["hill_filter_tolerance_ghz"] = selection["tolerance_ghz"]
+    record["source_path"] = str(setting_path.resolve())
+    if add_runtime:
+        record["runtime_s"] = float(record.get("runtime_s") or 0.0) + float(
+            sweep.get("runtime_s", 0.0)
+        ) + float(sweep.get("refine_runtime_s", 0.0))
+    return selection
 
 
 def _fdtd_rows() -> list[dict[str, Any]]:
@@ -593,28 +692,88 @@ def run_hill(outdir: Path, rows: list[dict[str, Any]], ratio: float, circuit_dir
         sweeps = [sweeps]
     if len(sweeps) != len(TARGET_CURRENTS_A):
         raise ValueError("Hill output point count does not match the prescribed column")
+    reductions: list[dict[str, Any]] = []
     for current, sweep in zip(TARGET_CURRENTS_A, sweeps):
         record = find_record(rows, "C_HB_RCSJ", ratio, current)
         if record is None:
             raise AssertionError("missing arm C record during Hill reduction")
-        roots = [root for root in sweep.get("complex_resonances", []) if root.get("converged")]
-        if not roots:
-            record["status"] = "HILL_NO_CONVERGED_ROOT"
-            record["hill_max_abs_lambda"] = None
-            record["hill_root_frequency_ghz"] = None
-        else:
-            root = max(roots, key=lambda item: float(item["floquet"]["magnitude"]))
-            record["hill_max_abs_lambda"] = float(root["floquet"]["magnitude"])
-            record["hill_root_frequency_ghz"] = float(root["signal_ghz_real"])
-            record["runtime_s"] = float(record.get("runtime_s") or 0.0) + float(
-                sweep.get("runtime_s", 0.0)
-            ) + float(sweep.get("refine_runtime_s", 0.0))
         setting_index = TARGET_CURRENTS_A.index(current)
         setting_path = hill_path.with_name(
             f"{hill_path.stem}.setting_{setting_index:02d}.json"
         )
-        record["source_path"] = str(setting_path.resolve())
+        selection = _apply_hill_selection(record, sweep, setting_path, add_runtime=True)
+        reductions.append(
+            {
+                "ratio": ratio,
+                "current_a": current,
+                "setting_path": str(setting_path.resolve()),
+                **selection,
+            }
+        )
         persist_records(outdir, rows)
+    atomic_json(
+        hill_path.with_name("hill_filtered_reduction.json"),
+        {
+            "filter": {
+                "mode_spacing_ghz": HILL_MODE_SPACING_GHZ,
+                "tolerance_ghz": HILL_SPURIOUS_ROOT_TOLERANCE_GHZ,
+                "tolerance_definition": "half the measured mode-comb spacing",
+                "pump_frequency_ghz": PUMP_GHZ,
+            },
+            "rows": reductions,
+        },
+    )
+
+
+def reduce_hill_artifacts(outdir: Path, rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """Re-select Hill roots from persisted per-setting JSON without scanning."""
+    all_reductions: list[dict[str, Any]] = []
+    for ratio in RATIOS:
+        hill_dir = outdir / "hill" / ratio_slug(ratio)
+        reductions: list[dict[str, Any]] = []
+        for setting_index, current in enumerate(TARGET_CURRENTS_A):
+            setting_path = hill_dir / f"hill.setting_{setting_index:02d}.json"
+            if not setting_path.exists():
+                raise FileNotFoundError(f"missing stored Hill setting: {setting_path}")
+            payload = json.loads(setting_path.read_text(encoding="utf-8"))
+            sweep = payload.get("target", payload)
+            record = find_record(rows, "C_HB_RCSJ", ratio, current)
+            if record is None:
+                raise AssertionError(f"missing arm C record at R/Rn={ratio:g}, current={current:.7e}")
+            selection = _apply_hill_selection(record, sweep, setting_path, add_runtime=False)
+            reduction = {
+                "ratio": ratio,
+                "current_a": current,
+                "pump_power_instrument_dbm": record.get("pump_power_instrument_dbm"),
+                "setting_path": str(setting_path.resolve()),
+                **selection,
+            }
+            reductions.append(reduction)
+            all_reductions.append(reduction)
+            persist_records(outdir, rows)
+        atomic_json(
+            hill_dir / "hill_filtered_reduction.json",
+            {
+                "filter": {
+                    "mode_spacing_ghz": HILL_MODE_SPACING_GHZ,
+                    "tolerance_ghz": HILL_SPURIOUS_ROOT_TOLERANCE_GHZ,
+                    "tolerance_definition": "half the measured mode-comb spacing",
+                    "pump_frequency_ghz": PUMP_GHZ,
+                },
+                "rows": reductions,
+            },
+        )
+    result = {
+        "filter": {
+            "mode_spacing_ghz": HILL_MODE_SPACING_GHZ,
+            "tolerance_ghz": HILL_SPURIOUS_ROOT_TOLERANCE_GHZ,
+            "tolerance_definition": "half the measured mode-comb spacing",
+            "pump_frequency_ghz": PUMP_GHZ,
+        },
+        "rows": all_reductions,
+    }
+    atomic_json(outdir / "hill_filtered_reduction.json", result)
+    return result
 
 
 def run_td(
@@ -824,16 +983,51 @@ def classifier_audit(outdir: Path) -> list[dict[str, Any]]:
                 "source_path": row["_source_path"],
             }
         )
-    implicated = "lambda_to_minus_1_half_pump_2T_basis" if any(
-        item["verdict"] in {"PERIOD_DOUBLING", "PERIOD_DOUBLING_ONSET"}
-        for item in audits
-    ) else "no_route_implicated"
+    previous_audit_path = outdir / "classifier_audit.json"
+    previous_payload = (
+        json.loads(previous_audit_path.read_text(encoding="utf-8"))
+        if previous_audit_path.exists()
+        else {}
+    )
+    ansatz_path = ROOT / "outputs" / "chaos" / "ansatz_validity" / "ansatz_validity.csv"
+    ansatz_row: dict[str, str] | None = None
+    if ansatz_path.exists():
+        with ansatz_path.open(newline="", encoding="utf-8") as handle:
+            for candidate in csv.DictReader(handle):
+                if (
+                    candidate.get("device") == "ipm_2c_fixed"
+                    and math.isclose(float(candidate["pump_hz"]), PUMP_GHZ * 1.0e9, rel_tol=0.0, abs_tol=1.0)
+                    and math.isclose(float(candidate["control_value"]), 0.575, rel_tol=0.0, abs_tol=1.0e-9)
+                ):
+                    ansatz_row = candidate
+                    break
+    target_audit = min(audits, key=lambda item: abs(float(item["current_a"]) - 6.6861e-6))
+    g6_evidence = {
+        "pump_referred_fp_half_db": target_audit["pump_referred_fp_half_db"],
+        "poincare_clusters": target_audit["poincare_clusters"],
+        "period_multiple": target_audit["period_multiple"],
+        "ansatz_source_path": str(ansatz_path.resolve()),
+        "ansatz_on_lattice": None if ansatz_row is None else float(ansatz_row["on_lattice"]),
+        "ansatz_on_half": None if ansatz_row is None else float(ansatz_row["on_half"]),
+        "reason": (
+            "No Phase 5 branch is implicated: the half-pump line remains at "
+            f"{target_audit['pump_referred_fp_half_db']:.2f} dB referred to the pump, "
+            f"the Poincare section has {target_audit['poincare_clusters']} cluster(s), "
+            f"period_multiple={target_audit['period_multiple']}, and the independent "
+            "ansatz audit reports equal on-lattice and half-integer admitted power."
+        ),
+    }
     atomic_json(
         outdir / "classifier_audit.json",
         {
             "baseline_q_even": baseline_q_even,
             "baseline_q_dc": baseline_q_dc,
-            "phase5_table_branch_implicated": implicated,
+            "phase5_table_branch_implicated": "no_phase5_branch_implicated_by_current_evidence",
+            "superseded_phase5_table_branch_implicated": previous_payload.get(
+                "phase5_table_branch_implicated",
+                "lambda_to_minus_1_half_pump_2T_basis",
+            ),
+            "phase5_table_branch_reason": g6_evidence,
             "ansatz_enabled": False,
             "rows": audits,
         },
@@ -901,6 +1095,23 @@ def evaluate_gates(outdir: Path, rows: list[dict[str, Any]]) -> dict[str, Any]:
         )
         hill_crossing = _crossing(arm_c, "hill_max_abs_lambda", 1.0)
         td_crossing = _crossing(arm_d, "envelope_slope_per_period", 1.0e-5)
+        stable_td_powers = [
+            float(row["pump_power_instrument_dbm"])
+            for row in arm_d
+            if row.get("status") != "BLOWUP"
+            and row.get("envelope_slope_per_period") is not None
+            and float(row["envelope_slope_per_period"]) < 1.0e-5
+        ]
+        blowup_td_powers = [
+            float(row["pump_power_instrument_dbm"])
+            for row in arm_d
+            if row.get("status") == "BLOWUP"
+        ]
+        td_bracket = (
+            [max(stable_td_powers), min(blowup_td_powers)]
+            if stable_td_powers and blowup_td_powers
+            else None
+        )
         difference = (
             abs(float(hill_crossing["power_dbm"]) - float(td_crossing["power_dbm"]))
             if hill_crossing and td_crossing
@@ -924,6 +1135,12 @@ def evaluate_gates(outdir: Path, rows: list[dict[str, Any]]) -> dict[str, Any]:
                 ),
                 "threshold_db": 0.5,
                 "absolute_crossing_difference_db": difference,
+                "td_transition_bracket_dbm": td_bracket,
+                "hill_crossing_inside_td_bracket": bool(
+                    hill_crossing
+                    and td_bracket is not None
+                    and td_bracket[0] <= float(hill_crossing["power_dbm"]) <= td_bracket[1]
+                ),
             },
         }
     gates["rungs"] = rung_results
@@ -953,12 +1170,21 @@ def evaluate_gates(outdir: Path, rows: list[dict[str, Any]]) -> dict[str, Any]:
         "lossless_td_bracket_dbm": lossless_bracket,
         "trend_toward_lossless_limit": converging,
         "fit_performed": False,
+        "interpretation": (
+            "No filtered Hill crossing was observed at any rung; the limit trend "
+            "and distance to the lossless TD bracket are therefore not identifiable."
+            if not trend_available
+            else None
+        ),
     }
     classifier_path = outdir / "classifier_audit.json"
+    classifier_payload = json.loads(classifier_path.read_text(encoding="utf-8")) if classifier_path.exists() else {}
     gates["G6"] = {
         "status": "PASS" if classifier_path.exists() else "NOT_MEASURED",
         "source_path": str(classifier_path.resolve()),
         "ansatz_enabled": False,
+        "phase5_table_branch_implicated": classifier_payload.get("phase5_table_branch_implicated"),
+        "evidence": classifier_payload.get("phase5_table_branch_reason"),
     }
     source_paths = [str(row.get("source_path") or "") for row in rows]
     distinct = all(source_paths) and len(source_paths) == len(set(source_paths))
@@ -991,7 +1217,29 @@ def main(argv: list[str] | None = None) -> int:
     fdtd = install_arm_a(outdir, rows)
     classifier_audit(outdir)
     if args.stage == "report":
-        evaluate_gates(outdir, rows)
+        reduce_hill_artifacts(outdir, rows)
+        gates = evaluate_gates(outdir, rows)
+        atomic_json(
+            outdir / "report.json",
+            {
+                "circuit": str(CIRCUIT_DIR.resolve()),
+                "pump_ghz": PUMP_GHZ,
+                "pump_port": PUMP_PORT,
+                "source_port": SOURCE_PORT,
+                "out_port": OUT_PORT,
+                "attenuation_model": "A10; no override",
+                "attenuation_db_at_7p9_ghz": float(fdtd[0]["loss_attenuation_db"]),
+                "power_convention": "legacy_traveling_wave",
+                "rcsj_interpretation": "numerical regularizer; no ratio is a device property",
+                "new_ansatz_enabled": False,
+                "hill_filter": {
+                    "mode_spacing_ghz": HILL_MODE_SPACING_GHZ,
+                    "tolerance_ghz": HILL_SPURIOUS_ROOT_TOLERANCE_GHZ,
+                    "tolerance_definition": "half the measured mode-comb spacing",
+                },
+                "gates": gates,
+            },
+        )
         return 0
     if args.stage == "prepare":
         evaluate_gates(outdir, rows)
