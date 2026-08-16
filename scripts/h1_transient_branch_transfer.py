@@ -969,6 +969,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--atol", type=float, default=1e-3)
     parser.add_argument("--max-step", type=float, default=0.5)
     parser.add_argument("--method", choices=("RK45", "RK23", "BDF", "Radau", "implicit_euler", "implicit_trapezoid"), default="implicit_trapezoid")
+    parser.add_argument(
+        "--l-stable", action="store_true",
+        help="select the L-stable BDF integrator unless --method selects BDF or Radau",
+    )
     parser.add_argument("--max-newton", type=int, default=12)
     parser.add_argument("--checkpoint-periods", type=int, default=10)
     parser.add_argument(
@@ -976,7 +980,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="resume a local TD bridge from a transient_restart.npz checkpoint",
     )
     parser.add_argument("--audit-only", action="store_true")
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    if args.l_stable and args.method == "implicit_trapezoid":
+        args.method = "BDF"
+    return args
 
 
 def main(argv: list[str] | None = None) -> int:
