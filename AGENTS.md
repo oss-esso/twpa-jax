@@ -101,6 +101,67 @@ Rules, all from measurements taken 2026-08-11:
   `dG/dP` only as a secondary diagnostic. Do not use dynamic time warping,
   Procrustes, min-max normalization, or a bare correlation coefficient.
 
+## FDTD timestep selection is per-device (measured 2026-08-14)
+
+`dt_norm = 0.01` in `scripts/chaos/run_guarcello_jc_phase5.py` is the Guarcello
+paper's prescription, 628 steps per **Josephson plasma** period. It is not a
+universal budget. Verify it per device with the linear-limit check
+(`_measure_linear_limit`), which sets `Ic = 0` and compares the kernel against
+the continuous linear solve. That check costs about 60 s and has an exact
+reference, so it depends on no other campaign result. Run it before spending any
+campaign time on a new device.
+
+Measured at each device's pump frequency:
+
+| device | kernel \|S\| | exact \|S\| | rel. error | verdict |
+| --- | ---: | ---: | ---: | --- |
+| `ipm_2c_fixed` | 0.966364 | 0.973782 | 0.0076 | passes at `dt_norm = 0.01` |
+| `rf_squid_2393_3wm` | 0.298453 | 0.478674 | 0.3765 | needs a finer step |
+| `jc_jtwpa` | 0.0 | 0.0 | — | check is degenerate |
+| `jc_fqjtwpa` | 0.0 | 0.0 | — | check is degenerate |
+
+`rf_squid_2393_3wm` converges toward the exact value as the step shrinks, so the
+kernel is correct and only the step is too coarse. Measured at 200 pump periods:
+
+| `dt_norm` | steps/period | kernel \|S\| | rel. error | runtime |
+| ---: | ---: | ---: | ---: | ---: |
+| 0.0100 | 3112 | 0.298453 | 0.3765 | 117.1 s |
+| 0.0050 | 6223 | 0.409857 | 0.1438 | 246.6 s |
+| 0.0025 | 12447 | 0.480768 | **0.0044** | 599.1 s |
+
+**Use `dt_norm = 0.0025` for `rf_squid_2393_3wm`**: 0.44 percent at 4x the
+default cost. The error falls 2.6x then 32x, much faster than first order, so do
+not extrapolate the required step from two points -- measure the third.
+Duration is not the cause of the coarse-step error: at `dt_norm = 0.01` the
+result is flat from 200 through 800 pump periods.
+
+The check is **degenerate** on `jc_jtwpa` and `jc_fqjtwpa`. Setting `Ic = 0`
+removes their only inductive path, so both sides return exactly 0.0 and
+`relative_error` is `None`. That is neither a pass nor a failure, and those two
+devices consequently have no independent linear validation. Covering them needs
+a variant that retains a finite linear inductance instead of zeroing `Ic`.
+
+### Optional: why the required step is device-dependent
+
+Unresolved, and not needed for any current result. The obvious explanation does
+not survive its own arithmetic. `rf_squid_2393_3wm` places an `Lm` in parallel
+with each junction, giving an `Lm`-`Cj` mode at 147.013 GHz against the
+59.824 GHz Josephson plasma frequency the timestep derives from, a ratio of
+2.46. That would motivate deriving the step from the fastest linear mode rather
+than from the plasma frequency. But the Guarcello device itself has
+`Lg = 120 pH` and `Cj = 200 fF`, an `Lg`-`Cj` mode near 1027 GHz against a
+plasma frequency near 28 GHz, a ratio of about 37, and its own integrator is
+accurate at the same `dt_norm`. The mode ratio alone therefore does not predict
+the required step.
+
+Candidate mechanisms, none tested: the paper's formulation solves junction
+phases through a tridiagonal system while this kernel solves node fluxes through
+a banded one, so the two discretize different operators; the accuracy limit may
+be set by the port terminations rather than by any internal mode; or the
+governing scale may be the fastest mode measured against the **pump** frequency
+rather than against the plasma frequency. Resolving this would replace a
+per-device measurement with a predictive rule. Until then, measure.
+
 ## graphify
 
 This project has a knowledge graph at graphify-out/ with god nodes, community structure, and cross-file relationships.

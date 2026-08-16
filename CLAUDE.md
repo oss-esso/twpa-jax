@@ -1303,6 +1303,209 @@ on the existing `multitone` two-frequency lattice (two extra real unknowns
 `(A_a, omega_a)`, two extra real equations `Y_AG=0` in an outer loop) rather
 than building a torus basis from scratch.
 
+## HB ansatz validity measured against the FDTD kernel (2026-08-15)
+
+`scripts/chaos/measure_ansatz_validity.py` reduces a signal-driven FDTD
+campaign to the fraction of in-band spectral power sitting on the production
+tone lattice `n*f_p + m*f_s`. That fraction is the ceiling on any HB result at
+that point and is calibration-free (a ratio inside one spectrum). Canonical
+output: `outputs/chaos/ansatz_validity/ansatz_validity.csv`, 68 points, four
+devices.
+
+**Below the transition the ansatz is exact.** on-lattice 1.0000 -> 0.9233
+(jc_jtwpa, -30.5 -> -28.2 dBm, 13.9 -> 36.1 dB gain); 1.0000 -> 0.9346
+(jc_fqjtwpa); 1.0000 (ipm_2c_fixed 0.450-0.575, guarcello -70..-54 dBm).
+Off-lattice floor 112-226 dB below pump.
+
+**The collapse is NOT a period doubling.** At collapse on-lattice falls to
+0.056/0.051 in one 0.4 dB step; admitting half-integers adds only **4.8 / 4.5
+percentage points** (thirds 9.5 / 10.2). Residue is a continuum: top-20
+off-lattice bins hold 2.4%, best single extra generator explains 26%, floor
+13-18 dB below pump. **Keep the period-N scaffolding dormant**
+(`build_half_pump_basis`, `pump/floquet.py`, `pump/periodic_branch.py`,
+`signal/period_doubled.py`) -- this is the direct test of the hypothesis they
+serve and it fails.
+
+**A torus does appear, in a narrow window.** jc_jtwpa -29.3 -> -28.2 dBm:
+off-lattice 0.009 -> 0.077 with single-generator fit 0.999 -> 0.627. So a
+quasi-periodic (auxiliary-generator) extension buys ~1.1 dB of pump range and
+no more. Real, small, and not the first thing to build.
+
+### Fixed continuation ladders fail where solutions exist (2026-08-15)
+
+`run_compression.py::_solve_pump_from_scratch` hardcodes
+`solve_continuation(..., continuation_steps=4)` with no adaptive fallback. At
+jc_jtwpa `f_p=7.12 GHz`, `I_p=4.603781e-06 A` (where FDTD shows a clean
+period-1 state, on-lattice 0.9233):
+
+| strategy | outcome | lambda | coeff_rel | s |
+| --- | --- | ---: | ---: | ---: |
+| fixed 4 | stalled | 1.0000 | 1.762e-01 | 11.7 |
+| fixed 8 | stalled | 0.8750 | 3.869e-02 | 20.9 |
+| fixed 16 | stalled | 0.9375 | 1.889e-02 | 38.0 |
+| fixed 32 | stalled | 0.9375 | 2.144e-02 | 62.3 |
+| **adaptive** | **reached** | **1.0000** | **8.420e-12** | 94.1 |
+
+Refining a *fixed* ladder does not help; the adaptive run needed accepted steps
+down to `dlambda = 0.004454`. Two follow-on defects: the adaptive fallbacks in
+`_solve_compression` (pump-only reference) and
+`multitone/compression.py::solve_signal_power_point` both use `min_step=0.01`,
+above what this point needs, and both pass `x_init=None`, discarding the
+promoted pump seed. Separately `AffineSourcePath.signal_turn_on` starts from
+**zero** and ramps pump+signal together, so every signal-power point re-runs the
+pump ramp -- it fails even at a 1e-11 A probe.
+
+With the pump supplied via `--pump-solution-dir`, the S=10 multitone state at
+-28.2 dBm converges in **1 Newton iteration** (coeff_rel 6.23e-12), gain
+48.36 dB. So the torus solver was never the blocker.
+
+### JTWPA sideband self-convergence, measured (2026-08-15)
+
+jc_jtwpa at `f_p=7.12 GHz`, `I_p=3.873843e-06 A`, small-signal multitone gain:
+S=4/6/8/10/12 -> 27.539 / 29.067 / 30.300 / 30.428 / **30.440** dB. Monotone;
+S=10 -> S=12 moves **0.012 dB**. This closes "S=10 cannot be selected" *at this
+operating point* only; the older non-monotone sequence (30.7152/24.2021/26.5563/
+27.5410 at S=2/4/6/10) was a different point and stays unexplained.
+
+### `--sidebands` defaults to 6; the HB columns are NOT S=10
+
+`run_gain_map.py:4379` has `--sidebands` default **6**, and
+`scripts/run_hb_column_until_failure.py` does not override it. Every
+`hb_up_to_failure.csv` gain is therefore an S=6 truncation, ~1.4 dB below
+converged on jc_jtwpa. **Same-S multitone/Floquet parity is INTACT** -- at the
+column's own pump current 3.8806468570637416e-06 A, multitone S=6 gives
+29.141 dB against the column's 29.140947 dB (**0.0002 dB**), with utilisation
+matching to 11 significant figures. An earlier "parity fails by 1.3 dB" claim
+was S=6 vs S=10 and is retracted.
+
+### The HB-vs-FDTD gain gap was the FDTD timestep
+
+**`dt_norm = 0.01` under-resolves the small-signal response on `jc_jtwpa`.**
+Compared at the FDTD run's own achieved on-chip pump current (so no power
+convention enters), `gain_vs_off_db` both sides (pump-on/pump-off ratio, so also
+loss-model-invariant), probe 3e-09 A:
+
+| P_p [dBm] | I_p [A] | dt=0.01 | dt=0.005 | model S=6 | S=10 | S=12 | residual |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| -30.1 | 3.701475e-06 | 19.996 | 24.916 | 26.752 | 27.736 | 27.743 | 2.83 |
+| -29.7 | 3.873843e-06 | 25.891 | 29.585 | 29.067 | 30.428 | 30.440 | 0.86 |
+
+Halving the step moves the FDTD **+4.9 / +3.7 dB toward the model**, cutting the
+gap 2.7x and 5.3x. Utilisation moves <0.5% over the same refinement
+(0.5856 -> 0.5883, 0.6114 -> 0.6125) -- the pump was never in question, only the
+small-signal response, exactly where the utilisation agreement had localised it.
+
+**Not yet converged.** Two points cannot fit an order; a third at
+`dt_norm = 0.0025` is required before any residual is called physical. Precedent
+(`rf_squid_2393_3wm`) needed 4x finer than default.
+
+**RETRACTED:** an earlier entry here reported a "4.8-8.4 dB gap, model reads
+high" from the `dt_norm=0.01` data. Most of it was discretisation. The
+floor-corrected FDTD values it used (19.37 / 25.63) carried a +-1.4 dB
+quadrature assumption that is now moot, the timestep effect being several times
+larger.
+
+Eliminated along the way: analysis window (100 -> 800 periods moves <=0.5 dB);
+sideband truncation (0.012 dB S=10->S=12); multitone/Floquet parity (0.0002 dB
+above). Partly real: the campaign's 3e-08 A probe is compressed 1.2 dB (-30.1) /
+2.3 dB (-29.7).
+
+**Consequence: `jc_jtwpa` and `jc_fqjtwpa` FDTD results at `dt_norm = 0.01` are
+not timestep-converged for gain.** The linear-limit check that would have caught
+this is degenerate on both (`Ic = 0` removes their only inductive path), so
+Phase 0.2 of `docs/development/post_ansatz_measurement_solver_plan.md` -- a
+finite-linear-inductance variant of that gate -- is now the priority item.
+
+**The FDTD has a signal-tone floor at 2.3-2.5e-7 V** that does not shrink with
+window length -- undamped ramp transient, consistent with `implicit_trapezoid`
+not being L-stable. Output amplitude at the signal tone over four decades of
+drive (jc_jtwpa, -30.10 / -29.70 dBm):
+
+| I_sig [A] | 3e-08 | 3e-09 | 3e-10 | 3e-11 | 3e-12 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| -30.10 | 6.07e-6 | 7.46e-7 | 2.73e-7 | 2.34e-7 | 2.30e-7 |
+| -29.70 | 1.10e-5 | 1.47e-6 | 3.52e-7 | 2.57e-7 | 2.49e-7 |
+
+Flat to 1.6-3.4% over the last factor of ten, so a 3e-12 A probe reports 63.7 /
+64.4 dB of "gain". **Probes at/below 3e-10 A measure the floor -- do not use
+them.** 3e-09 A sits only ~16% above it in voltage, so the quadrature
+correction carries +-1.4 dB. The floor is higher at the higher pump power, as
+parametrically amplified residue should be.
+
+Constraints on any explanation: the *pump* states agree (utilisation 0.6167
+Floquet / 0.6162 multitone / 0.6110 FDTD, within 1%), so it is the small-signal
+response. The untested candidate is the FDTD timestep -- `jc_jtwpa` has **no**
+linear-limit validation because that check is degenerate at `Ic=0` (it removes
+the only inductive path), and the one device where the check did apply needed a
+4x finer step. Quote TD and HB gains separately until closed.
+
+One further inconsistency found by the same comparison:
+- **fqjtwpa `pump_branch_current_max_over_ic` is unusable**: 0.086-0.151 across
+  its whole converged column against 0.62-0.89 from the FDTD, and non-monotone
+  in pump power. jtwpa's column is fine. Do not use the fqjtwpa value as a
+  boundary diagnostic until explained.
+
+## FDTD timestep selection is per-device (measured 2026-08-14)
+
+`dt_norm = 0.01` in `scripts/chaos/run_guarcello_jc_phase5.py` is the Guarcello
+paper's prescription, 628 steps per **Josephson plasma** period. It is not a
+universal budget. Verify it per device with the linear-limit check
+(`_measure_linear_limit`), which sets `Ic = 0` and compares the kernel against
+the continuous linear solve. That check costs about 60 s and has an exact
+reference, so it depends on no other campaign result. Run it before spending any
+campaign time on a new device.
+
+Measured at each device's pump frequency:
+
+| device | kernel \|S\| | exact \|S\| | rel. error | verdict |
+| --- | ---: | ---: | ---: | --- |
+| `ipm_2c_fixed` | 0.966364 | 0.973782 | 0.0076 | passes at `dt_norm = 0.01` |
+| `rf_squid_2393_3wm` | 0.298453 | 0.478674 | 0.3765 | needs a finer step |
+| `jc_jtwpa` | 0.0 | 0.0 | — | check is degenerate |
+| `jc_fqjtwpa` | 0.0 | 0.0 | — | check is degenerate |
+
+`rf_squid_2393_3wm` converges toward the exact value as the step shrinks, so the
+kernel is correct and only the step is too coarse. Measured at 200 pump periods:
+
+| `dt_norm` | steps/period | kernel \|S\| | rel. error | runtime |
+| ---: | ---: | ---: | ---: | ---: |
+| 0.0100 | 3112 | 0.298453 | 0.3765 | 117.1 s |
+| 0.0050 | 6223 | 0.409857 | 0.1438 | 246.6 s |
+| 0.0025 | 12447 | 0.480768 | **0.0044** | 599.1 s |
+
+**Use `dt_norm = 0.0025` for `rf_squid_2393_3wm`**: 0.44 percent at 4x the
+default cost. The error falls 2.6x then 32x, much faster than first order, so do
+not extrapolate the required step from two points -- measure the third.
+Duration is not the cause of the coarse-step error: at `dt_norm = 0.01` the
+result is flat from 200 through 800 pump periods.
+
+The check is **degenerate** on `jc_jtwpa` and `jc_fqjtwpa`. Setting `Ic = 0`
+removes their only inductive path, so both sides return exactly 0.0 and
+`relative_error` is `None`. That is neither a pass nor a failure, and those two
+devices consequently have no independent linear validation. Covering them needs
+a variant that retains a finite linear inductance instead of zeroing `Ic`.
+
+### Optional: why the required step is device-dependent
+
+Unresolved, and not needed for any current result. The obvious explanation does
+not survive its own arithmetic. `rf_squid_2393_3wm` places an `Lm` in parallel
+with each junction, giving an `Lm`-`Cj` mode at 147.013 GHz against the
+59.824 GHz Josephson plasma frequency the timestep derives from, a ratio of
+2.46. That would motivate deriving the step from the fastest linear mode rather
+than from the plasma frequency. But the Guarcello device itself has
+`Lg = 120 pH` and `Cj = 200 fF`, an `Lg`-`Cj` mode near 1027 GHz against a
+plasma frequency near 28 GHz, a ratio of about 37, and its own integrator is
+accurate at the same `dt_norm`. The mode ratio alone therefore does not predict
+the required step.
+
+Candidate mechanisms, none tested: the paper's formulation solves junction
+phases through a tridiagonal system while this kernel solves node fluxes through
+a banded one, so the two discretize different operators; the accuracy limit may
+be set by the port terminations rather than by any internal mode; or the
+governing scale may be the fastest mode measured against the **pump** frequency
+rather than against the plasma frequency. Resolving this would replace a
+per-device measurement with a predictive rule. Until then, measure.
+
 ## graphify
 
 This project has a knowledge graph at graphify-out/ with god nodes, community structure, and cross-file relationships.
