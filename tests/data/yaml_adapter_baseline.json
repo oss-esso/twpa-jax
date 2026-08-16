@@ -1,0 +1,145 @@
+{
+  "generic_blocks_showcase": {
+    "element_count": 55,
+    "elements_sha256": "744e81e00ebb7cd47a9e0d47261be7533f4cb7bb160eaa6ab8a843004e5d8f99",
+    "matrices": {
+      "Bphi": {"sha256": "5d20100c00d65a83277250e904bc0935c8b146ad7d13b7a904c8d34117503c46", "shape": [18, 13]},
+      "C": {"sha256": "cab1bb9e663a2f271035812240d2c70970d95ca1bd413ea2d25901d562e4d75c", "shape": [18, 18]},
+      "G": {"sha256": "ddf8fd62bfdf7aff63f412a918f8a9e02c3e467753c7846bb59bc39aac68e5b7", "shape": [18, 18]},
+      "Ic": {"sha256": "a7917d53dc0215196455e1d5ec4ce876af0d33704d24ac6c8c3eca0a550f2048", "shape": [13]},
+      "K": {"sha256": "17f272309404781c6ad904da74abd539d47db6430e9312f158a31c4d543a5a23", "shape": [18, 18]},
+      "Lj": {"sha256": "b966eca71b636a1a4a26e8795a79c0b539d22219506f83852ef6edc5165c9910", "shape": [13]}
+    },
+    "ports": {"1": 1, "2": 17, "3": 1000}
+  },
+  "ipm_2c": {
+    "element_count": 16312,
+    "elements_sha256": "65a52b8e06bccc46c5f11113e05767144d1e80a19b127690e285f6e4b8c00c60",
+    "matrices": {
+      "Bphi": {"sha256": "e4bdd59a89e834c6c7d4f402595993f3c033be1ce150c7f873326cd2224cbc05", "shape": [6136, 2508]},
+      "C": {"sha256": "c7edb212317572db0c8d308ed871a327fdc3f936e5f76d9073686c82af9570b4", "shape": [6136, 6136]},
+      "G": {"sha256": "5c9663a8088dba20e5cacb42e795d49c4cc66911f70fefda7d554a4e25d1d928", "shape": [6136, 6136]},
+      "Ic": {"sha256": "23e3a1164c11df19dfa5a9890db829281a4f715180d3e7bbe547478a571b87a9", "shape": [2508]},
+      "K": {"sha256": "2dcbbc436ac4e93b26e017c5e7406bce5b7da1f73dae908baed5e9a543ef1837", "shape": [6136, 6136]},
+      "Lj": {"sha256": "f1c233ab8b6709345ecd06f1477eccf6f1e3d48568e96b9fccf5d923abfb4c85", "shape": [2508]}
+    },
+    "ports": {"1": 1, "2": 4577, "3": 10000, "4": 11558}
+  },
+  "ipm_2c_half_sine": {
+    "element_count": 16312,
+    "elements_sha256": "3025eb88d2482adfe3c01cc79fe2a69a289c90d92472167873b0b931543cd661",
+    "matrices": {
+      "Bphi": {"sha256": "e4bdd59a89e834c6c7d4f402595993f3c033be1ce150c7f873326cd2224cbc05", "shape": [6136, 2508]},
+      "C": {"sha256": "c10769b959df70f78c0975a48e6c8bbabfe16276613b76a681afb5edf9c4d847", "shape": [6136, 6136]},
+      "G": {"sha256": "5c9663a8088dba20e5cacb42e795d49c4cc66911f70fefda7d554a4e25d1d928", "shape": [6136, 6136]},
+      "Ic": {"sha256": "ce628253cf450a9733d7841af18ab520884bfe08ede8a590eecc82eb8bba8929", "shape": [2508]},
+      "K": {"sha256": "2dcbbc436ac4e93b26e017c5e7406bce5b7da1f73dae908baed5e9a543ef1837", "shape": [6136, 6136]},
+      "Lj": {"sha256": "b295d60eadc744165c813c5e5a31b105b9504eacbb2684fb1e85c79c91ff3def", "shape": [2508]}
+    },
+    "ports": {"1": 1, "2": 4577, "3": 10000, "4": 11558}
+  },
+  "ipm_2c_linear": {
+    "element_count": 16312,
+    "elements_sha256": "af641f4e31f524c7def6f9511f3199a029b0f97b8c41f9f8bff796841eeb7162",
+    "matrices": {
+      "Bphi": {"sha256": "e4bdd59a89e834c6c7d4f402595993f3c033be1ce150c7f873326cd2224cbc05", "shape": [6136, 2508]},
+      "C": {"sha256": "020bb98f59663fa9e2cdc90c7747a2f953c848e8505fbd19dedcf431466f3f9c", "shape": [6136, 6136]},
+      "G": {"sha256": "5c9663a8088dba20e5cacb42e795d49c4cc66911f70fefda7d554a4e25d1d928", "shape": [6136, 6136]},
+      "Ic": {"sha256": "1b7228d199f67b783a90502a325f51bba3f07c30cb2c9bb2582b225d217bae98", "shape": [2508]},
+      "K": {"sha256": "2dcbbc436ac4e93b26e017c5e7406bce5b7da1f73dae908baed5e9a543ef1837", "shape": [6136, 6136]},
+      "Lj": {"sha256": "03e1955b34d8f9d16de093bf36e7b6c018a807b0ae85a4a3b284db2a71053d23", "shape": [2508]}
+    },
+    "ports": {"1": 1, "2": 4577, "3": 10000, "4": 11558}
+  },
+  "ipm_2c_showcase": {
+    "element_count": 16313,
+    "elements_sha256": "f9b8d5a825e5c15d3f9b408171af65d4d22488df69e0bd662b91ed70be1f3a29",
+    "matrices": {
+      "Bphi": {"sha256": "e4bdd59a89e834c6c7d4f402595993f3c033be1ce150c7f873326cd2224cbc05", "shape": [6136, 2508]},
+      "C": {"sha256": "49b6169b333309cb181c8858ef26fe8b322424be78b0790cc76842adaac16e41", "shape": [6136, 6136]},
+      "G": {"sha256": "5c9663a8088dba20e5cacb42e795d49c4cc66911f70fefda7d554a4e25d1d928", "shape": [6136, 6136]},
+      "Ic": {"sha256": "2ad08ce4f0daa24fa232de79c7a41d3398965c84b5b37852196713437cd021ff", "shape": [2508]},
+      "K": {"sha256": "2dcbbc436ac4e93b26e017c5e7406bce5b7da1f73dae908baed5e9a543ef1837", "shape": [6136, 6136]},
+      "Lj": {"sha256": "3f21b03e8baceb76b98d59597097641a18d609593496730e1171d2b9f3b91011", "shape": [2508]}
+    },
+    "ports": {"1": 1, "2": 4577, "3": 10000, "4": 11558}
+  },
+  "ipm_3c": {
+    "element_count": 21809,
+    "elements_sha256": "c7885f0d54aabb2b72a99642ee9f156191783b30e5309296849e220bf943c31f",
+    "matrices": {
+      "Bphi": {"sha256": "757d1cf7d4ccfba5ab5217b33a967b2165f0515ce5bdacfe705d07ef01336c27", "shape": [8504, 2508]},
+      "C": {"sha256": "d5999dd1787d56e0e862201efe12ebee42ebfac4fd670810d8ad9bf963ada0d1", "shape": [8504, 8504]},
+      "G": {"sha256": "c52a76e8cd9073616ba7f32b72a436af18ca5e6c853f00c2d402236701a99aa5", "shape": [8504, 8504]},
+      "Ic": {"sha256": "23e3a1164c11df19dfa5a9890db829281a4f715180d3e7bbe547478a571b87a9", "shape": [2508]},
+      "K": {"sha256": "8aeffdec53a56dfff95112a03f9fd0ba7b653bc26c4529e30ab5d70d52b38483", "shape": [8504, 8504]},
+      "Lj": {"sha256": "f1c233ab8b6709345ecd06f1477eccf6f1e3d48568e96b9fccf5d923abfb4c85", "shape": [2508]}
+    },
+    "ports": {"1": 1, "2": 5766, "3": 10000, "4": 12737}
+  },
+  "ipm_7c_ideal_node205": {
+    "element_count": 45233,
+    "elements_sha256": "20e8a861e7936d04abb17e3505b0f57f02b3e9dfb551de731b90ac44690c4910",
+    "matrices": {
+      "Bphi": {"sha256": "27158a21d40fac7110c1150b3eb1690ca79e4634411ca02f29d2050de284c5a2", "shape": [18484, 2926]},
+      "C": {"sha256": "6a56266e2c9959efabb6af4b17f99b89d7b95171c94bdc591cfd3d31baba7dcd", "shape": [18484, 18484]},
+      "G": {"sha256": "085d8b22160385ddf4e364e2f7d03ca8e49464045f2083ddbd9e242670ae8369", "shape": [18484, 18484]},
+      "Ic": {"sha256": "e2abc12d23de577fd55b2722640aca34ce440de867af3d6062442a2d9589a3c5", "shape": [2926]},
+      "K": {"sha256": "c9eda0336ccac391f9f073e4bb1f43e03dbf8a2b3c606096879a789ab4d1df62", "shape": [18484, 18484]},
+      "Lj": {"sha256": "935d3029a7c79b49accc8decd855d0e1d92a03ee384dabdb643df1837c989a76", "shape": [2926]}
+    },
+    "ports": {"1": 1, "2": 11030, "3": 100000, "4": 107453}
+  },
+  "ipm_explicit_blocks_showcase": {
+    "element_count": 8422,
+    "elements_sha256": "1c3a5df953de61ecfaca50573c8f6d3e5872826a81cdc6983fa634ba1eeee872",
+    "matrices": {
+      "Bphi": {"sha256": "a11ba1a584a0e2e265b6e17bcb96b0d5148225d49bd35e6f377964e3f90cbc01", "shape": [3419, 96]},
+      "C": {"sha256": "17476f04a4bd264188715fbdc2e9f4998542ad642a2f18dcaa58e24f798a02ff", "shape": [3419, 3419]},
+      "G": {"sha256": "988914ad0804a1401655439ecd4e273f03cfed6c357b7a66d1d6bdd94a0c4db4", "shape": [3419, 3419]},
+      "Ic": {"sha256": "9948a26597d78a476ecbc42f94e365c88ebc4900a0953640373f18efbe734f3f", "shape": [96]},
+      "K": {"sha256": "feaef5e9d28191b6db109b63fc6f90f978524cc7b485b069dcb80aa8e8b1185f", "shape": [3419, 3419]},
+      "Lj": {"sha256": "26d87c872fe24bd38b28c2f714485efe9306a45e9a919a1fe51954aa50501e7e", "shape": [96]}
+    },
+    "ports": {"1": 1, "2": 1880, "3": 10000, "4": 11538}
+  },
+  "jtwpa_418jj": {
+    "element_count": 1257,
+    "elements_sha256": "4db30dfc0f46b2f6e124bacff5e04641d1152b974b77c8e35bd363295232b2ee",
+    "matrices": {
+      "Bphi": {"sha256": "690a96aeb7f96bb1e1d6d4ad84fe482e670d81745fa078a00c92a84ae600d921", "shape": [419, 418]},
+      "C": {"sha256": "90b980f5464c58b0f49ce78430e30aacd7aa48f02d34a7bf6cafc55b5b1cfcad", "shape": [419, 419]},
+      "G": {"sha256": "313c85eb6a6b23af1442866c54b985fe9d093e2744781426504666314d5cfcb1", "shape": [419, 419]},
+      "Ic": {"sha256": "433a6b33103b1f26b466452edf908c4eff9b06a58cb3849e6f63905b54c72b90", "shape": [418]},
+      "K": {"sha256": "313c85eb6a6b23af1442866c54b985fe9d093e2744781426504666314d5cfcb1", "shape": [419, 419]},
+      "Lj": {"sha256": "1767865cf845194fa527e5afac54eb5b85676149a46503fa253f624863651fcb", "shape": [418]}
+    },
+    "ports": {"1": 1, "2": 419}
+  },
+  "rf_squid_2393_3wm": {
+    "element_count": 16755,
+    "elements_sha256": "7a0a811eabf32911976f318814dd91414dc1a91abe451fb06988d20defbc1d79",
+    "matrices": {
+      "Bphi": {"sha256": "1122ca6370a4945d8cba7fbb421b4f0c43555613886a2d1af15aaf6774587233", "shape": [7180, 2393]},
+      "C": {"sha256": "dd5b8a10577e03830eaef6ed19d514c250835515c358a04f385fdb5c8d09851d", "shape": [7180, 7180]},
+      "G": {"sha256": "a3bfc169cb6ad931a71ee5a53e1a195e653608dce274bb23b21c276b3d12f6f2", "shape": [7180, 7180]},
+      "Ic": {"sha256": "d4889fdd74c4079ef346403a3b12446a930d86fd6f6cbd51cd3d35f2ec0dddf1", "shape": [2393]},
+      "K": {"sha256": "6f5107daad559d3323c129b79e9f4300a184a4831a87623a032b9b21d64410d4", "shape": [7180, 7180]},
+      "Lj": {"sha256": "74bd5a6874d78b5437eeeaea1ece3f1f2bce74d17e114baec6aa5fd610e6911c", "shape": [2393]}
+    },
+    "ports": {"1": 1, "2": 7180}
+  },
+  "rf_squid_uniform_showcase": {
+    "element_count": 228,
+    "elements_sha256": "45dec44da02c7a69eecffdde3f182826d69e07493fa1f2ab42bc3a392370592b",
+    "matrices": {
+      "Bphi": {"sha256": "cea990ab7f45d8a9a354435daaa5da98cd72bb0b710a0ef769a92db2de78d242", "shape": [97, 32]},
+      "C": {"sha256": "b9c9900067d3db2ecf24e9af2bd1b60882330224225146c23e60d52f43c5c984", "shape": [97, 97]},
+      "G": {"sha256": "1bdb8e153153413fdf64a3ba9c4d732ad6c5d68f2b984743593d197b73dad8d5", "shape": [97, 97]},
+      "Ic": {"sha256": "cde9e7d75a825a90cabad5871c9cea13ed34d972ec901e991267b737977a4439", "shape": [32]},
+      "K": {"sha256": "c3904d83363ccb2d4a2ee1096f031875605fce5d1018f58d818b0dd3aefc2539", "shape": [97, 97]},
+      "Lj": {"sha256": "fce2251326eab1d9afe53b0190441e9f2cf39d3a30f38fce8c8be0e56e383634", "shape": [32]}
+    },
+    "ports": {"1": 1, "2": 97}
+  }
+}

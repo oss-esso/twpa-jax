@@ -1,22 +1,24 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import yaml
 
-from twpa_solver.builders.blocks import BuildContext
-from twpa_solver.builders.coupler import make_coupler_discrete
+from twpa_solver.builders.blocks import BlockRecord
 from twpa_solver.builders.ipm import Element, IPMParams
 from twpa_solver.builders.profiles import Selection, Segment, parse_profile_shorthand
 from twpa_solver.builders.scatter import ScatterSpec
-from twpa_solver.builders.registry import BLOCK_BUILDERS
+from twpa_solver.circuit import Circuit
+from twpa_solver.circuit.elements import ElementRef
+from twpa_solver.circuit.handles import CellHandle, CouplerHandle, LineHandle
+from twpa_solver.circuit.nodes import Node
 from twpa_solver.design.errors import (DesignCollisionError, DesignParameterError,
-                                       DesignSchemaError)
+                                       DesignResolutionError, DesignSchemaError)
 from twpa_solver.design.model import CompiledDesign, PortRecord
 from twpa_solver.design.parameters import resolve_parameters
-from twpa_solver.design.patches import apply_patches
 from twpa_solver.design.schema import validate_design
 
 
@@ -305,14 +307,444 @@ def _expand_composites(items: list[Any], params: Mapping[str, Any]) -> list[Any]
     return expanded
 
 
-def _register_elements(ctx: BuildContext, path: str, before: int) -> None:
-    new = ctx.circuit[before:]
-    for index, element in enumerate(new):
-        ctx.named_elements[f"{path}.element[{index}]"] = element.name
-    # The series branch is the addressable right edge for the common blocks.
-    for i, element in enumerate(new):
-        if element.kind in {"linear_inductor", "josephson_inductor"}:
-            ctx.named_elements[f"{path}.cell[{i // 2}].right"] = element.name
+@dataclass
+class _BlockSpec:
+    """Symbolic block record retained until legacy node numbers are assigned."""
+
+    path: str
+    kind: str
+    cursors: list[str]
+    starts: dict[str, Node]
+    ends: dict[str, Node]
+    count: int = 1
+
+
+@dataclass
+class _AdapterState:
+    """State used while adapting YAML blocks to a symbolic Circuit."""
+
+    circuit: Circuit
+    paths: dict[str, Any]
+    legacy_nodes: dict[int, Node]
+    named_nodes: dict[str, Node]
+    named_elements: dict[str, ElementRef]
+    blocks: list[_BlockSpec]
+    cell_index: int = 0
+    coupler_geometry: dict[str, Any] | None = None
+
+    def register_node(self, path: str, node: Node) -> None:
+        self.named_nodes[path] = node
+
+    def register_element(self, path: str, element: ElementRef) -> None:
+        self.named_elements[path] = element
+
+    def register_path(self, name: str) -> None:
+        path = self.paths[name]
+        base = self.circuit.graph.legacy_path_bases[name]
+        for offset, node in enumerate(path.nodes):
+            solver_node = base + offset
+            prior = self.legacy_nodes.get(solver_node)
+            if prior is not None and prior is not node:
+                raise DesignCollisionError(
+                    f"cursor collision at node {solver_node}: "
+                    f"{prior.path!r} overlaps {node.path!r}"
+                )
+            self.legacy_nodes[solver_node] = node
+
+    def refresh_path(self, name: str) -> None:
+        self.register_path(name)
+
+    def resolve_node(self, value: Any, path: str) -> Node:
+        if isinstance(value, Node):
+            return value
+        if isinstance(value, str):
+            if value == "ground":
+                return self.circuit.ground
+            try:
+                return self.named_nodes[value]
+            except KeyError as error:
+                raise DesignResolutionError(
+                    f"{path}: unknown node path {value!r}"
+                ) from error
+        try:
+            solver_node = int(value)
+        except (TypeError, ValueError) as error:
+            raise DesignResolutionError(
+                f"{path}: expected a node number or named node path"
+            ) from error
+        if solver_node == 0:
+            return self.circuit.ground
+        try:
+            return self.legacy_nodes[solver_node]
+        except KeyError as error:
+            raise DesignResolutionError(
+                f"{path}: unknown legacy node {solver_node}"
+            ) from error
+
+    def resolve_element(self, value: Any, path: str) -> ElementRef:
+        if isinstance(value, ElementRef):
+            return value
+        if not isinstance(value, str):
+            raise DesignResolutionError(f"{path}: expected an element path or name")
+        element = self.named_elements.get(value)
+        if element is not None:
+            return element
+        for candidate in self.circuit.graph.elements:
+            if candidate.name == value:
+                return candidate
+        raise DesignResolutionError(f"{path}: unknown element {value!r}")
+
+    def record_block(
+        self,
+        path: str,
+        kind: str,
+        cursors: list[str],
+        starts: dict[str, Node],
+        ends: dict[str, Node],
+        count: int = 1,
+    ) -> None:
+        self.blocks.append(_BlockSpec(path, kind, cursors, starts, ends, count))
+
+
+def _register_line(
+    state: _AdapterState,
+    path: str,
+    cursor: str,
+    line: LineHandle,
+    kind: str,
+) -> None:
+    """Register public line nodes and aliases used by the YAML surface."""
+
+    state.register_node(path, line.input)
+    state.register_node(f"{path}.end", line.output)
+    for index, cell in enumerate(line.cells):
+        if cell.left is not None:
+            state.register_node(f"{path}.cell[{index}].left", cell.left)
+        if cell.right is not None:
+            state.register_node(f"{path}.cell[{index}].right", cell.right)
+        if cell.Cg is not None:
+            state.register_element(f"{path}.cell[{index}].Cg", cell.Cg)
+        if cell.Lj is not None:
+            state.register_element(f"{path}.cell[{index}].Lj", cell.Lj)
+            state.register_element(f"{path}.cell[{index}].right", cell.Lj)
+        if cell.Cj is not None:
+            state.register_element(f"{path}.cell[{index}].Cj", cell.Cj)
+        for name, element in cell.extras.items():
+            state.register_element(f"{path}.cell[{index}].{name}", element)
+    state.record_block(
+        path,
+        kind,
+        [cursor],
+        {cursor: line.input},
+        {cursor: line.output},
+        len(line.cells),
+    )
+    state.refresh_path(cursor)
+
+
+def _apply_plan_values(
+    state: _AdapterState,
+    line: LineHandle,
+    plan: Any,
+    offset: int,
+) -> None:
+    """Apply the existing component plan through public element handles."""
+
+    if plan is None:
+        return
+    end = offset + len(line.cells)
+    if end > len(plan.lj) or end > len(plan.cj) or end > len(plan.cg):
+        raise DesignSchemaError("component plan is shorter than the YAML JJ topology")
+    for index, cell in enumerate(line.cells):
+        if cell.Lj is not None:
+            state.circuit.set_value(cell.Lj, float(plan.lj[offset + index]))
+        if cell.Cj is not None:
+            state.circuit.set_value(cell.Cj, float(plan.cj[offset + index]))
+        if cell.Cg is not None:
+            cg = float(plan.cg[offset + index])
+            state.circuit.set_value(cell.Cg, cg / (2.0 if index == 0 else 1.0))
+    end_ref = state.circuit.graph.named_elements.get(f"{line.path}.end.Cg")
+    if end_ref is not None:
+        state.circuit.set_value(end_ref, float(plan.cg[end - 1]) / 2.0)
+
+
+def _add_raw_element(
+    state: _AdapterState,
+    cfg: Mapping[str, Any],
+    path: str,
+) -> ElementRef:
+    """Emit one YAML raw element through a public primitive builder."""
+
+    nodes = cfg.get("nodes")
+    if not isinstance(nodes, (list, tuple)) or len(nodes) != 2:
+        raise DesignSchemaError(f"{path}.nodes: expected two endpoints")
+    kind = str(cfg["kind"])
+    name = str(cfg.get("name", path))
+    first = state.resolve_node(nodes[0], f"{path}.nodes[0]")
+    if kind == "mutual_inductor_k":
+        first_element = state.resolve_element(nodes[0], f"{path}.nodes[0]")
+        second_element = state.resolve_element(nodes[1], f"{path}.nodes[1]")
+        if first_element.kind != "linear_inductor" or second_element.kind != "linear_inductor":
+            raise DesignSchemaError(f"{path}.nodes: mutual endpoints must be linear inductors")
+        result = state.circuit.add_mutual_inductor(
+            first_element,
+            second_element,
+            float(cfg["value"]),
+            name=name,
+            path=path,
+        )
+        result.value = cfg["value"]
+        return result
+    second = state.resolve_node(nodes[1], f"{path}.nodes[1]")
+    value = float(cfg["value"])
+    if kind == "capacitor":
+        result = state.circuit.add_capacitor(first, second, value, name=name, path=path)
+        result.value = cfg["value"]
+        return result
+    if kind == "coupling_capacitor":
+        result = state.circuit.add_coupling_capacitor(
+            first, second, value, name=name, path=path
+        )
+        result.value = cfg["value"]
+        return result
+    if kind == "linear_inductor":
+        result = state.circuit.add_inductor(first, second, value, name=name, path=path)
+        result.value = cfg["value"]
+        return result
+    if kind == "josephson_inductor":
+        result = state.circuit.add_josephson_inductor(
+            first, second, value, name=name, path=path
+        )
+        result.value = cfg["value"]
+        return result
+    if kind == "resistor":
+        result = state.circuit.add_resistor(first, second, value, name=name, path=path)
+        result.value = cfg["value"]
+        return result
+    if kind == "port":
+        state.circuit.add_port(first, number=int(value), name=name)
+        return state.circuit.graph.elements[-1]
+    raise DesignSchemaError(f"{path}.kind: unsupported element kind {kind!r}")
+
+
+def _apply_adapter_action(
+    state: _AdapterState,
+    cfg: Mapping[str, Any],
+    path: str,
+) -> None:
+    """Apply an inline or document patch through Circuit methods."""
+
+    action = cfg.get("action")
+    if action == "add":
+        ref = _add_raw_element(state, cfg, path)
+        state.register_element(path, ref)
+        return
+    target = cfg.get("target")
+    if not isinstance(target, str):
+        raise DesignResolutionError(f"{path}.target: expected an exact path")
+    try:
+        ref = state.resolve_element(target, path)
+    except DesignResolutionError as error:
+        raise DesignSchemaError(
+            f"{path}.target {target!r}: expected one match, found 0"
+        ) from error
+    if action == "set":
+        state.circuit.set_value(ref, cfg["value"])
+    elif action == "remove":
+        state.circuit.remove(ref)
+    else:
+        raise DesignSchemaError(f"{path}.action: unknown action {action!r}")
+
+
+def _coupler_metadata(state: _AdapterState) -> dict[str, Any]:
+    """Return the stable coupler metadata exposed by the old design result."""
+
+    return dict(state.coupler_geometry or {})
+
+
+def _add_first_array_aliases_adapter(state: _AdapterState) -> None:
+    """Preserve compact and historical aliases from the YAML compiler."""
+
+    for table in (state.named_nodes, state.named_elements):
+        additions: dict[str, Any] = {}
+        for key, value in table.items():
+            marker = ".array[0]."
+            if marker in key:
+                additions.setdefault(key.replace(marker, ".", 1), value)
+        table.update(additions)
+        legacy: dict[str, Any] = {}
+        for key, value in table.items():
+            if key.startswith("line_1.row["):
+                legacy[
+                    key.replace("line_1.row[", "period[0].row[", 1)
+                    .replace(".array[0].", ".array.", 1)
+                ] = value
+        table.update(legacy)
+
+
+def _emit_adapter_block(
+    state: _AdapterState,
+    cfg: dict[str, Any],
+    path: str,
+    parameters: Mapping[str, Any],
+    coupler_mode: str,
+    plan: Any,
+) -> None:
+    """Emit one expanded YAML block with public Circuit builders."""
+
+    kind = str(cfg.get("type"))
+    if kind in {"signal_port", "pump_port"}:
+        cfg = {**cfg, "type": "port", "cursor": (
+            "signal" if kind == "signal_port" else "pump"
+        )}
+        kind = "port"
+    if kind in {"capacitor", "inductor"}:
+        cfg = {
+            **cfg,
+            "type": "raw_element",
+            "value": cfg["C"] if kind == "capacitor" else cfg["L"],
+            "kind": "capacitor" if kind == "capacitor" else "linear_inductor",
+        }
+        kind = "raw_element"
+    if kind == "coupler":
+        kind = "directional_coupler"
+    if kind == "directional_coupler":
+        cursor_names = [str(item) for item in cfg.get("cursors", ["signal", "pump"])]
+        if len(cursor_names) != 2:
+            raise DesignSchemaError(f"{path}.cursors: expected two cursor names")
+        signal = state.paths[cursor_names[0]]
+        pump = state.paths[cursor_names[1]]
+        before = len(state.circuit.graph.elements)
+        handle = state.circuit.add_directional_coupler(
+            signal,
+            pump,
+            coupling_db=float(parameters.get("coupling_dB", -14.0)),
+            frequency=float(parameters.get("coupler_freq_hz", 8.0e9)),
+            z0=float(parameters.get("Z0", 50.0)),
+            mode=coupler_mode,
+            cell_length_um=float(parameters.get("cell_length_um", 10.0)),
+            name=path,
+        )
+        geometry = handle.geometry
+        state.coupler_geometry = {
+            "width_um": geometry.width_um,
+            "gap_between_lines_um": geometry.gap_between_lines_um,
+            "gap_to_ground_um": geometry.gap_to_ground_um,
+            "length_um": geometry.length_um,
+            "coupling_db": geometry.k_db,
+            "z_input_ohm": geometry.z_input_ohm,
+            "model": geometry.model,
+        }
+        for index, element in enumerate(state.circuit.graph.elements[before:]):
+            state.register_element(f"{path}.element[{index}]", element)
+        state.record_block(
+            path,
+            "directional_coupler",
+            cursor_names,
+            {cursor_names[0]: handle.signal_in, cursor_names[1]: handle.pump_in},
+            {cursor_names[0]: handle.signal_out, cursor_names[1]: handle.pump_out},
+            len(handle.cells),
+        )
+        state.refresh_path(cursor_names[0])
+        state.refresh_path(cursor_names[1])
+        return
+
+    cursor_name = str(cfg["cursor"]) if "cursor" in cfg else ""
+    if cursor_name and cursor_name not in state.paths:
+        raise DesignSchemaError(f"{path}.cursor: unknown cursor {cursor_name!r}")
+    path_obj = state.paths.get(cursor_name)
+    if kind == "port":
+        if path_obj is None:
+            raise DesignSchemaError(f"{path}.cursor: required")
+        node = path_obj.end
+        state.circuit.add_port(node, number=int(cfg["port"]))
+        state.register_node(path, node)
+        state.record_block(path, "port", [cursor_name], {cursor_name: node}, {cursor_name: node})
+        return
+    if kind == "resistor":
+        if path_obj is None:
+            raise DesignSchemaError(f"{path}.cursor: required")
+        node = path_obj.end
+        state.circuit.add_resistor(node, state.circuit.ground, float(cfg["value"]))
+        state.register_node(path, node)
+        state.record_block(
+            path, "resistor", [cursor_name], {cursor_name: node}, {cursor_name: node}
+        )
+        return
+    if kind == "transmission_line":
+        line = state.circuit.add_transmission_line(
+            path_obj,
+            cells=int(cfg["cells"]),
+            L=float(cfg["L"]),
+            C=float(cfg["C"]),
+            name=path,
+        )
+        _register_line(state, path, cursor_name, line, kind)
+        return
+    if kind == "jj_line":
+        start_index = state.cell_index
+        line = state.circuit.add_jj_line(
+            path_obj,
+            cells=int(cfg["cells"]),
+            Lj=float(cfg["Lj"]),
+            Cj=float(cfg["Cj"]),
+            Cg=float(cfg["Cg"]),
+            cell_index_start=start_index,
+            name=path,
+        )
+        _apply_plan_values(state, line, plan, start_index)
+        state.cell_index += len(line.cells)
+        _register_line(state, path, cursor_name, line, kind)
+        return
+    if kind == "rf_squid_line":
+        before = len(state.circuit.graph.elements)
+        line = state.circuit.add_rf_squid_line(
+            path_obj,
+            cells=int(cfg["cells"]),
+            Ic=float(cfg["Ic"]),
+            Lj=float(cfg["Lj"]) if cfg.get("Lj") is not None else None,
+            Lm=float(cfg["Lm"]),
+            Lw=float(cfg["Lw"]),
+            Lpar=float(cfg["Lpar"]),
+            Cj=float(cfg["Cj"]),
+            Cg=float(cfg["Cg"]) if cfg.get("Cg") is not None else None,
+            Cg_pattern=cfg.get("Cg_pattern"),
+            Cg_pattern_counts=cfg.get("Cg_pattern_counts"),
+            name=path,
+        )
+        for cell in line.cells:
+            refs = [cell.Lj, cell.Cj, cell.Cg, *cell.extras.values()]
+            for ref in refs:
+                if ref is not None:
+                    ref.cell_index = state.cell_index
+            state.cell_index += 1
+        start_number = next(
+            number for number, node in state.legacy_nodes.items()
+            if node is line.input
+        )
+        exceptional_numbers: dict[Node, int] = {}
+        for index, node in enumerate(line._nodes):
+            exceptional_numbers[node] = start_number + 3 * index
+            if index == len(line._nodes) - 1:
+                continue
+            cell_path = f"{path}.cell[{index}]"
+            exceptional_numbers[state.circuit.graph.named_nodes[f"{cell_path}.wire"]] = (
+                start_number + 3 * index + 1
+            )
+            exceptional_numbers[state.circuit.graph.named_nodes[f"{cell_path}.branch"]] = (
+                start_number + 3 * index + 2
+            )
+        state.circuit.set_legacy_node_numbers(exceptional_numbers)
+        _register_line(state, path, cursor_name, line, kind)
+        for index, element in enumerate(state.circuit.graph.elements[before:]):
+            state.register_element(f"{path}.element[{index}]", element)
+        return
+    if kind == "raw_element":
+        ref = _add_raw_element(state, cfg, path)
+        state.register_element(path, ref)
+        state.record_block(path, "raw_element", [], {}, {})
+        return
+    raise DesignSchemaError(f"{path}.type: unknown block type {kind!r}")
 
 
 def compile_design(spec: Mapping[str, Any], *, coupler_mode: str | None = None,
@@ -362,120 +794,103 @@ def compile_design(spec: Mapping[str, Any], *, coupler_mode: str | None = None,
     coupler_choice = str(coupler_mode or spec.get(
         "coupler_mode", parameters.get("coupler_mode", "auto")))
     effective_plan = plan or _design_plan(spec, parameters)
-    ctx = BuildContext([], dict(cursors), 0, int(spec["ground"]),
-                       coupler=make_coupler_discrete(
-                           IPMParams(**{key: value for key, value in parameters.items()
-                                        if key in IPMParams.__dataclass_fields__}),
-                           coupler_choice), plan=effective_plan)
-    ctx.named_nodes["ground"] = ctx.ground
-    owners: dict[int, str] = {}
+    circuit = Circuit(str(spec["name"]))
+    paths = {name: circuit.path(name) for name in cursors}
+    circuit.set_legacy_path_bases(cursors)
+    state = _AdapterState(
+        circuit=circuit,
+        paths=paths,
+        legacy_nodes={},
+        named_nodes={"ground": circuit.ground},
+        named_elements={},
+        blocks=[],
+    )
+    for cursor in paths:
+        state.register_node(f"{cursor}.start", paths[cursor].start)
+        state.register_path(cursor)
+
     for cfg, generated_path in _expanded(topology):
         if cfg.get("action") is not None:
-            _apply_inline_action(ctx, cfg, generated_path)
+            _apply_adapter_action(state, cfg, generated_path)
             continue
-        kind = cfg.get("type")
-        if kind == "coupler":
-            kind = "directional_coupler"
-            cfg["type"] = kind
-        if kind == "directional_coupler":
-            cfg.setdefault("cursors", ["signal", "pump"])
-        if kind == "capacitor":
-            cfg = {**cfg, "type": "raw_element", "value": cfg["C"], "kind": "capacitor"}
-            kind = "raw_element"
-        elif kind == "inductor":
-            cfg = {**cfg, "type": "raw_element", "value": cfg["L"], "kind": "linear_inductor"}
-            kind = "raw_element"
-        if kind not in BLOCK_BUILDERS:
-            raise DesignSchemaError(f"{generated_path}.type: unknown block type {kind!r}")
-        block = _config_for_block(cfg, parameters)
-        if kind == "raw_element":
-            nodes = block.get("nodes", [])
-            if not isinstance(nodes, (list, tuple)) or len(nodes) != 2:
-                raise DesignSchemaError(f"{generated_path}.nodes: expected two endpoints")
-            if block.get("kind") == "mutual_inductor_k":
-                endpoints = [ctx.named_elements.get(endpoint, endpoint) for endpoint in nodes]
-                if any(not any(element.name == endpoint and element.kind == "linear_inductor"
-                               for element in ctx.circuit) for endpoint in endpoints):
-                    raise DesignSchemaError(
-                        f"{generated_path}.nodes: mutual endpoints must name linear inductors")
-                block["nodes"] = endpoints
-            else:
-                endpoints = [ctx.named_nodes.get(endpoint, endpoint) for endpoint in nodes]
-                if any(not isinstance(endpoint, int) for endpoint in endpoints):
-                    raise DesignSchemaError(
-                        f"{generated_path}.nodes: unknown node path or non-integer endpoint")
-                block["nodes"] = endpoints
-        before = len(ctx.circuit)
-        BLOCK_BUILDERS[kind](ctx, block, generated_path)
-        _register_elements(ctx, generated_path, before)
-        for cursor, start in ctx.blocks[-1].start_nodes.items():
-            end = ctx.blocks[-1].end_nodes.get(cursor, start)
-            for node in range(min(start, end), max(start, end) + 1):
-                prior = owners.get(node)
-                if prior is not None and prior != cursor:
-                    raise DesignCollisionError(
-                        f"cursor collision at node {node}: {prior!r} overlaps {cursor!r}")
-                owners[node] = cursor
-    apply_patches(ctx, list(spec.get("patches", [])))
-    _add_first_array_aliases(ctx)
-    named_elements = dict(ctx.named_elements)
-    element_names = [element.name for element in ctx.circuit]
-    duplicates = {name for name in element_names if element_names.count(name) > 1}
-    if duplicates:
-        raise DesignCollisionError(f"duplicate element names: {sorted(duplicates)[:3]}")
-    ports = {int(element.value): PortRecord(int(element.value), int(element.n1))
-             for element in ctx.circuit if element.kind == "port"}
-    return CompiledDesign(str(spec["name"]), ctx.circuit, ctx.cursors,
-                          dict(ctx.named_nodes), named_elements, ports, ctx.blocks,
-                          {"schema_version": 1, "parameters": parameters,
-                           "technology": spec.get("technology"),
-                           "technology_parameters": spec.get("_technology_parameters", {}),
-                           "coupler_mode": coupler_choice, "source": spec.get("_source"),
-                           "coupler_geometry": ({
-                               "width_um": ctx.coupler.geometry.width_um,
-                               "gap_between_lines_um": ctx.coupler.geometry.gap_between_lines_um,
-                               "gap_to_ground_um": ctx.coupler.geometry.gap_to_ground_um,
-                               "length_um": ctx.coupler.geometry.length_um,
-                               "coupling_db": ctx.coupler.geometry.k_db,
-                               "z_input_ohm": ctx.coupler.geometry.z_input_ohm,
-                               "model": ctx.coupler.geometry.model,
-                           } if ctx.coupler is not None else {}),
-                           "profiles": spec.get("profiles", {}),
-                           "component_plan": (effective_plan.metadata
-                                              if effective_plan is not None else {})},
-                          effective_plan)
+        block = _config_for_block(dict(cfg), parameters)
+        _emit_adapter_block(
+            state,
+            block,
+            generated_path,
+            parameters,
+            coupler_choice,
+            effective_plan,
+        )
 
+    for index, patch in enumerate(spec.get("patches", [])):
+        _apply_adapter_action(state, patch, f"patches[{index}]")
 
-def _apply_inline_action(ctx: BuildContext, cfg: Mapping[str, Any], path: str) -> None:
-    target = cfg.get("target")
-    if not isinstance(target, str):
-        raise DesignResolutionError(f"{path}.target: expected an exact path")
-    element_name = ctx.named_elements.get(target, target)
-    matches = [element for element in ctx.circuit if element.name == element_name]
-    if len(matches) != 1:
-        raise DesignResolutionError(
-            f"{path}.target {target!r}: expected one element, found {len(matches)}")
-    if cfg["action"] == "set":
-        matches[0].value = cfg["value"]
-    elif cfg["action"] == "remove":
-        ctx.circuit.remove(matches[0])
-    else:
-        raise DesignSchemaError(f"{path}.action: unknown action")
-
-
-def _add_first_array_aliases(ctx: BuildContext) -> None:
-    """Expose ``line.cell[...]`` as a shorthand for a line's first array."""
-    for table in (ctx.named_nodes, ctx.named_elements):
-        additions: dict[str, Any] = {}
-        for key, value in table.items():
-            marker = ".array[0]."
-            if marker in key:
-                alias = key.replace(marker, ".", 1)
-                additions.setdefault(alias, value)
-        table.update(additions)
-        legacy: dict[str, Any] = {}
-        for key, value in table.items():
-            if key.startswith("line_1.row["):
-                legacy[key.replace("line_1.row[", "period[0].row[", 1)
-                     .replace(".array[0].", ".array.", 1)] = value
-        table.update(legacy)
+    _add_first_array_aliases_adapter(state)
+    state.named_nodes.update({
+        path: node for path, node in circuit.graph.named_nodes.items()
+    })
+    for path, element in circuit.graph.named_elements.items():
+        state.named_elements.setdefault(path, element)
+    compiled = circuit.compile(node_numbering="legacy")
+    active_refs = [
+        ref for ref in circuit.graph.elements if not ref.removed
+    ]
+    compiled_names = {
+        id(ref): element.name
+        for ref, element in zip(active_refs, compiled.elements)
+    }
+    compiled_node_numbers = {
+        id(node): number for node, number in compiled.node_map.items()
+    }
+    named_nodes = {
+        path: compiled_node_numbers[id(node)]
+        for path, node in state.named_nodes.items()
+        if id(node) in compiled_node_numbers
+    }
+    named_elements = {
+        path: compiled_names.get(id(element), element.name)
+        for path, element in state.named_elements.items()
+    }
+    blocks = [
+        BlockRecord(
+            item.path,
+            item.kind,
+            item.cursors,
+            {cursor: compiled.node_map[node] for cursor, node in item.starts.items()},
+            {cursor: compiled.node_map[node] for cursor, node in item.ends.items()},
+            item.count,
+        )
+        for item in state.blocks
+    ]
+    ports = {
+        number: PortRecord(port.number, port.node)
+        for number, port in compiled.ports.items()
+    }
+    metadata = {
+        "schema_version": 1,
+        "parameters": parameters,
+        "technology": spec.get("technology"),
+        "technology_parameters": spec.get("_technology_parameters", {}),
+        "coupler_mode": coupler_choice,
+        "source": spec.get("_source"),
+        "coupler_geometry": _coupler_metadata(state),
+        "profiles": spec.get("profiles", {}),
+        "component_plan": (
+            effective_plan.metadata if effective_plan is not None else {}
+        ),
+    }
+    return CompiledDesign(
+        str(spec["name"]),
+        compiled.elements,
+        {
+            cursor: compiled.node_map[paths[cursor].end]
+            for cursor in paths
+        },
+        named_nodes,
+        named_elements,
+        ports,
+        blocks,
+        metadata,
+        effective_plan,
+    )
