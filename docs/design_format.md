@@ -1,17 +1,26 @@
-# Design YAML reference
+# Design format reference
 
-This document explains the design file that a fab user edits. It describes the
-device definition only. Pump power, frequency sweeps, gain maps, and solver
+The Python ``Circuit`` API is the authoritative design authoring interface.
+This document describes the YAML adapter for users who need a declarative
+device definition. Pump power, frequency sweeps, gain maps, and solver
 settings belong to the workflow command.
 
 The normal process is:
 
 ```text
-design YAML -> compiler -> generated circuit directory -> workflow
+Python Circuit design -> compile -> Element[] / matrices -> workflow
+                         ^
+                         |
+                 optional YAML adapter
 ```
 
-Do not edit generated matrix files by hand. Change the YAML and rebuild the
-output directory.
+Use Python designs under ``designs/python/`` for new circuits. Existing YAML
+designs remain supported through ``compile_design``, which translates the YAML
+blocks into calls to the same public ``Circuit`` builders. The YAML compiler
+is therefore an adapter, not a second circuit-generation implementation.
+
+Do not edit generated matrix files by hand. Change the Python design or YAML
+source and rebuild the output directory.
 
 ## 1. Smallest useful IPM design
 

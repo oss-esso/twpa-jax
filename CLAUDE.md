@@ -14,6 +14,29 @@ See `docs/design_format.md` for the schema and compiler boundary. Nested
 `repeat` is limited to depth two. Compiler cursor collisions are hard errors,
 and files under `designs/*.yaml` describe concrete devices rather than
 parametric templates.
+
+## Circuit authoring API
+
+The authoritative electrical design interface is the Python
+`twpa_solver.circuit.Circuit` API. New circuit sources belong under
+`designs/python/`; existing YAML remains supported as an adapter that calls
+the same public builders. `Circuit.compile()` defaults to
+`node_numbering="creation"`. The `"legacy"` policy exists only for the YAML
+adapter and parity with the stored `designs/ipm_2c_fixed` artifacts. Element
+emission order is invariant under both policies.
+
+Phase 8 adds `add_jj_array`, a lumped series-array approximation with
+`Lj_eff = count * Lj` and `Cj_eff = Cj / count`. It adds no symbolic nodes and
+does not represent the fabrication array's internal geometry. v3 uses
+`ExplicitCouplerGeometry` for its three-conductor couplers. Coupler leakage is
+optional and must be requested explicitly; it is not inherited from the v1 or
+v3 fabrication default.
+
+The circuit API accepts physical inductance values directly. A squared
+kinetic-inductance parameter is not part of the electrical API. Geometry-only
+GDS values, mask layers, air bridges, tapers, and coordinates remain outside
+the circuit model.
+
 The checked-in `designs/` tree is source-only; generated matrices, plots, and
 resolved artifacts belong under `outputs/` or another disposable build path.
 
