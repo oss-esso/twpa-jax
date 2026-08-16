@@ -107,6 +107,11 @@ def test_h1_adaptive_state_relative_atol_is_an_explicit_option() -> None:
     assert args.atol_floor == pytest.approx(1e-12)
 
 
+def test_h1_l_stable_alias_selects_bdf() -> None:
+    args = parse_args(["--l-stable"])
+    assert args.method == "BDF"
+
+
 def test_h1_node_velocity_reconstructs_algebraic_port() -> None:
     system = build_system(ROOT / "designs" / "ipm_2c_fixed", 7.9, 4)
     q = np.zeros(system.n)
