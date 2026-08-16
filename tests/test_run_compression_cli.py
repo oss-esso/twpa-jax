@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
@@ -318,6 +319,8 @@ def test_force_single_tone_short_circuits_multitone_basis(monkeypatch) -> None:
 
 @pytest.mark.slow
 def test_jtwpa_hard_point_fixed_four_step_fails_adaptive_passes() -> None:
+    if not Path("outputs/jc_doc_python_designs/jc_jtwpa").exists():
+        pytest.skip("optional development circuit fixture is absent")
     args = build_parser().parse_args(
         [
             "--output-dir", "unused",
