@@ -108,8 +108,8 @@ not interchangeable — a design built with one is not reproduced by another.**
 
 `auto` is the recommended design-file mode. It always optimizes from the
 YAML `coupling_dB`, `coupler_freq_hz`, and `Z0` values. Targets at or above
-approximately -18 dB use the two-line CPW model; weaker-coupling targets use
-the centre-ground three-line model. The selected model and optimized geometry
+-20 dB use the two-line CPW model; weaker-coupling targets select the
+centre-ground three-line model. The selected model and optimized geometry
 are retained in the resolved design metadata. `cached`, `optimize`, and
 `ideal` remain available for compatibility and controlled comparisons.
 
