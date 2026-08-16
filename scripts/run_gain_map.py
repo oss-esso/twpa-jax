@@ -199,6 +199,23 @@ def attenuation_db_for(freq_ghz: float, args: argparse.Namespace) -> float:
     return att
 
 
+def pump_solution_is_valid(
+    *,
+    converged: bool,
+    three_wm: bool,
+    configured_full_residual_gate: float | None,
+    full_residual_gate_passed: bool,
+) -> bool:
+    """Apply the reconstructed-residual gate when the caller requests it.
+
+    Three-wave-mixing production solves retain their existing mandatory gate.
+    Four-wave-mixing solves remain unchanged unless an explicit gate is
+    configured by the caller.
+    """
+    gate_required = three_wm or configured_full_residual_gate is not None
+    return bool(converged and (not gate_required or full_residual_gate_passed))
+
+
 def signal_attenuation_db_for(freq_ghz: float, args: argparse.Namespace) -> float:
     """Signal-line attenuation used when referring measured signal powers."""
     override = getattr(args, "signal_attenuation_db", None)
@@ -316,6 +333,27 @@ def _final_failure_reason(report: dict[str, Any] | None) -> str | None:
     return str(reason) if reason else None
 
 
+def boundary_predictor_status(
+    current_over_ic: float | None,
+    min_cos_phase: float | None,
+) -> str:
+    """Classify the current/tangent diagnostic without declaring a failure."""
+    if current_over_ic is None and min_cos_phase is None:
+        return "NOT_AVAILABLE"
+    ratio = float(current_over_ic) if current_over_ic is not None else float("nan")
+    tangent = float(min_cos_phase) if min_cos_phase is not None else float("nan")
+    if (np.isfinite(ratio) and ratio >= 1.0) or (
+        np.isfinite(tangent) and tangent < 0.0
+    ):
+        return "BOUNDARY_PREDICTED"
+    if (
+        np.isfinite(ratio) and ratio >= 0.9
+        and np.isfinite(tangent) and tangent <= 0.2
+    ):
+        return "APPROACHING_BOUNDARY"
+    return "SUBCRITICAL"
+
+
 def pump_metrics(report: dict[str, Any] | None) -> dict[str, Any]:
     if report is None:
         return {k: None for k in (
@@ -324,12 +362,15 @@ def pump_metrics(report: dict[str, Any] | None) -> dict[str, Any]:
             "pump_preconditioner_numeric_factor_runtime_s", "pump_coeff_rel",
             "pump_time_rel", "pump_newton_total", "pump_branch_current_max",
             "pump_branch_current_max_over_ic", "pump_strongest_branch_index",
-            "pump_branch_min_cos_phase", "pump_residual_max_omitted_mode_rel",
-            "pump_failure_reason",
+            "pump_branch_min_cos_phase", "pump_boundary_predictor_status",
+            "pump_residual_max_omitted_mode_rel", "sidebands",
+            "single_tone_forced", "pump_failure_reason",
         )}
     reports = report.get("reports", [])
     final = reports[-1] if reports else {}
     summ = report.get("solution_summary", {})
+    ratio = finite_or_none(summ.get("branch_current_max_over_ic"))
+    min_cos = finite_or_none(summ.get("branch_min_cos_phase"))
     return {
         "pump_runtime_s": sum(finite_or_none(r.get("runtime_s")) or 0.0 for r in reports) if reports else None,
         "pump_factor_runtime_s": sum(finite_or_none(r.get("factor_runtime_s")) or 0.0 for r in reports) if reports else None,
@@ -339,19 +380,17 @@ def pump_metrics(report: dict[str, Any] | None) -> dict[str, Any]:
         "pump_time_rel": finite_or_none(final.get("time_rel")),
         "pump_newton_total": int(sum(int(r.get("newton_iterations", 0)) for r in reports)),
         "pump_branch_current_max": finite_or_none(summ.get("branch_i_max_abs")),
-        "pump_branch_current_max_over_ic": finite_or_none(
-            summ.get("branch_current_max_over_ic")
-        ),
+        "pump_branch_current_max_over_ic": ratio,
         "pump_strongest_branch_index": summ.get("strongest_branch_index"),
-        "pump_branch_min_cos_phase": finite_or_none(
-            summ.get("branch_min_cos_phase")
-        ),
+        "pump_branch_min_cos_phase": min_cos,
+        "pump_boundary_predictor_status": boundary_predictor_status(ratio, min_cos),
         "pump_residual_max_omitted_mode_rel": finite_or_none(
             report.get("metadata", {})
             .get("pump_residual_spectrum", {})
             .get("max_omitted_mode_rel")
         ),
         "pump_failure_reason": _final_failure_reason(report),
+        "sidebands": report.get("metadata", {}).get("sidebands"),
     }
 
 
@@ -528,7 +567,8 @@ def run_point(
 
     gain_rc = -1
     gain_report = None
-    if p_status == "VALID_CONVERGED":
+    force_single_tone = bool(getattr(args, "force_single_tone", False))
+    if p_status == "VALID_CONVERGED" and not force_single_tone:
         logger.debug("run_point_gain_subprocess_dispatch index=%s", point.index)
         gain_cmd = [
             args.python_executable, EXP09,
@@ -560,9 +600,16 @@ def run_point(
             "run_point_gain_skipped index=%s reason=pump_not_converged pump_status=%s",
             point.index, p_status,
         )
-    g_status = gain_status(gain_report, gain_rc)
+    g_status = (
+        "SKIPPED_SINGLE_TONE"
+        if force_single_tone and p_status == "VALID_CONVERGED"
+        else gain_status(gain_report, gain_rc)
+    )
 
-    status = "PASS" if p_status == "VALID_CONVERGED" and g_status == "VALID_SOLVED" else "ERROR"
+    status = "PASS" if (
+        p_status == "VALID_CONVERGED"
+        and g_status in {"VALID_SOLVED", "SKIPPED_SINGLE_TONE"}
+    ) else "ERROR"
     logger.debug(
         "run_point_result index=%s status=%s pump_status=%s gain_status=%s",
         point.index, status, p_status, g_status,
@@ -578,6 +625,8 @@ def run_point(
         "status": status,
         "pump_status": p_status,
         "gain_status": g_status,
+        "sidebands": int(args.sidebands),
+        "single_tone_forced": force_single_tone,
         "warm_started": promote_from is not None,
         "elapsed_s": time.perf_counter() - point_start,
         "pump_wall_runtime_s": pump_wall_runtime_s,
@@ -1275,6 +1324,13 @@ class InProcessEngine:
         if mode == "warm" and warm_X is not None:
             logger.debug("engine_solve_point_continuation_dispatch point=%s method=direct", point.index)
             X, reports = solver.solve_direct(solve_problem, warm_X)
+            continuation_info["steps"] = len(reports)
+            continuation_info["reached_target"] = bool(
+                reports
+                and reports[-1].converged
+                and abs(reports[-1].source_scale - 1.0) < 1e-12
+            )
+            continuation_info["runtime_s"] = time.perf_counter() - t_solve
         else:
             cont = getattr(a, "inproc_continuation", "adaptive_secant")
             logger.debug("engine_solve_point_continuation_dispatch point=%s method=%s", point.index, cont)
@@ -1529,9 +1585,9 @@ class InProcessEngine:
         full_gate = None
         full_gate_passed = True
         three_wm = int(getattr(a, "mixing_order", 0)) == 3
+        configured_gate = getattr(a, "pump_full_residual_gate", None)
         if hasattr(full_problem, "norms"):
             full_time_rel = full_problem.norms(X_full, 1.0, True)["time_rel"]
-            configured_gate = getattr(a, "pump_full_residual_gate", None)
             high_power_gate = (
                 1e-7 if getattr(a, "high_power_recovery", False) else None
             )
@@ -1549,9 +1605,14 @@ class InProcessEngine:
                     and np.isfinite(float(full_time_rel))
                     and float(full_time_rel) <= full_gate
                 )
-        pump_valid = bool(converged and (not three_wm or full_gate_passed))
+        pump_valid = pump_solution_is_valid(
+            converged=bool(converged),
+            three_wm=three_wm,
+            configured_full_residual_gate=configured_gate,
+            full_residual_gate_passed=full_gate_passed,
+        )
         validation_failure = None
-        if converged and three_wm and not full_gate_passed:
+        if converged and not pump_valid:
             validation_failure = "full harmonic residual gate failed"
         elif not converged:
             validation_failure = reports[-1].failure_reason if reports else "no Newton report"
@@ -1624,6 +1685,7 @@ class InProcessEngine:
                 getattr(a, "high_power_recovery", False)
             ),
             "pump_backend": a.inproc_pump_backend,
+            "sidebands": int(getattr(a, "sidebands", 6)),
             # Production checkpoints are validation inputs.  Preserve enough
             # precision for the HB/TD handoff and independent residual checks.
             "pump_solution_dtype": getattr(a, "pump_solution_dtype", "float64")
@@ -1644,6 +1706,8 @@ class InProcessEngine:
             "point_index": point.index, "i_power": point.i_power, "j_freq": point.j_freq,
             "pump_power_dbm": point.power_dbm, "pump_freq_ghz": point.pump_freq_ghz,
             "pump_current_peak_a": point.current_a, "warm_started": mode == "warm",
+            "sidebands": int(getattr(a, "sidebands", 6)),
+            "single_tone_forced": bool(getattr(a, "force_single_tone", False)),
             "pump_status": "VALID_CONVERGED" if pump_valid else "FAIL",
             "pump_runtime_s": float(sum(r.runtime_s for r in reports)),
             "pump_wall_runtime_s": pump_wall_runtime_s,
@@ -1667,6 +1731,10 @@ class InProcessEngine:
             "pump_strongest_branch_index": summary.get("strongest_branch_index"),
             "pump_branch_min_cos_phase": finite_or_none(
                 summary.get("branch_min_cos_phase")
+            ),
+            "pump_boundary_predictor_status": boundary_predictor_status(
+                finite_or_none(summary.get("branch_current_max_over_ic")),
+                finite_or_none(summary.get("branch_min_cos_phase")),
             ),
             "pump_residual_max_omitted_mode_rel": finite_or_none(
                 spectrum_info.get("max_omitted_mode_rel")
@@ -1694,7 +1762,14 @@ class InProcessEngine:
         # ``force_gain`` runs the gain solve on the last-iterate pump waveform
         # even when Newton did not converge (above-threshold / fold region), so
         # the diagnostic column resume can see what the gain does past the wall.
-        if pump_valid or force_gain:
+        if getattr(a, "force_single_tone", False):
+            row["gain_status"] = "SKIPPED_SINGLE_TONE"
+            row["single_tone_forced"] = True
+            logger.debug(
+                "engine_solve_point_gain_skipped point=%s reason=force_single_tone",
+                point.index,
+            )
+        elif pump_valid or force_gain:
             logger.debug(
                 "engine_solve_point_gain_dispatch point=%s reason=%s",
                 point.index, "converged" if pump_valid else "force_gain",
@@ -1729,8 +1804,13 @@ class InProcessEngine:
             else signal_ghz_for(point.pump_freq_ghz, a),
             a,
         )
-        row["status"] = "PASS" if (row["pump_status"] == "VALID_CONVERGED"
-                                   and row["gain_status"] == "VALID_SOLVED") else "ERROR"
+        row["status"] = "PASS" if (
+            row["pump_status"] == "VALID_CONVERGED"
+            and (
+                row["gain_status"] == "VALID_SOLVED"
+                or row["gain_status"] == "SKIPPED_SINGLE_TONE"
+            )
+        ) else "ERROR"
         row["elapsed_s"] = time.perf_counter() - t0
         row["pump_dir"] = str(pump_dir)
         if getattr(a, "compact_output", False):
@@ -3570,7 +3650,8 @@ def write_points_csv(path: Path, rows: list[dict[str, Any]]) -> None:
         "pump_preconditioner_numeric_factor_runtime_s", "pump_newton_total",
         "pump_gmres_total", "pump_coeff_rel", "pump_time_rel", "pump_branch_current_max",
         "pump_branch_current_max_over_ic", "pump_strongest_branch_index",
-        "pump_branch_min_cos_phase", "pump_residual_max_omitted_mode_rel",
+        "pump_branch_min_cos_phase", "pump_boundary_predictor_status",
+        "pump_residual_max_omitted_mode_rel", "sidebands", "single_tone_forced",
         "pump_dominant_omitted_modes",
         "pump_continuation_method", "pump_continuation_steps",
         "pump_continuation_reached_target", "pump_continuation_fold_lambda",
@@ -4318,6 +4399,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                    help="Solve a spectrum of signal frequencies per cell (see below); "
                    "writes map_spectrum.npz. Reuses exp09's khat conversion base so "
                    "each extra signal point is cheap.")
+    p.add_argument(
+        "--force-single-tone", action="store_true",
+        help="Solve and report the pump-only single-tone HB state; skip signal solves.",
+    )
     p.add_argument("--signal-offset-start-mhz", type=float, default=100.0,
                    help="First |offset| from fp for the spectrum ladder (MHz).")
     p.add_argument("--signal-offset-step-mhz", type=float, default=500.0, #250

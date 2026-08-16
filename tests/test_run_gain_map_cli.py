@@ -85,6 +85,21 @@ def test_high_power_cache_size_can_be_overridden(monkeypatch) -> None:
     assert args.inproc_schur_cache_size == 2
 
 
+def test_explicit_full_residual_gate_is_enforced_for_four_wave_mixing() -> None:
+    assert not run_gain_map.pump_solution_is_valid(
+        converged=True,
+        three_wm=False,
+        configured_full_residual_gate=1.0e-8,
+        full_residual_gate_passed=False,
+    )
+    assert run_gain_map.pump_solution_is_valid(
+        converged=True,
+        three_wm=False,
+        configured_full_residual_gate=None,
+        full_residual_gate_passed=False,
+    )
+
+
 def test_engine_cache_clear_releases_all_cached_partitions() -> None:
     class FakePartition:
         def __init__(self) -> None:
@@ -401,6 +416,7 @@ def _fake_solve_point_engine(monkeypatch, *, converged: bool):
         inproc_gmres_maxiter=80, inproc_preconditioner="real_coupled",
         inproc_solve_deadline_s=0.0, inproc_precond_reuse=0,
         inproc_precond_refresh_gmres=0, inproc_continuation="adaptive_secant",
+        mixing_order=4, high_power_recovery=False, pump_solution_dtype="float64",
     )
     eng = SimpleNamespace(
         args=args, ic_median=1.0, _gain=fake_gain,
@@ -445,6 +461,85 @@ def test_force_gain_off_skips_gain_and_drops_x_when_pump_not_converged(
     assert gain_calls == []
     assert row["gain_status"] == "ERROR"
     assert X is None
+
+
+def test_force_single_tone_skips_gain_solver(monkeypatch, tmp_path) -> None:
+    method, gain_calls = _fake_solve_point_engine(monkeypatch, converged=True)
+    method.__self__.args.force_single_tone = True
+
+    row, X = method(
+        _make_point(), tmp_path, mode="warm", warm_X=np.array([0.0, 0.0, 0.0])
+    )
+
+    assert gain_calls == []
+    assert row["gain_status"] == "SKIPPED_SINGLE_TONE"
+    assert row["single_tone_forced"] is True
+    assert row["status"] == "PASS"
+    assert X is not None
+
+
+def test_force_single_tone_subprocess_skips_gain_command(monkeypatch, tmp_path) -> None:
+    commands: list[list[str]] = []
+    pump_report = {
+        "final_status": "VALID_CONVERGED",
+        "reports": [{"runtime_s": 0.1, "newton_iterations": 1}],
+        "solution_summary": {
+            "branch_i_max_abs": 1.0,
+            "branch_current_max_over_ic": 0.5,
+            "branch_min_cos_phase": 0.8,
+            "strongest_branch_index": 0,
+        },
+        "metadata": {"sidebands": 6},
+    }
+
+    def fake_run_command(command, **_kwargs):
+        commands.append(command)
+        return 0, 0.1
+
+    monkeypatch.setattr(run_gain_map, "run_command", fake_run_command)
+    monkeypatch.setattr(
+        run_gain_map,
+        "read_json",
+        lambda path: pump_report if path.name == "pump_report.json" else None,
+    )
+    args = SimpleNamespace(
+        python_executable="python",
+        circuit_dir=tmp_path,
+        pump_port=1,
+        pump_current_jc_scale=1.0,
+        pump_mode_policy="positive_odd_jc",
+        pump_mode_count=10,
+        harmonics=10,
+        nt=40,
+        newton_tol=1.0e-10,
+        pump_timeout_s=1.0,
+        gain_timeout_s=1.0,
+        z0_ohm=50.0,
+        source_port=1,
+        out_port=2,
+        sidebands=6,
+        gamma_nt=64,
+        signal_ghz=None,
+        signal_detuning_mhz=500.0,
+        signal_attenuation_db=0.0,
+        pump_dynamic_dc=False,
+        force_single_tone=True,
+    )
+
+    row = run_gain_map.run_point(
+        _make_point(), tmp_path, args, pump_flags=[], promote_from=None
+    )
+
+    assert len(commands) == 1
+    assert "run_exp09.py" not in commands[0][1]
+    assert row["gain_status"] == "SKIPPED_SINGLE_TONE"
+    assert row["status"] == "PASS"
+
+
+def test_boundary_predictor_reports_current_and_tangent_status() -> None:
+    assert run_gain_map.boundary_predictor_status(0.5, 0.8) == "SUBCRITICAL"
+    assert run_gain_map.boundary_predictor_status(0.95, 0.1) == "APPROACHING_BOUNDARY"
+    assert run_gain_map.boundary_predictor_status(1.0, -0.01) == "BOUNDARY_PREDICTED"
 
 
 def test_frequency_chunk_size_defaults_to_ten_columns(monkeypatch) -> None:
