@@ -17,9 +17,16 @@ class ImProduct:
     raw: ToneIndex
     tone: ToneIndex
     conjugated: bool
+    family: str = "single_tone"
+    q1: int | None = None
+    q2: int | None = None
+    ordering: str | None = None
 
     @property
     def label(self) -> str:
+        if self.family == "two_tone":
+            ordering = "w1w2" if self.ordering == "w1_minus_w2" else "w2w1"
+            return f"imd2_o{self.order}_m{self.m}n{self.n}_{ordering}"
         return f"imd_o{self.order}_m{self.m}n{self.n}"
 
 
@@ -37,6 +44,75 @@ def enumerate_im_products(max_order: int, omega_p: float, delta: float) -> list[
             except ValueError:
                 continue
             products.append(ImProduct(order, m, n, raw, tone, conjugated))
+    return products
+
+
+def _validate_two_tone_placement(max_order: int, q1: int, q2: int) -> None:
+    if q1 == q2:
+        raise ValueError("two-tone indices must be distinct")
+    if q1 == 0 or q2 == 0:
+        raise ValueError("two-tone fundamentals must not occupy q=0")
+    if q1 + q2 == 0:
+        raise ValueError(
+            "degenerate four-wave-mixing placement rejected: q1 + q2 must not be zero"
+        )
+    fundamentals = {
+        ToneIndex(1, q1),
+        ToneIndex(1, q2),
+        ToneIndex(-1, -q1),
+        ToneIndex(-1, -q2),
+    }
+    for order in range(3, max_order + 1, 2):
+        m = (order + 1) // 2
+        n = (order - 1) // 2
+        for left, right in ((q1, q2), (q2, q1)):
+            q = m * left - n * right
+            if q == 0:
+                raise ValueError(
+                    f"two-tone product collides with the pump at q=0 at order {order}"
+                )
+            raw = ToneIndex(1, q)
+            if q in {q1, q2, -q1, -q2} or raw in fundamentals:
+                raise ValueError(
+                    "two-tone product collides with a fundamental or its conjugate"
+                )
+
+
+def enumerate_two_tone_im_products(
+    max_order: int, q1: int, q2: int
+) -> list[ImProduct]:
+    """Return odd-order products for two commensurate signal fundamentals.
+
+    The returned raw tones use ``h=1`` and the supplied signal-sector index.
+    The caller supplies ``delta`` when constructing the physical basis, so the
+    same coordinates can be checked against both signal frequencies.
+    """
+    if max_order < 3 or max_order % 2 == 0:
+        raise ValueError(f"max_order must be an odd integer >= 3, got {max_order}")
+    _validate_two_tone_placement(max_order, int(q1), int(q2))
+    products: list[ImProduct] = []
+    for order in range(3, max_order + 1, 2):
+        m = (order + 1) // 2
+        n = (order - 1) // 2
+        for ordering, left, right in (
+            ("w1_minus_w2", int(q1), int(q2)),
+            ("w2_minus_w1", int(q2), int(q1)),
+        ):
+            raw = ToneIndex(1, m * left - n * right)
+            products.append(
+                ImProduct(
+                    order=order,
+                    m=m,
+                    n=n,
+                    raw=raw,
+                    tone=raw,
+                    conjugated=False,
+                    family="two_tone",
+                    q1=int(q1),
+                    q2=int(q2),
+                    ordering=ordering,
+                )
+            )
     return products
 
 

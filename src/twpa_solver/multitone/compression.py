@@ -68,14 +68,19 @@ def solve_signal_power_point(
     """Solve one signal-power point with the selected recovery ladder."""
     if recovery not in {"plain", "ladder"}:
         raise ValueError(f"unknown signal recovery mode {recovery!r}")
-    path = AffineSourcePath.signal_turn_on(pump_source, signal_source * signal_current_a)
+    path = AffineSourcePath.signal_turn_on_pump_fixed(
+        pump_source, signal_source * signal_current_a
+    )
     candidate_problem = _problem_with_path(problem, path)
     if recovery == "ladder" and signal_current_prev_a <= 0.0:
         state, reports, trace = solver.solve_adaptive_continuation(
             candidate_problem,
-            None,
+            np.array(pump_seed if pump_seed is not None else X_prev, copy=True),
             initial_step=0.25,
-            min_step=0.01,
+            min_step=min(
+                0.25,
+                max(1.0 / 4096.0, min(0.01, 1.0 / 256.0)),
+            ),
             growth=1.5,
             shrink=0.5,
             fallback_fixed_steps=20,
@@ -150,7 +155,13 @@ def solve_signal_power_point(
     substep_problem = _problem_with_path(problem, substep_path)
     span_db = 20.0 * math.log10(signal_current_a / signal_current_prev_a)
     initial_step = min(1.0, signal_substep_init_db / max(span_db, 1e-12))
-    min_step = min(initial_step, signal_substep_min_db / max(span_db, 1e-12))
+    min_step = min(
+        initial_step,
+        max(
+            1.0 / 4096.0,
+            min(signal_substep_min_db / max(span_db, 1e-12), 1.0 / 256.0),
+        ),
+    )
     state, reports, trace = solver.solve_adaptive_continuation(
         substep_problem,
         X_prev,

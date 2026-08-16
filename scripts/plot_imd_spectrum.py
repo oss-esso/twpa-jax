@@ -43,6 +43,18 @@ def _omega_expression(m: int, n: int, conjugated: bool) -> str:
     return f"{first_term} − {second_term}"
 
 
+def _two_tone_expression(m: int, n: int, ordering: str | None) -> str:
+    """Format the two-tone expression for a retained IMD product."""
+    first, second = (
+        ("omega1", "omega2")
+        if ordering == "w1_minus_w2"
+        else ("omega2", "omega1")
+    )
+    first_term = first if m == 1 else f"{m}{first}"
+    second_term = second if n == 1 else f"{n}{second}"
+    return f"{first_term} - {second_term}"
+
+
 def _product_labels(csv_path: Path, summary_path: Path | None) -> dict[str, str]:
     """Return legend labels keyed by IMD CSV column name."""
     if summary_path is None:
@@ -54,9 +66,22 @@ def _product_labels(csv_path: Path, summary_path: Path | None) -> dict[str, str]
     labels: dict[str, str] = {}
     for product in summary.get("imd_products", []):
         label = str(product["label"])
-        expression = _omega_expression(
-            int(product["m"]), int(product["n"]), bool(product["conjugated"])
-        )
+        if product.get("family") == "two_tone":
+            m = int(product["m"])
+            n = int(product["n"])
+            ordering = product.get("ordering")
+            if product.get("conjugated"):
+                m, n = n, m
+                ordering = (
+                    "w2_minus_w1"
+                    if ordering == "w1_minus_w2"
+                    else "w1_minus_w2"
+                )
+            expression = _two_tone_expression(m, n, ordering)
+        else:
+            expression = _omega_expression(
+                int(product["m"]), int(product["n"]), bool(product["conjugated"])
+            )
         labels[f"{label}_dbc"] = expression
     return labels
 
@@ -69,24 +94,58 @@ def plot_imd(
     summary_path: Path | None = None,
 ) -> None:
     frame = pd.read_csv(csv_path)
-    columns = [column for column in frame.columns if re.fullmatch(r"imd_o\d+_m\d+n\d+_dbc", column)]
+    columns = [
+        column
+        for column in frame.columns
+        if re.fullmatch(r"imd_o\d+_m\d+n\d+_dbc", column)
+        or re.fullmatch(r"imd2_o\d+_m\d+n\d+_(?:w1w2|w2w1)_dbc", column)
+    ]
     if not columns:
         raise ValueError(f"no IMD columns found in {csv_path}")
+    fundamental_columns = [
+        column
+        for column in ("tone1_s21_db", "tone2_s21_db")
+        if column in frame.columns and frame[column].notna().any()
+    ]
     labels = _product_labels(csv_path, summary_path)
     figure, axis = plt.subplots(figsize=(9, 5.5))
     colours = {3: "tab:blue", 5: "tab:orange", 7: "tab:green", 9: "tab:red"}
     styles = ("-", "--", ":", "-.")
     for index, column in enumerate(sorted(columns)):
         match = re.fullmatch(r"imd_o(\d+)_m(\d+)n(\d+)_dbc", column)
-        assert match is not None
-        order = int(match.group(1))
+        two_match = re.fullmatch(
+            r"imd2_o(\d+)_m(\d+)n(\d+)_(w1w2|w2w1)_dbc", column
+        )
+        match_data = match if match is not None else two_match
+        assert match_data is not None
+        order = int(match_data.group(1))
         axis.plot(
             frame["signal_power_dbm"], frame[column],
             label=labels.get(
                 column,
-                f"IM{order} ({match.group(2)},{match.group(3)})",
+                f"IM{order} ({match_data.group(2)},{match_data.group(3)})",
             ),
-            color=colours.get(order), linestyle=styles[index % len(styles)],
+            color=colours.get(order),
+            linestyle=styles[index % len(styles)],
+            marker="o" if len(frame) == 1 else None,
+        )
+    fundamental_labels = {
+        "tone1_s21_db": "w1 fundamental (dB rel. tone-1 input)",
+        "tone2_s21_db": "w2 fundamental (dB rel. tone-2 input)",
+    }
+    fundamental_styles = {
+        "tone1_s21_db": ("black", "-"),
+        "tone2_s21_db": ("purple", "--"),
+    }
+    for column in fundamental_columns:
+        colour, linestyle = fundamental_styles[column]
+        axis.plot(
+            frame["signal_power_dbm"],
+            frame[column],
+            color=colour,
+            linestyle=linestyle,
+            linewidth=1.4,
+            label=fundamental_labels[column],
         )
     finite_values = frame[columns].to_numpy(dtype=float)
     if floor_dbc is None:
@@ -94,7 +153,11 @@ def plot_imd(
     axis.axhspan(floor_dbc - 3.0, floor_dbc + 3.0, color="0.7", alpha=0.25, label="G3 floor band")
     axis.axhline(-30.0, color="0.35", linestyle="--", linewidth=0.8)
     axis.axhline(-40.0, color="0.35", linestyle=":", linewidth=0.8)
-    axis.set_xlabel("Source / instrument signal power (dBm)")
+    axis.set_xlabel(
+        "Tone-1 per-tone signal power (dBm)"
+        if any(column.startswith("imd2_") for column in columns)
+        else "Source / instrument signal power (dBm)"
+    )
     if signal_attenuation_db:
         on_chip_axis = axis.secondary_xaxis(
             "top",

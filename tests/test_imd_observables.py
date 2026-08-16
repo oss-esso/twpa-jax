@@ -1,12 +1,18 @@
 from __future__ import annotations
 
 import numpy as np
+import pytest
 import scipy.sparse as sp
 
 from twpa_solver.core import CircuitMatrices
 from twpa_solver.multitone.basis import MultiToneBasis, ToneIndex
-from twpa_solver.multitone.imd import ImProduct
+from twpa_solver.multitone.imd import (
+    ImProduct,
+    enumerate_im_products,
+    enumerate_two_tone_im_products,
+)
 from twpa_solver.multitone.observables import imd_products_dbc
+from twpa_solver.multitone.source import AffineSourcePath
 
 
 def _circuit() -> CircuitMatrices:
@@ -83,3 +89,60 @@ def test_readout_is_independent_of_torus_grid_resolution() -> None:
     coarse_result = imd_products_dbc(state, coarse, circuit, products, out_port=1)
     fine_result = imd_products_dbc(state, fine, circuit, products, out_port=1)
     assert coarse_result["imd_o3_m1n2_dbc"] == fine_result["imd_o3_m1n2_dbc"]
+
+
+def test_two_tone_rejects_degenerate_four_wave_mixing_placement() -> None:
+    with pytest.raises(ValueError, match="degenerate"):
+        enumerate_two_tone_im_products(5, 1, -1)
+
+
+def test_two_tone_rejects_pump_collision() -> None:
+    with pytest.raises(ValueError, match="q=0"):
+        enumerate_two_tone_im_products(5, 1, 2)
+
+
+def test_two_tone_rejects_fundamental_collision() -> None:
+    with pytest.raises(ValueError, match="fundamental"):
+        enumerate_two_tone_im_products(3, 1, 3)
+
+
+def test_two_tone_products_round_trip_to_physical_frequencies() -> None:
+    omega_p = 2.0 * np.pi * 5.0e9
+    delta = 2.0 * np.pi * 50.0e6
+    products = enumerate_two_tone_im_products(5, 5, 7)
+    for product in products:
+        if product.ordering == "w1_minus_w2":
+            raw_frequency = product.m * (omega_p + 5.0 * delta) - product.n * (
+                omega_p + 7.0 * delta
+            )
+        else:
+            raw_frequency = product.m * (omega_p + 7.0 * delta) - product.n * (
+                omega_p + 5.0 * delta
+            )
+        reconstructed = product.tone.omega(omega_p, delta)
+        assert reconstructed == pytest.approx(abs(raw_frequency), rel=1.0e-12)
+
+
+def test_two_tone_source_keeps_independent_amplitudes() -> None:
+    pump = np.zeros((2, 2), dtype=complex)
+    tone_1 = np.ones((2, 2), dtype=complex)
+    tone_2 = 2.0 * np.ones((2, 2), dtype=complex)
+    path = AffineSourcePath.two_tone_signal_turn_on(
+        pump, tone_1, tone_2, amplitude_1=3.0, amplitude_2=0.5
+    )
+    assert np.all(path.source(1.0) == 4.0)
+
+
+def test_single_tone_imd_coordinates_match_legacy_fixture() -> None:
+    omega_p = 2.0 * np.pi * 7.0e9
+    delta = 2.0 * np.pi * 0.12e9
+    actual = enumerate_im_products(5, omega_p, delta)
+    expected = []
+    for order in (3, 5):
+        for m in range(1, order):
+            n = order - m
+            expected.append((order, m, n, m - n, -m))
+    assert [
+        (product.order, product.m, product.n, product.raw.h, product.raw.q)
+        for product in actual
+    ] == expected

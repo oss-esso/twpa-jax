@@ -94,14 +94,16 @@ def imd_products_dbc(
     out_port: int,
     z0_ohm: float = 50.0,
     dc_branch_flux: np.ndarray | None = None,
+    reference_tone: ToneIndex | None = None,
 ) -> dict[str, float]:
-    """Return each IM product's outgoing power relative to the signal tone."""
+    """Return each IM product's outgoing power relative to one fundamental."""
     waves = extract_port_waves(
         X_full, basis, circuit, ports=[int(out_port)], z0_ohm=z0_ohm,
         dc_branch_flux=dc_branch_flux,
     )
     b_power = waves["b_power"]
-    signal_power = b_power.get((basis.signal_tone, int(out_port)))
+    reference = basis.signal_tone if reference_tone is None else reference_tone
+    signal_power = b_power.get((reference, int(out_port)))
     results: dict[str, float] = {}
     for product in products:
         power = b_power.get((product.tone, int(out_port)))
