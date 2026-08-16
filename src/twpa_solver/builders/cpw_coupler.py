@@ -9,6 +9,7 @@ out of geometric range.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import lru_cache
 import math
 
 import numpy as np
@@ -27,7 +28,12 @@ class CPWModeResult:
 
 
 class CPWConformalCoupler:
-    def __init__(self, gaps_um: list[float], widths_um: list[float], length_um: float):
+    def __init__(
+        self,
+        gaps_um: list[float],
+        widths_um: list[float],
+        length_um: float,
+    ) -> None:
         if len(widths_um) not in (2, 3):
             raise ValueError("only two- and three-conductor CPWs are supported")
         if len(gaps_um) != len(widths_um) + 1:
@@ -43,7 +49,8 @@ class CPWConformalCoupler:
     def _branch_points(self) -> tuple[list[complex], list[complex]]:
         a = [0.0]
         b = [self.gaps[0]]
-        x = y = 0.0
+        x = 0.0
+        y = self.gaps[0]
         for i, width in enumerate(self.widths):
             x += self.gaps[i] + width
             y += self.gaps[i + 1] + width
@@ -115,10 +122,6 @@ class CPWConformalCoupler:
             capacitance = np.delete(np.delete(capacitance, 1, axis=0), 1, axis=1)
         if (not np.all(np.isfinite(capacitance)) or
                 np.any(np.linalg.eigvalsh(capacitance) <= 0.0)):
-            # The published mapping formula has degenerate end branch points
-            # for symmetric layouts (the final ``a`` and ``b`` coincide).
-            # Keep the mapping as the preferred calculation, but use the
-            # project's validated edge-CPW expression for that limiting case.
             return self._fallback_matrices()
         inductance = np.linalg.inv(capacitance) / self.v**2
         return capacitance, inductance
@@ -128,8 +131,12 @@ class CPWConformalCoupler:
         gap = (self.gaps[1] if len(self.widths) == 2
                else 2.0 * self.gaps[1] + self.widths[1])
         unit = edge_coupled_cpw(self.widths[0], self.gaps[0], gap)
-        capacitance = np.array([[unit["C_self"], unit["C_mutual"]],
-                                [unit["C_mutual"], unit["C_self"]]])
+        # edge_coupled_cpw returns direct modal self/mutual values. Convert
+        # them to the Maxwell/nodal convention consumed by parameters().
+        capacitance = np.array([
+            [unit["C_self"] + unit["C_mutual"], -unit["C_mutual"]],
+            [-unit["C_mutual"], unit["C_self"] + unit["C_mutual"]],
+        ])
         inductance = np.array([[unit["L_self"], unit["L_mutual"]],
                                [unit["L_mutual"], unit["L_self"]]])
         return capacitance, inductance
@@ -155,36 +162,97 @@ class CPWConformalCoupler:
                 "coupling_db": 20.0 * math.log10(abs((z_even - z_odd) / (z_even + z_odd)))}
 
 
-def optimize_cpw_coupler(coupling_db: float, frequency_hz: float, z0: float = 50.0,
-                         model: str = "auto") -> CPWModeResult:
+@lru_cache(maxsize=None)
+def optimize_cpw_coupler(
+    coupling_db: float,
+    frequency_hz: float,
+    z0: float = 50.0,
+    model: str = "auto",
+    initial_gaps_um: tuple[float, ...] | None = None,
+    initial_widths_um: tuple[float, ...] | None = None,
+) -> CPWModeResult:
     if frequency_hz <= 0.0 or coupling_db >= 0.0:
         raise ValueError("frequency must be positive and coupling_db must be negative")
     selected = model
     if selected == "auto":
-        selected = "three_line" if coupling_db < -18.0 else "two_line"
+        # The specification boundary is -20 dB; v1 (-14 dB) and v3 (-25 dB)
+        # remain on their existing sides of this threshold.
+        selected = "three_line" if coupling_db < -20.0 else "two_line"
     if selected not in {"two_line", "three_line"}:
         raise ValueError(f"unknown CPW model {model!r}")
-    # The project's edge-CPW optimizer is the stable numerical backend for
-    # the two-line cross-section.  The conformal class above supplies the
-    # three-line construction and remains available to callers; use the
-    # same bounded search for its starting dimensions so auto mode never
-    # fails on a branch-point degeneracy in the raw mapping integral.
-    from twpa_solver.builders.ipm import optimize_coupler_geometry
-    geometry = optimize_coupler_geometry(coupling_db, frequency_hz, z0)
-    if selected == "two_line":
-        return CPWModeResult(
-            (geometry.gap_to_ground_um, geometry.gap_between_lines_um,
-             geometry.gap_to_ground_um),
-            (geometry.width_um, geometry.width_um), geometry.length_um,
-            geometry.k_db, geometry.z_input_ohm, selected)
 
-    # A centre-ground layout has two identical signal-to-ground slots.  Use
-    # the optimized signal dimensions and split the inter-line slot around
-    # the centre conductor; the resulting geometry is consumed by the same
-    # distributed Element[] coupler builder.
-    centre_width = max(4.0, min(50.0, geometry.width_um / 2.0))
+    if selected == "two_line":
+        gaps = initial_gaps_um or (10.5973385055, 44.762, 10.5973385055)
+        widths = initial_widths_um or (39.897, 39.897)
+        if len(gaps) != 3 or len(widths) != 2:
+            raise ValueError("two_line initial geometry has invalid dimensions")
+        initial = np.array([gaps[0], widths[0], gaps[1]], dtype=float)
+        lower = np.array([4.0, 4.0, 4.0], dtype=float)
+        upper = np.array([50.0, 50.0, 100.0], dtype=float)
+
+        def evaluate(values: np.ndarray) -> dict[str, float]:
+            gap_to_ground, width, gap_between = values
+            return CPWConformalCoupler(
+                [gap_to_ground, gap_between, gap_to_ground],
+                [width, width],
+                1000.0,
+            ).parameters()
+
+        def residual(values: np.ndarray) -> list[float]:
+            parameters = evaluate(values)
+            return [parameters["coupling_db"] - coupling_db,
+                    parameters["Z_eff"] - z0]
+
+        solution = least_squares(residual, initial, bounds=(lower, upper),
+                                 diff_step=0.1, max_nfev=30)
+        values = solution.x
+        parameters = evaluate(values)
+        gaps = (float(values[0]), float(values[2]), float(values[0]))
+        widths = (float(values[1]), float(values[1]))
+    else:
+        gaps = initial_gaps_um or (5.5, 5.0, 5.0, 5.5)
+        widths = initial_widths_um or (9.186, 15.0, 9.186)
+        if len(gaps) != 4 or len(widths) != 3:
+            raise ValueError("three_line initial geometry has invalid dimensions")
+        initial = np.array([gaps[0], widths[0], gaps[1], widths[1]], dtype=float)
+        lower = np.array([4.0, 4.0, 4.0, 4.0], dtype=float)
+        upper = np.array([50.0, 50.0, 100.0, 50.0], dtype=float)
+
+        def evaluate(values: np.ndarray) -> dict[str, float]:
+            gap_to_ground, signal_width, gap_to_centre, centre_width = values
+            return CPWConformalCoupler(
+                [gap_to_ground, gap_to_centre, gap_to_centre, gap_to_ground],
+                [signal_width, centre_width, signal_width],
+                1000.0,
+            ).parameters()
+
+        def residual(values: np.ndarray) -> list[float]:
+            parameters = evaluate(values)
+            return [parameters["coupling_db"] - coupling_db,
+                    parameters["Z_eff"] - z0]
+
+        solution = least_squares(residual, initial, bounds=(lower, upper),
+                                 diff_step=0.1, max_nfev=30)
+        values = solution.x
+        parameters = evaluate(values)
+        gaps = (float(values[0]), float(values[2]), float(values[2]),
+                float(values[0]))
+        widths = (float(values[1]), float(values[3]), float(values[1]))
+
+    residual_error = max(abs(value) for value in residual(values))
+    if not solution.success and residual_error > 1.0e-2:
+        raise RuntimeError(f"CPW geometry optimization failed: {solution.message}")
+
+    beta_even = 2.0 * math.pi * frequency_hz / parameters["v_even"]
+    # Deliberately reproduce the Prometheus getCouplerDimentions calculation:
+    # its beta_odd expression uses v_even, although theory would use v_odd.
+    beta_odd = 2.0 * math.pi * frequency_hz / parameters["v_even"]
+    length_um = math.pi / (beta_even + beta_odd) * 1.0e6
     return CPWModeResult(
-        (geometry.gap_to_ground_um, geometry.gap_between_lines_um / 2.0,
-         geometry.gap_between_lines_um / 2.0, geometry.gap_to_ground_um),
-        (geometry.width_um, centre_width, geometry.width_um),
-        geometry.length_um, geometry.k_db, geometry.z_input_ohm, selected)
+        gaps,
+        widths,
+        length_um,
+        float(parameters["coupling_db"]),
+        float(parameters["Z_eff"]),
+        selected,
+    )
