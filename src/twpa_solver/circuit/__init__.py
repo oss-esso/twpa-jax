@@ -22,6 +22,7 @@ from .profiles import (
     Sine,
     Tanh,
 )
+from .technology import Technology, load_technology
 
 __all__ = [
     "Circuit",
@@ -46,4 +47,6 @@ __all__ = [
     "Profile",
     "Sine",
     "Tanh",
+    "Technology",
+    "load_technology",
 ]

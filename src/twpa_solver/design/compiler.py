@@ -2,16 +2,15 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any
-
-import yaml
+from pathlib import Path
 
 from twpa_solver.builders.blocks import BlockRecord
 from twpa_solver.builders.ipm import Element, IPMParams
 from twpa_solver.builders.profiles import Selection, Segment, parse_profile_shorthand
 from twpa_solver.builders.scatter import ScatterSpec
 from twpa_solver.circuit import Circuit
+from twpa_solver.circuit.technology import Technology, load_technology
 from twpa_solver.circuit.elements import ElementRef
 from twpa_solver.circuit.handles import CellHandle, CouplerHandle, LineHandle
 from twpa_solver.circuit.nodes import Node
@@ -56,16 +55,10 @@ def _expanded(items: list[Any], prefix: str = "topology", depth: int = 0,
     return result
 
 
-def _config_for_block(cfg: dict[str, Any], params: dict[str, Any]) -> dict[str, Any]:
-    block = dict(cfg)
-    kind = block.get("type")
-    if kind == "transmission_line":
-        block.setdefault("L", params.get("Ll", params.get("L", 0.0)))
-        block.setdefault("C", params.get("Cl", params.get("C", 0.0)))
-    if kind == "jj_line":
-        for key in ("Lj", "Cj", "Cg"):
-            block.setdefault(key, params.get(key))
-    return block
+def _config_for_block(cfg: dict[str, Any]) -> dict[str, Any]:
+    """Preserve block declarations for the public builder resolver."""
+
+    return dict(cfg)
 
 
 def _technology(spec: Mapping[str, Any]) -> dict[str, Any]:
@@ -73,37 +66,31 @@ def _technology(spec: Mapping[str, Any]) -> dict[str, Any]:
     if not name:
         return dict(spec)
     source = Path(str(spec.get("_source", "design.yaml")))
-    path = source.parent / "technology" / f"{name}.yaml"
-    if not path.exists():
-        path = Path(__file__).resolve().parents[3] / "designs" / "technology" / f"{name}.yaml"
-    if not path.exists():
-        raise DesignSchemaError(f"technology preset not found: {name!r} ({path})")
     try:
-        preset = yaml.safe_load(path.read_text(encoding="utf-8"))
-    except yaml.YAMLError as exc:
-        raise DesignSchemaError(f"{path}: invalid technology YAML: {exc}") from exc
-    if not isinstance(preset, Mapping):
-        raise DesignSchemaError(f"{path}: technology preset must be a mapping")
-    unknown = set(preset) - {"name", "parameters", "cursors", "ground",
-                             "coupler_mode"}
-    if unknown:
-        raise DesignSchemaError(f"technology {name!r}: unknown keys {sorted(unknown)}")
+        technology = load_technology(
+            str(name),
+            search_paths=(source.parent / "technology",
+                          Path(__file__).resolve().parents[3] / "designs" / "technology"),
+        )
+    except (FileNotFoundError, ValueError) as error:
+        raise DesignSchemaError(str(error)) from error
+    technology_parameters = {
+        **dict(technology.components),
+        **dict(technology.architecture),
+    }
     merged = dict(spec)
-    for key in ("parameters", "cursors"):
-        defaults = preset.get(key, {})
-        current = merged.get(key, {})
-        if isinstance(defaults, Mapping) and isinstance(current, Mapping):
-            merged[key] = {**defaults, **current}
-    if spec.get("_default_cursors") and "cursors" in preset:
-        merged["cursors"] = dict(preset["cursors"])
-    for key in ("ground",):
-        if key not in merged and key in preset:
-            merged[key] = preset[key]
-    if spec.get("_default_ground") and "ground" in preset:
-        merged["ground"] = preset["ground"]
-    if "coupler_mode" not in merged and "coupler_mode" in preset:
-        merged["coupler_mode"] = preset["coupler_mode"]
-    merged["_technology_parameters"] = dict(preset.get("parameters", {}))
+    current_parameters = merged.get("parameters", {})
+    if not isinstance(current_parameters, Mapping):
+        raise DesignSchemaError("parameters: expected a mapping")
+    merged["parameters"] = {**technology_parameters, **dict(current_parameters)}
+    if spec.get("_default_cursors"):
+        merged["cursors"] = dict(technology.cursors)
+    if spec.get("_default_ground"):
+        merged["ground"] = technology.ground
+    if "coupler_mode" not in merged:
+        merged["coupler_mode"] = technology.coupler_mode
+    merged["_technology"] = technology
+    merged["_technology_parameters"] = technology_parameters
     return merged
 
 
@@ -675,8 +662,8 @@ def _emit_adapter_block(
         line = state.circuit.add_transmission_line(
             path_obj,
             cells=int(cfg["cells"]),
-            L=float(cfg["L"]),
-            C=float(cfg["C"]),
+            L=float(cfg["L"]) if cfg.get("L") is not None else None,
+            C=float(cfg["C"]) if cfg.get("C") is not None else None,
             name=path,
         )
         _register_line(state, path, cursor_name, line, kind)
@@ -686,9 +673,9 @@ def _emit_adapter_block(
         line = state.circuit.add_jj_line(
             path_obj,
             cells=int(cfg["cells"]),
-            Lj=float(cfg["Lj"]),
-            Cj=float(cfg["Cj"]),
-            Cg=float(cfg["Cg"]),
+            Lj=float(cfg["Lj"]) if cfg.get("Lj") is not None else None,
+            Cj=float(cfg["Cj"]) if cfg.get("Cj") is not None else None,
+            Cg=float(cfg["Cg"]) if cfg.get("Cg") is not None else None,
             cell_index_start=start_index,
             name=path,
         )
@@ -794,7 +781,11 @@ def compile_design(spec: Mapping[str, Any], *, coupler_mode: str | None = None,
     coupler_choice = str(coupler_mode or spec.get(
         "coupler_mode", parameters.get("coupler_mode", "auto")))
     effective_plan = plan or _design_plan(spec, parameters)
-    circuit = Circuit(str(spec["name"]))
+    technology = spec.get("_technology")
+    if technology is not None and not isinstance(technology, Technology):
+        raise DesignSchemaError("_technology: invalid loaded technology")
+    circuit = Circuit(str(spec["name"]), technology=technology)
+    circuit.set_design_parameters(parameters)
     paths = {name: circuit.path(name) for name in cursors}
     circuit.set_legacy_path_bases(cursors)
     state = _AdapterState(
@@ -813,7 +804,7 @@ def compile_design(spec: Mapping[str, Any], *, coupler_mode: str | None = None,
         if cfg.get("action") is not None:
             _apply_adapter_action(state, cfg, generated_path)
             continue
-        block = _config_for_block(dict(cfg), parameters)
+        block = _config_for_block(dict(cfg))
         _emit_adapter_block(
             state,
             block,
