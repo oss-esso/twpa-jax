@@ -4,14 +4,13 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-import yaml
-
 from twpa_solver.builders.blocks import BuildContext
 from twpa_solver.builders.coupler import make_coupler_discrete
 from twpa_solver.builders.ipm import Element, IPMParams
 from twpa_solver.builders.profiles import Selection, Segment, parse_profile_shorthand
 from twpa_solver.builders.scatter import ScatterSpec
 from twpa_solver.builders.registry import BLOCK_BUILDERS
+from twpa_solver.circuit.technology import load_technology
 from twpa_solver.design.errors import (DesignCollisionError, DesignParameterError,
                                        DesignSchemaError)
 from twpa_solver.design.model import CompiledDesign, PortRecord
@@ -70,38 +69,31 @@ def _technology(spec: Mapping[str, Any]) -> dict[str, Any]:
     name = spec.get("technology")
     if not name:
         return dict(spec)
-    source = Path(str(spec.get("_source", "design.yaml")))
-    path = source.parent / "technology" / f"{name}.yaml"
-    if not path.exists():
-        path = Path(__file__).resolve().parents[3] / "designs" / "technology" / f"{name}.yaml"
-    if not path.exists():
-        raise DesignSchemaError(f"technology preset not found: {name!r} ({path})")
     try:
-        preset = yaml.safe_load(path.read_text(encoding="utf-8"))
-    except yaml.YAMLError as exc:
-        raise DesignSchemaError(f"{path}: invalid technology YAML: {exc}") from exc
-    if not isinstance(preset, Mapping):
-        raise DesignSchemaError(f"{path}: technology preset must be a mapping")
-    unknown = set(preset) - {"name", "parameters", "cursors", "ground",
-                             "coupler_mode"}
-    if unknown:
-        raise DesignSchemaError(f"technology {name!r}: unknown keys {sorted(unknown)}")
+        source = Path(str(spec.get("_source", "design.yaml")))
+        technology = load_technology(
+            str(name),
+            search_paths=(source.parent / "technology",
+                          Path(__file__).resolve().parents[3] / "designs" / "technology"),
+        )
+    except (FileNotFoundError, ValueError) as error:
+        raise DesignSchemaError(str(error)) from error
     merged = dict(spec)
-    for key in ("parameters", "cursors"):
-        defaults = preset.get(key, {})
-        current = merged.get(key, {})
-        if isinstance(defaults, Mapping) and isinstance(current, Mapping):
-            merged[key] = {**defaults, **current}
-    if spec.get("_default_cursors") and "cursors" in preset:
-        merged["cursors"] = dict(preset["cursors"])
-    for key in ("ground",):
-        if key not in merged and key in preset:
-            merged[key] = preset[key]
-    if spec.get("_default_ground") and "ground" in preset:
-        merged["ground"] = preset["ground"]
-    if "coupler_mode" not in merged and "coupler_mode" in preset:
-        merged["coupler_mode"] = preset["coupler_mode"]
-    merged["_technology_parameters"] = dict(preset.get("parameters", {}))
+    technology_parameters = {
+        **dict(technology.components),
+        **dict(technology.architecture),
+    }
+    current = merged.get("parameters", {})
+    if not isinstance(current, Mapping):
+        raise DesignSchemaError("parameters: expected a mapping")
+    merged["parameters"] = {**technology_parameters, **dict(current)}
+    if spec.get("_default_cursors"):
+        merged["cursors"] = dict(technology.cursors)
+    if spec.get("_default_ground"):
+        merged["ground"] = technology.ground
+    if "coupler_mode" not in merged:
+        merged["coupler_mode"] = technology.coupler_mode
+    merged["_technology_parameters"] = technology_parameters
     return merged
 
 

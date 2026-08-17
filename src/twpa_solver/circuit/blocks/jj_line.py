@@ -11,14 +11,16 @@ from ..validation import validate_positive
 class JJLineBuilders:
     """Build JJ lines by composing JJ cells and boundary capacitors."""
 
+    TECHNOLOGY_DEFAULTS = {"Lj": "Lj", "Cj": "Cj", "Cg": "Cg"}
+
     def add_jj_line(
         self,
         path: Path,
         *,
         cells: int,
-        Lj: float | Profile,
-        Cj: float | Profile,
-        Cg: float | Profile,
+        Lj: float | Profile | None = None,
+        Cj: float | Profile | None = None,
+        Cg: float | Profile | None = None,
         name: str | None = None,
         boundary_caps: bool = True,
         cell_index_start: int = 0,
@@ -35,9 +37,18 @@ class JJLineBuilders:
             raise TypeError(f"{path.name}: cell_index_start must be an integer")
         if cell_index_start < 0:
             raise ValueError(f"{path.name}: cell_index_start must not be negative")
-        lj_values = self._profile_values(Lj, cells, path.name, "Lj")
-        cj_values = self._profile_values(Cj, cells, path.name, "Cj")
-        cg_values = self._profile_values(Cg, cells, path.name, "Cg")
+        resolved_lj = self._resolve_builder_parameter(
+            "Lj", Lj, JJLineBuilders.TECHNOLOGY_DEFAULTS, path.name
+        )
+        resolved_cj = self._resolve_builder_parameter(
+            "Cj", Cj, JJLineBuilders.TECHNOLOGY_DEFAULTS, path.name
+        )
+        resolved_cg = self._resolve_builder_parameter(
+            "Cg", Cg, JJLineBuilders.TECHNOLOGY_DEFAULTS, path.name
+        )
+        lj_values = self._profile_values(resolved_lj, cells, path.name, "Lj")
+        cj_values = self._profile_values(resolved_cj, cells, path.name, "Cj")
+        cg_values = self._profile_values(resolved_cg, cells, path.name, "Cg")
         block_path = name or f"{path.name}.jj_line"
         start = path.end
         nodes = [start]

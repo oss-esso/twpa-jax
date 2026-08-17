@@ -9,8 +9,8 @@ def validate_design(spec: Mapping[str, Any]) -> None:
     allowed = {"schema_version", "name", "ground", "parameters", "cursors",
                "topology", "patches", "technology", "extends", "profiles",
                "coupler_mode",
-               "_source", "_technology_parameters", "_default_cursors",
-               "_default_ground"}
+               "_source", "_technology", "_technology_parameters",
+               "_default_cursors", "_default_ground"}
     unknown = set(spec) - allowed
     if unknown:
         raise DesignSchemaError(f"design: unknown top-level keys {sorted(unknown)}")
@@ -79,8 +79,8 @@ _FIELDS = {
 _REQUIRED = {
     "port": {"cursor", "port"},
     "resistor": {"cursor", "value"},
-    "transmission_line": {"cursor", "cells", "L", "C"},
-    "jj_line": {"cursor", "cells", "Lj", "Cj", "Cg"},
+    "transmission_line": {"cursor", "cells"},
+    "jj_line": {"cursor", "cells"},
     "rf_squid_line": {"cursor", "cells", "Ic", "Lm", "Lw", "Lpar", "Cj"},
     "directional_coupler": set(),
     "raw_element": {"nodes", "value", "kind"},

@@ -8,6 +8,7 @@ from os import PathLike
 from .blocks import (
     CouplerBuilders,
     JJLineBuilders,
+    ParallelLCBuilders,
     RFSquidLineBuilders,
     TransmissionLineBuilders,
 )
@@ -17,6 +18,7 @@ from .architectures import IPMBuilders
 from .graph import CircuitGraph
 from .paths import Path
 from .primitives import PrimitiveBuilders
+from .technology import Technology, load_technology, resolve_builder_parameter
 
 
 class Circuit(
@@ -26,19 +28,48 @@ class Circuit(
     RFSquidCellBuilders,
     TransmissionLineBuilders,
     JJLineBuilders,
+    ParallelLCBuilders,
     RFSquidLineBuilders,
     CouplerBuilders,
     IPMBuilders,
 ):
     """Own a symbolic circuit graph and compile it to the legacy IR."""
 
-    def __init__(self, name: str) -> None:
+    def __init__(self, name: str, technology: str | Technology | None = None) -> None:
         if not name:
             raise ValueError("circuit name must not be empty")
         self.name = name
+        self.technology = (
+            load_technology(technology) if isinstance(technology, str) else technology
+        )
+        self._design_parameters: dict[str, object] = {}
         self.graph = CircuitGraph(owner_id=id(self))
         self._name_counters: dict[str, int] = {}
         self._paths: dict[str, Path] = {}
+
+    def set_design_parameters(self, parameters: Mapping[str, object]) -> None:
+        """Set design-level values used when a builder argument is omitted."""
+
+        self._design_parameters = dict(parameters)
+
+    def _resolve_builder_parameter(
+        self,
+        parameter: str,
+        explicit: object,
+        technology_defaults: Mapping[str, str],
+        path: str,
+    ) -> object:
+        """Resolve a missing builder argument through the shared technology layer."""
+
+        return resolve_builder_parameter(
+            parameter,
+            explicit,
+            design_parameters=self._design_parameters,
+            technology=self.technology,
+            technology_defaults=technology_defaults,
+            builder_defaults=getattr(self, "BUILDER_DEFAULTS", None),
+            path=path,
+        )
 
     def path(self, name: str) -> Path:
         """Create and register a named path with a fresh start node."""
