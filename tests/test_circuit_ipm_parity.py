@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import csv
 import importlib.util
-import json
 from pathlib import Path
 from typing import Any
 
 import numpy as np
+import pytest
 import scipy.sparse as sp
 
 from twpa_solver.builders.ipm import (
@@ -21,7 +21,8 @@ from twpa_solver.builders.ipm import Element
 
 
 ROOT = Path(__file__).resolve().parents[1]
-REFERENCE = ROOT / "designs" / "ipm_2c_fixed"
+REFERENCE = ROOT / "tests" / "data" / "ipm_2c_reference"
+HISTORICAL_REFERENCE = ROOT / "designs" / "ipm_2c_fixed"
 
 
 def _load_python_design() -> Any:
@@ -37,10 +38,9 @@ def _load_python_design() -> Any:
 
 
 def _params() -> IPMParams:
-    """Load the exact stored IPM parameter set."""
+    """Return legacy-builder parameters matching the technology preset."""
 
-    summary = json.loads((REFERENCE / "ipm_summary.json").read_text(encoding="utf-8"))
-    return IPMParams(**summary["params"])
+    return IPMParams(start_node_bot=10_000)
 
 
 def _element_fields(element: Element) -> dict[str, Any]:
@@ -86,7 +86,7 @@ def _public_legacy_compilation() -> Any:
     """Build and compile the Python design using compatibility numbering."""
 
     params = _params()
-    design = _load_python_design().build_ipm_2c(params)
+    design = _load_python_design().build_ipm_2c()
     return params, design, design.compile(node_numbering="legacy")
 
 
@@ -163,11 +163,37 @@ def test_creation_numbering_preserves_emission_order_and_permuted_matrices() -> 
 
 def test_public_ipm_compilation_is_deterministic() -> None:
     params = _params()
-    first = _load_python_design().build_ipm_2c(params).compile("legacy")
-    second = _load_python_design().build_ipm_2c(params).compile("legacy")
+    first = _load_python_design().build_ipm_2c().compile("legacy")
+    second = _load_python_design().build_ipm_2c().compile("legacy")
     assert [_element_fields(element) for element in first.elements] == [
         _element_fields(element) for element in second.elements
     ]
     assert {number: port.node for number, port in first.ports.items()} == {
         number: port.node for number, port in second.ports.items()
     }
+
+
+@pytest.mark.skipif(
+    not HISTORICAL_REFERENCE.is_dir(),
+    reason="historical designs/ipm_2c_fixed artifact is not present",
+)
+def test_fixture_matches_historical_artifacts_when_present() -> None:
+    """Keep the committed fixture tied to the local historical artifacts."""
+
+    assert (REFERENCE / "elements.csv").read_bytes() == (
+        HISTORICAL_REFERENCE / "elements.csv"
+    ).read_bytes()
+    historical_ipm_elements = HISTORICAL_REFERENCE / "ipm_elements.csv"
+    if historical_ipm_elements.exists():
+        assert (REFERENCE / "elements.csv").read_bytes() == (
+            historical_ipm_elements.read_bytes()
+        )
+    for name in ("C", "G", "K", "Bphi"):
+        current = sp.load_npz(REFERENCE / f"{name}.npz").tocsr()
+        historical = sp.load_npz(HISTORICAL_REFERENCE / f"{name}.npz").tocsr()
+        assert (current != historical).nnz == 0
+    with np.load(REFERENCE / "ipm_arrays.npz") as current, np.load(
+        HISTORICAL_REFERENCE / "ipm_arrays.npz"
+    ) as historical:
+        assert np.array_equal(current["Ic"], historical["Ic"])
+        assert np.array_equal(current["Lj"], historical["Lj"])
