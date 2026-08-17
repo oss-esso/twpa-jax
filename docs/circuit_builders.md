@@ -1,7 +1,41 @@
-# Circuit builders
+# Circuit construction and builders
 
-Everything under `src/twpa_solver/builders/` turns design parameters into the
-node-flux matrix model the solver consumes. There are four builders and two
+Circuit authoring is split into three layers. A design author normally works
+at the assembly layer; the lower layers provide reusable electrical blocks and
+shared defaults.
+
+1. **Block library** — `src/twpa_solver/circuit/blocks/`, `cells/`, and
+   `architectures/`. Add a new reusable block here, declare its
+   `TECHNOLOGY_DEFAULTS`, and compose the existing public builders. The
+   `parallel_lc.py` block is the worked example: it declares only `L -> Lk`
+   and requires no central dispatch edit. It is demonstration code for the
+   extensibility contract, not a required production device block.
+2. **Component defaults** — `designs/technology/*.yaml`. The `components:`
+   section contains electrical component values and physical component
+   dimensions; `architecture:` contains counts and lengths in cells. These
+   technology files are shared by Python and YAML designs. Legacy flat
+   `parameters:` technology files remain accepted for compatibility.
+3. **Assembly** — `designs/python/*.py` or `designs/*.yaml`. The author chooses
+   the required granularity, from a high-level architecture down to cells and
+   primitive elements. YAML is adapted through the same `Circuit` builders.
+
+When a builder argument is omitted, resolution is deterministic:
+
+```text
+explicit call argument
+    -> design-level override
+    -> technology components:
+    -> technology architecture:
+    -> builder default
+    -> error naming the parameter and path
+```
+
+`src/twpa_solver/builders/` is the layer beneath this authoring interface. It
+contains the legacy `Element` IR, matrix assembly, and coupler physics that
+`Circuit` composes; it is not the primary design-authoring surface.
+
+The legacy builder layer remains documented below because it is still used by
+solver-facing compatibility workflows. There are four builders and two
 shared support modules.
 
 | Module | Produces | Devices |
