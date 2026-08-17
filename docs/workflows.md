@@ -7,7 +7,7 @@ results.
 The normal user flow is:
 
 ```text
-1. Select or edit a YAML design.
+1. Select or edit a Python Circuit design or a YAML design.
 2. Build the design and check the pump-off passive response.
 3. Run a fast gain map at moderate pump power.
 4. Use the slow map only when a physical-boundary check is required.
@@ -15,7 +15,11 @@ The normal user flow is:
 ```
 
 The README contains installation instructions and current limitations. The
-YAML fields are explained in [`design_format.md`](design_format.md).
+YAML fields are explained in [`design_format.md`](design_format.md). Python
+designs are assembled through `twpa_solver.circuit.Circuit`; both authoring
+routes share `designs/technology/*.yaml` component defaults. See
+[`circuit_builders.md`](circuit_builders.md) for the three-layer authoring
+model and builder resolution order.
 
 ## 1. Files and directories
 
@@ -53,6 +57,12 @@ For an already generated circuit directory, omit `--design`:
 python workflows/build_design_and_passive.py `
   --design-dir designs/ipm_2c_fixed
 ```
+
+For a Python Circuit design, import the design module and compile the returned
+`Circuit` directly. For example, the technology-driven IPM entry point is
+`designs/python/ipm_2c.py:build_ipm_2c`; use
+`build_ipm_2c().compile(node_numbering="legacy")` when published branch
+indices must remain stable.
 
 ### Workflow options
 
