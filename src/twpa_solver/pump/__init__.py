@@ -23,6 +23,7 @@ from twpa_solver.pump.solver import (
     StepReport,
 )
 from twpa_solver.pump.wavenumber import measure_pump_nonlinear_wavenumber
+from twpa_solver.pump.neimark_sacker import first_lyapunov_coefficient
 
 __all__ = [
     "PumpBasis",
@@ -43,4 +44,5 @@ __all__ = [
     "ResidualHomotopyTrace",
     "StepReport",
     "measure_pump_nonlinear_wavenumber",
+    "first_lyapunov_coefficient",
 ]

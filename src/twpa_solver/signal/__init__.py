@@ -51,6 +51,14 @@ from twpa_solver.signal.stability import (
     sigma_min_at_signal_ghz,
     sweep_sigma_min,
 )
+from twpa_solver.signal.branch_tracking import (
+    FloquetBranch,
+    FloquetBranchPoint,
+    order_multiplier_sets,
+    serialize_branch,
+    stability_verdict,
+    track_floquet_branch,
+)
 
 __all__ = [
     "GainResult",
@@ -92,4 +100,10 @@ __all__ = [
     "refine_singular_omega",
     "sigma_min_at_signal_ghz",
     "sweep_sigma_min",
+    "FloquetBranch",
+    "FloquetBranchPoint",
+    "order_multiplier_sets",
+    "serialize_branch",
+    "stability_verdict",
+    "track_floquet_branch",
 ]
