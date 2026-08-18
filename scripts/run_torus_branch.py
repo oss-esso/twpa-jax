@@ -121,6 +121,17 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--linear-debug-fd-step", type=float, default=1.0e-6)
     parser.add_argument(
+        "--linear-fidelity-only",
+        action="store_true",
+        help=(
+            "Measure state and augmented preconditioner fidelity at the loaded "
+            "checkpoint without running a Newton corrector."
+        ),
+    )
+    parser.add_argument("--linear-fidelity-maxiter", type=int, default=2)
+    parser.add_argument("--linear-fidelity-restart", type=int, default=2)
+    parser.add_argument("--linear-fidelity-seed", type=int, default=0)
+    parser.add_argument(
         "--timing-path",
         type=Path,
         default=None,
@@ -650,18 +661,51 @@ def run_branch(args: argparse.Namespace) -> dict[str, Any]:
             critical_reference = _to_problem_nodes(seeded, torus) - pump_state
         prior_state = previous_state
         prior_tangent = previous_tangent
-        state, omega, report, seed_route = _solve_seed(
-            torus,
-            pump,
-            basis,
-            args,
-            previous_state,
-            previous_omega,
-            previous_source_tau,
-            previous_tangent,
-            floquet_seed,
-        )
-        continuation_tangent = report.pop("_tangent", None)
+        if args.linear_fidelity_only:
+            if (
+                previous_state is None
+                or previous_omega is None
+                or previous_source_tau is None
+                or previous_tangent is None
+            ):
+                raise ValueError(
+                    "--linear-fidelity-only requires --initial-state-npz"
+                )
+            state = previous_state
+            omega = previous_omega
+            source_tau = previous_source_tau
+            report = torus.linear_fidelity_report(
+                state,
+                omega_a=omega,
+                source_tau=source_tau,
+                previous_X=state,
+                previous_omega_a=omega,
+                previous_source_tau=source_tau,
+                tangent=previous_tangent,
+                phase_reference=state,
+                gmres_rtol=args.gmres_rtol,
+                gmres_maxiter=args.linear_fidelity_maxiter,
+                gmres_restart=args.linear_fidelity_restart,
+                random_seed=args.linear_fidelity_seed,
+            )
+            report["diagnostic_only"] = True
+            report["converged"] = None
+            report["source_tau"] = source_tau
+            continuation_tangent = previous_tangent
+            seed_route = "linear_fidelity"
+        else:
+            state, omega, report, seed_route = _solve_seed(
+                torus,
+                pump,
+                basis,
+                args,
+                previous_state,
+                previous_omega,
+                previous_source_tau,
+                previous_tangent,
+                floquet_seed,
+            )
+            continuation_tangent = report.pop("_tangent", None)
         q0_norm, q1_norm = _q_norms(state, torus.basis)
         off_comb_fraction = q1_norm / max(q0_norm + q1_norm, 1.0e-300)
         source_tau = float(report.get("source_tau", 1.0))
@@ -728,6 +772,8 @@ def run_branch(args: argparse.Namespace) -> dict[str, Any]:
             point_index=index,
             converged=bool(report.get("converged")),
         )
+        if args.linear_fidelity_only:
+            break
         if report.get("converged"):
             previous_state = state
             previous_omega = omega

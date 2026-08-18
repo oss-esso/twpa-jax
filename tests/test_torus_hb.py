@@ -14,6 +14,7 @@ from twpa_solver.multitone.source import AffineSourcePath, MultiToneDrive
 from twpa_solver.multitone.torus import (
     TorusProblem,
     apply_border_aware_preconditioner,
+    lattice_label_audit,
 )
 from twpa_solver.pump.solver import bordered_solve_refined
 from twpa_solver.signal.stability import audit_loss_convention
@@ -234,6 +235,57 @@ def test_torus_accepts_schur_problem_and_records_anchor_mapping() -> None:
     assert problem.is_schur
     assert problem.full_problem().n == reduced.n
     assert problem.anchor_full_node == 1
+
+
+def test_torus_fast_preconditioner_keeps_exact_lattice_labels() -> None:
+    problem = _torus_problem()
+    state = problem.full_problem().zeros()
+    state[problem.basis.index_of(ToneIndex(1, 0)), 0] = 1.0e-12
+    state[problem.basis.index_of(ToneIndex(0, 1)), 0] = 2.0e-13
+    current = problem.full_problem()
+    _, preconditioner = problem._linearization(current, state)
+
+    audit = lattice_label_audit(current, preconditioner)
+
+    assert audit["preconditioner_uses_exact_lattice_keys"] is True
+    assert audit["jvp_difference_keys_match"] is True
+    assert audit["jvp_sum_keys_match"] is True
+    assert audit["scalar_frequency_rounding_would_collapse"] is True
+
+
+def test_torus_linear_fidelity_report_separates_state_and_border() -> None:
+    base = _torus_problem().base_problem
+    problem = TorusProblem(
+        base,
+        (1,),
+        1,
+        1.0e9,
+        factor_backend="superlu",
+    )
+    state = problem.full_problem().zeros()
+    state[problem.basis.index_of(ToneIndex(1, 0)), 0] = 1.0e-12
+    state[problem.basis.index_of(ToneIndex(0, 1)), 0] = 2.0e-13
+    tangent = np.zeros(2 * state.size + 2)
+    tangent[-1] = 1.0
+
+    report = problem.linear_fidelity_report(
+        state,
+        omega_a=problem.omega_a,
+        source_tau=1.0,
+        previous_X=state,
+        previous_omega_a=problem.omega_a,
+        previous_source_tau=1.0,
+        tangent=tangent,
+        phase_reference=state,
+        gmres_maxiter=1,
+        gmres_restart=2,
+    )
+
+    assert "state_preconditioner_fidelity" in report
+    assert "augmented_preconditioner_fidelity" in report
+    assert "state_only_gmres" in report
+    assert "augmented_gmres" in report
+    assert np.isfinite(report["border_schur_condition"])
 
 
 def test_loss_convention_audit_is_nonblocking_for_analytic_stability_model() -> None:

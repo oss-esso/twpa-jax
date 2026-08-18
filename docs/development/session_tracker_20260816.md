@@ -2213,3 +2213,108 @@ converge under the current corrector criterion. No K=10 finite torus point and
 no 10-point physical column are claimed. The next implementation target is
 the augmented Krylov/preconditioner convergence path, with the stage artifacts
 preserved under `D:\tmp\ns_branch_switch_20260818`.
+
+### K=5/K=10 preconditioner-fidelity audit (2026-08-18)
+
+The next diagnostic was deliberately bounded to separate the state block from
+the bordered continuation system. No GMRES tolerance, restart, or deflation
+parameter was changed.
+
+The implementation adds `TorusProblem.linear_fidelity_report()` and the
+`--linear-fidelity-only` mode to `scripts/run_torus_branch.py`. The report
+measures one factor solve followed by a true JVP, runs state-only and
+augmented GMRES probes for two restart cycles, and records the exact lattice
+labels used by the JVP and fast preconditioner.
+
+The diagnostic commands were:
+
+```text
+python scripts/run_torus_branch.py --device ipm_2c_fixed
+  --circuit-dir designs/ipm_2c_fixed
+  --pump-solution-dir D:/tmp/ns_branch_switch_20260818/checkpoint_replay/
+    point_000_-24.19555dbm/pump
+  --control -24.1955501 --omega-a-ratio 0.092290046
+  --q-max 1 --sideband-harmonics 5 --loss-model current_complex_c
+  --factor-backend pardiso
+  --initial-state-npz D:/tmp/ns_branch_switch_20260818/k5_full_state/point_000.npz
+  --linear-fidelity-only --linear-fidelity-maxiter 2
+  --linear-fidelity-restart 2
+  --out D:/tmp/torus_fidelity_20260818/k5_linear_fidelity.json
+
+python scripts/run_torus_branch.py --device ipm_2c_fixed
+  --circuit-dir designs/ipm_2c_fixed
+  --pump-solution-dir D:/tmp/ns_branch_switch_20260818/checkpoint_replay/
+    point_000_-24.19555dbm/pump
+  --control -24.1955501 --omega-a-ratio 0.092290046
+  --q-max 1 --sideband-harmonics 10 --schur
+  --loss-model current_complex_c --factor-backend pardiso
+  --initial-state-npz D:/tmp/ns_branch_switch_20260818/k5_full_state/point_000.npz
+  --linear-fidelity-only --linear-fidelity-maxiter 2
+  --linear-fidelity-restart 2
+  --out D:/tmp/torus_fidelity_20260818/k10_linear_fidelity.json
+```
+
+The raw measured comparison was:
+
+| diagnostic | K=5 | K=10 |
+| --- | ---: | ---: |
+| state fidelity, random vector | 1.8375422131517016e-01 | 1.4826479518549098e-10 |
+| state fidelity, q=+1 vector | 8.46464689494503e+00 | 1.1537896003956316e-08 |
+| augmented preconditioner fidelity | 3.153216478120751e+03 | 1.1662159663669474e+04 |
+| bordered Schur condition | 1.3657715560684744e+06 | 3.937178005719845 |
+| state-only GMRES info / callbacks | 2 / 4 | 0 / 1 |
+| augmented GMRES info / callbacks | 2 / 4 | 2 / 4 |
+
+The complete short histories were:
+
+```text
+K=5 state-only:
+  info=2
+  history=[2.8475261826423535e-06, 3.842055382938667e-15,
+           2.009358623208179e-06, 4.281958508524893e-16]
+K=5 augmented:
+  info=2
+  history=[0.0020599796645571805, 0.002036332726855697,
+           0.002038584974983988, 0.0020152400050058206]
+
+K=10 state-only:
+  info=0
+  history=[1.2231998960996105e-16]
+K=10 augmented:
+  info=2
+  history=[0.06799302820974484, 0.06709927024053593,
+           0.06709927024043834, 0.06709927024043834]
+```
+
+The label audit passed for both bases:
+
+```text
+K=5:
+  preconditioner_uses_exact_lattice_keys = True
+  jvp_difference_keys_match = True
+  jvp_sum_keys_match = True
+  scalar_frequency_rounding_collision_count = 8
+  scalar_frequency_rounding_would_collapse = True
+
+K=10:
+  preconditioner_uses_exact_lattice_keys = True
+  jvp_difference_keys_match = True
+  jvp_sum_keys_match = True
+  scalar_frequency_rounding_collision_count = 15
+  scalar_frequency_rounding_would_collapse = True
+```
+
+The production torus path therefore does not contain the suspected scalar
+`int(round(k))` indexing defect. The JVP and fast preconditioner use the same
+exact `(h, q)` difference and sum keys. The K=10 state-only probe converges in
+one callback and has a state-preconditioner defect below `1.5e-10`, while the
+augmented probe stalls. This localizes the remaining blocker to the bordered
+operator/preconditioner interaction, not to K=10 lattice bookkeeping or the
+state-block factorization. No torus column was launched after this audit.
+
+Artifacts:
+
+```text
+D:\tmp\torus_fidelity_20260818\k5_linear_fidelity.json
+D:\tmp\torus_fidelity_20260818\k10_linear_fidelity.json
+```

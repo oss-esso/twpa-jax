@@ -83,6 +83,114 @@ def _append_timing_event(
         handle.flush()
 
 
+def _lattice_key_payload(key: object) -> list[int] | str:
+    """Serialize a mode key without reducing it to a physical frequency."""
+    if isinstance(key, ToneIndex):
+        return [int(key.h), int(key.q)]
+    return str(key)
+
+
+def lattice_label_audit(
+    problem: Any,
+    preconditioner: FastCoupledPreconditioner,
+) -> dict[str, Any]:
+    """Audit exact lattice labels against scalar-frequency rounding.
+
+    The torus JVP and its fast preconditioner must use ``(h, q)`` keys.  The
+    physical frequencies are intentionally included as a contrast because
+    rounding ``(h * omega_p + q * omega_a) / omega_p`` collapses nearby
+    generator sectors.
+    """
+    mode_keys = list(problem.mode_keys)
+    expected_difference = {
+        left - right for left in mode_keys for right in mode_keys
+    }
+    expected_sum = {left + right for left in mode_keys for right in mode_keys}
+    preconditioner_keys = list(preconditioner._ells)
+    preconditioner_difference = {
+        preconditioner_keys[int(index)]
+        for index in np.asarray(preconditioner._ell_diff).reshape(-1)
+    }
+    preconditioner_sum = {
+        preconditioner_keys[int(index)]
+        for index in np.asarray(preconditioner._ell_sum).reshape(-1)
+    }
+    normalized_frequencies = [
+        float(tone.omega(problem.basis.omega_p, problem.basis.delta)
+              / problem.basis.omega_p)
+        for tone in problem.basis.tones
+    ]
+    rounded = [int(round(value)) for value in normalized_frequencies]
+    rounded_collisions = len(rounded) - len(set(rounded))
+    return {
+        "jvp_mode_keys": [_lattice_key_payload(key) for key in mode_keys],
+        "preconditioner_mode_keys": [
+            _lattice_key_payload(key) for key in preconditioner.modes
+        ],
+        "jvp_difference_keys": [
+            _lattice_key_payload(key) for key in sorted(expected_difference)
+        ],
+        "jvp_sum_keys": [
+            _lattice_key_payload(key) for key in sorted(expected_sum)
+        ],
+        "preconditioner_difference_keys": [
+            _lattice_key_payload(key) for key in sorted(preconditioner_difference)
+        ],
+        "preconditioner_sum_keys": [
+            _lattice_key_payload(key) for key in sorted(preconditioner_sum)
+        ],
+        "preconditioner_uses_exact_lattice_keys": all(
+            isinstance(key, ToneIndex) for key in preconditioner_keys
+        ),
+        "jvp_difference_keys_match": preconditioner_difference
+        == expected_difference,
+        "jvp_sum_keys_match": preconditioner_sum == expected_sum,
+        "scalar_frequency_rounding": rounded,
+        "scalar_frequency_rounding_collision_count": rounded_collisions,
+        "scalar_frequency_rounding_would_collapse": rounded_collisions > 0,
+    }
+
+
+def _short_gmres(
+    operator: spla.LinearOperator,
+    rhs: np.ndarray,
+    preconditioner: spla.LinearOperator,
+    *,
+    rtol: float,
+    maxiter: int,
+    restart: int,
+) -> dict[str, Any]:
+    """Run a bounded GMRES probe and retain its convergence history."""
+    history: list[float] = []
+    try:
+        _, info = spla.gmres(
+            operator,
+            rhs,
+            M=preconditioner,
+            rtol=rtol,
+            atol=0.0,
+            restart=restart,
+            maxiter=maxiter,
+            callback=history.append,
+            callback_type="pr_norm",
+        )
+    except TypeError:
+        _, info = spla.gmres(
+            operator,
+            rhs,
+            M=preconditioner,
+            tol=rtol,
+            restart=restart,
+            maxiter=maxiter,
+            callback=history.append,
+        )
+    return {
+        "info": int(info),
+        "iterations": len(history),
+        "residual_history": history,
+    }
+
+
 @dataclass
 class TorusProblem:
     """Wrap a multitone problem with the unknown generator frequency.
@@ -306,6 +414,232 @@ class TorusProblem:
             return pack_complex(applied)
 
         return matvec, self._preconditioner(problem, tangent)
+
+    def linear_fidelity_report(
+        self,
+        X: np.ndarray,
+        *,
+        omega_a: float,
+        source_tau: float,
+        previous_X: np.ndarray,
+        previous_omega_a: float,
+        previous_source_tau: float,
+        tangent: np.ndarray,
+        phase_reference: np.ndarray | None = None,
+        gmres_rtol: float = 1.0e-8,
+        gmres_maxiter: int = 2,
+        gmres_restart: int = 2,
+        random_seed: int = 0,
+    ) -> dict[str, Any]:
+        """Measure state and bordered preconditioner fidelity at one point.
+
+        This is a bounded diagnostic.  It does not update the torus state and
+        does not alter the corrector's GMRES settings.  The state-only and
+        augmented probes use the same JVP, normalization, border columns, and
+        preconditioner as :meth:`solve_torus_arclength`.
+        """
+        state = np.asarray(X, dtype=np.complex128)
+        previous = np.asarray(previous_X, dtype=np.complex128)
+        if state.shape != previous.shape:
+            raise ValueError("X and previous_X shapes do not match")
+        expected_shape = (self.basis.n_tones, self.base_problem.n)
+        if state.shape != expected_shape:
+            raise ValueError("X shape does not match the torus basis")
+        if omega_a <= 0.0 or source_tau <= 0.0:
+            raise ValueError("omega_a and source_tau must be positive")
+        tangent_value = np.asarray(tangent, dtype=float).reshape(-1)
+        state_size = 2 * state.size
+        if tangent_value.size != state_size + 2:
+            raise ValueError("tangent size does not match the augmented state")
+
+        state_scale = max(float(np.linalg.norm(pack_complex(previous))), 1e-300)
+        omega_scale = max(abs(previous_omega_a), self.basis.omega_p, 1.0)
+        tau_scale = max(abs(previous_source_tau), 1.0)
+        current = replace(self.with_omega_a(omega_a), source_tau=source_tau)
+        problem = current.full_problem()
+        coefficients = problem.residual_coeffs(state, source_tau)
+        source = pack_complex(problem.source_coeffs(source_tau))
+        residual_scale = max(
+            float(np.linalg.norm(source) / max(np.sqrt(source.size), 1.0)),
+            1e-30,
+        )
+        phase_value, phase_row = current._phase_constraint(
+            state, state_scale, phase_reference
+        )
+        matvec, preconditioner = current._linearization(problem, state)
+
+        omega_step = current.omega_fd_relative_step * max(abs(omega_a), 1.0)
+        plus_problem = replace(
+            current.with_omega_a(omega_a + omega_step), source_tau=source_tau
+        ).full_problem()
+        minus_problem = replace(
+            current.with_omega_a(omega_a - omega_step), source_tau=source_tau
+        ).full_problem()
+        b_omega = (
+            pack_complex(plus_problem.residual_coeffs(state, source_tau))
+            - pack_complex(minus_problem.residual_coeffs(state, source_tau))
+        ) / (2.0 * omega_step)
+        b_tau_raw = -pack_complex(problem.source_delta_coeffs())
+        tau_fd_step = current.omega_fd_relative_step * max(abs(source_tau), 1.0)
+        plus_tau_problem = replace(
+            current, source_tau=source_tau + tau_fd_step
+        ).full_problem()
+        minus_tau_problem = replace(
+            current, source_tau=source_tau - tau_fd_step
+        ).full_problem()
+        plus_source = pack_complex(
+            plus_tau_problem.source_coeffs(source_tau + tau_fd_step)
+        )
+        minus_source = pack_complex(
+            minus_tau_problem.source_coeffs(source_tau - tau_fd_step)
+        )
+        residual_scale_tau = (
+            float(np.linalg.norm(plus_source))
+            - float(np.linalg.norm(minus_source))
+        ) / (2.0 * tau_fd_step * max(np.sqrt(plus_source.size), 1.0))
+        coefficient_vector = pack_complex(coefficients)
+        b_tau = (
+            b_tau_raw * residual_scale - coefficient_vector * residual_scale_tau
+        ) / residual_scale**2
+
+        tangent_value = tangent_value / max(float(np.linalg.norm(tangent_value)), 1e-300)
+
+        def augmented_matvec(vector: np.ndarray) -> np.ndarray:
+            delta_state = vector[:state_size]
+            delta_omega = vector[state_size]
+            delta_tau = vector[state_size + 1]
+            physical_delta_state = delta_state * state_scale
+            state_part = (
+                matvec(physical_delta_state)
+                + b_omega * omega_scale * delta_omega
+            ) / residual_scale + b_tau * tau_scale * delta_tau
+            phase_part = float(phase_row @ physical_delta_state)
+            arclength_part = (
+                float(tangent_value[:state_size] @ delta_state)
+                + tangent_value[state_size] * delta_omega
+                + tangent_value[state_size + 1] * delta_tau
+            )
+            return np.concatenate((
+                state_part,
+                np.asarray([phase_part, arclength_part]),
+            ))
+
+        border_columns = np.column_stack((
+            b_omega * omega_scale / residual_scale,
+            b_tau * tau_scale,
+        ))
+        constraint_rows = np.vstack((
+            phase_row * state_scale,
+            tangent_value[:state_size],
+        ))
+        border_matrix = np.array(
+            [
+                [0.0, 0.0],
+                [tangent_value[state_size], tangent_value[state_size + 1]],
+            ],
+            dtype=float,
+        )
+
+        def state_preconditioner_solve(vector: np.ndarray) -> np.ndarray:
+            return (
+                residual_scale * np.asarray(preconditioner.solve(vector), dtype=float)
+                / state_scale
+            )
+
+        preconditioned_columns = np.column_stack(
+            [state_preconditioner_solve(border_columns[:, index]) for index in range(2)]
+        )
+        border_schur = border_matrix - constraint_rows @ preconditioned_columns
+        augmented_preconditioner = lambda vector: apply_border_aware_preconditioner(
+            state_preconditioner_solve,
+            vector[:state_size],
+            vector[state_size:],
+            border_columns,
+            constraint_rows,
+            border_matrix,
+        )
+        state_operator = spla.LinearOperator(
+            shape=(state_size, state_size),
+            matvec=matvec,
+            dtype=float,
+        )
+        state_preconditioner_operator = spla.LinearOperator(
+            shape=(state_size, state_size),
+            matvec=preconditioner.solve,
+            dtype=float,
+        )
+        augmented_operator = spla.LinearOperator(
+            shape=(state_size + 2, state_size + 2),
+            matvec=augmented_matvec,
+            dtype=float,
+        )
+        augmented_preconditioner_operator = spla.LinearOperator(
+            shape=(state_size + 2, state_size + 2),
+            matvec=augmented_preconditioner,
+            dtype=float,
+        )
+
+        rng = np.random.default_rng(random_seed)
+        random_state = rng.normal(size=state_size)
+        random_state /= max(float(np.linalg.norm(random_state)), 1e-300)
+        state_vectors = {"random": random_state}
+        q_plus = np.zeros_like(state)
+        for index, tone in enumerate(self.basis.tones):
+            if tone.q == 1:
+                q_plus[index] = state[index]
+        q_plus_vector = pack_complex(q_plus)
+        if np.linalg.norm(q_plus_vector) > 0.0:
+            state_vectors["q_plus_1"] = q_plus_vector / np.linalg.norm(q_plus_vector)
+
+        state_fidelity: dict[str, float] = {}
+        for name, rhs in state_vectors.items():
+            solved = np.asarray(preconditioner.solve(rhs), dtype=float)
+            state_fidelity[name] = float(
+                np.linalg.norm(matvec(solved) - rhs) / max(np.linalg.norm(rhs), 1e-30)
+            )
+
+        state_rhs = -pack_complex(coefficients) / residual_scale
+        augmented_rhs = np.concatenate((state_rhs, np.asarray([-phase_value, 0.0])))
+        state_gmres = _short_gmres(
+            state_operator,
+            state_rhs,
+            state_preconditioner_operator,
+            rtol=gmres_rtol,
+            maxiter=gmres_maxiter,
+            restart=gmres_restart,
+        )
+        augmented_gmres = _short_gmres(
+            augmented_operator,
+            augmented_rhs,
+            augmented_preconditioner_operator,
+            rtol=gmres_rtol,
+            maxiter=gmres_maxiter,
+            restart=gmres_restart,
+        )
+        augmented_random = rng.normal(size=state_size + 2)
+        augmented_random /= max(float(np.linalg.norm(augmented_random)), 1e-300)
+        augmented_solved = augmented_preconditioner(augmented_random)
+        augmented_fidelity = float(
+            np.linalg.norm(augmented_matvec(augmented_solved) - augmented_random)
+            / max(np.linalg.norm(augmented_random), 1e-30)
+        )
+        return {
+            "state_scale": state_scale,
+            "omega_scale": omega_scale,
+            "tau_scale": tau_scale,
+            "residual_scale": residual_scale,
+            "state_preconditioner_fidelity": state_fidelity,
+            "augmented_preconditioner_fidelity": augmented_fidelity,
+            "state_only_gmres": state_gmres,
+            "augmented_gmres": augmented_gmres,
+            "border_schur_matrix": border_schur.tolist(),
+            "border_schur_condition": float(np.linalg.cond(border_schur)),
+            "phase_residual": float(phase_value),
+            "state_residual_norm": float(np.linalg.norm(state_rhs)),
+            "lattice_labels": lattice_label_audit(problem, preconditioner),
+            "factor_backend": preconditioner.last_factor_backend,
+            "factor_phase": preconditioner.last_factor_phase,
+        }
 
     def generator_rows(self) -> list[int]:
         """Return basis rows carrying autonomous (``q != 0``) content."""
