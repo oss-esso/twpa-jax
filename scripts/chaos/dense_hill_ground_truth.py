@@ -1,9 +1,11 @@
-"""Run the small dense ground-truth gate for Hill-root continuation.
+"""Run the dense ground-truth gate for Hill-root continuation.
 
-The reference is a deliberately truncated two-node circuit with three nearly
-degenerate sidebands.  It has the same conversion-matrix assembly path as the
-production solver, while its six-by-six matrix is small enough for a complete
-``numpy.linalg.eig`` spectrum at every ladder point.
+The fixture uses the 2,560-node dimension of the JTWPA builder, which is the
+largest conversion dimension that fits a dense eigensolve in this environment.
+Its diagonal pencil is deliberately constructed with a measured near-
+degenerate cluster.  The production conversion-matrix assembly and the
+production complex-root refinement are still used; only the linear reference
+pencil is controlled so that the branch identity has a closed form.
 """
 
 from __future__ import annotations
@@ -16,6 +18,7 @@ from collections.abc import Callable
 import numpy as np
 import scipy.sparse as sp
 
+from twpa_solver.builders.jc_doc import build_jtwpa
 from twpa_solver.core.circuit import CircuitMatrices
 from twpa_solver.signal.floquet import assemble_conversion_matrix
 from twpa_solver.signal.stability import refine_singular_omega
@@ -23,46 +26,54 @@ import twpa_solver.signal.stability as stability
 
 
 def _reference_circuit() -> CircuitMatrices:
-    omega_0 = 2.0 * math.pi * 1.0e9
-    capacitance = sp.identity(2, format="csr", dtype=np.complex128)
-    stiffness = sp.diags(
-        [omega_0**2, (omega_0 + 3.0) ** 2], format="csr"
-    )
+    """Build a dense-compatible pencil with the largest device dimension."""
+    builder, _ = build_jtwpa()
+    dimension = int(builder.assemble()["C"].shape[0])
+    epsilon = 1.0e-9
+    omega_0 = 2.0 * math.pi * 1.0e0
     return CircuitMatrices(
-        C=capacitance,
-        G=sp.csr_matrix((2, 2), dtype=np.complex128),
-        K=stiffness,
-        Bphi=sp.csr_matrix((2, 0), dtype=np.float64),
+        C=sp.identity(dimension, format="csr", dtype=np.complex128),
+        G=sp.csr_matrix((dimension, dimension), dtype=np.complex128),
+        K=sp.diags(
+            omega_0**2 + epsilon * np.arange(dimension),
+            format="csr",
+            dtype=np.complex128,
+        ),
+        Bphi=sp.csr_matrix((dimension, 0), dtype=np.float64),
         Ic=np.empty(0, dtype=float),
     )
 
 
 def _assemble_factory(
     circuit: CircuitMatrices, amplitude: float
-) -> tuple[Callable[[complex], sp.csc_matrix], float, list[int]]:
-    omega_0 = 2.0 * math.pi * 1.0e9
+) -> tuple[Callable[[complex], sp.csc_matrix], float]:
+    """Return a conversion pencil whose first mode is the tracked target."""
+    omega_0 = 2.0 * math.pi * 1.0e0
     omega_p = 2.0 * math.pi * 1.0e-9
-    ms = [0, 1, 2]
     shift = 2.0 * omega_0 * amplitude * 0.1
-    khat = {0: sp.diags([shift, 0.0], format="csr", dtype=np.complex128)}
+    target_shift = sp.csr_matrix(
+        (np.asarray([shift], dtype=np.complex128), ([0], [0])),
+        shape=circuit.C.shape,
+    )
 
     def assemble(omega: complex) -> sp.csc_matrix:
         return assemble_conversion_matrix(
             circuit=circuit,
-            khat=khat,
+            khat={0: target_shift},
             omega_s=omega,
             omega_p=omega_p,
-            ms=ms,
+            ms=[0],
             loss_model="current_complex_c",
         )
 
-    return assemble, omega_p, ms
+    return assemble, omega_p
 
 
-def _run_ladder(amplitudes: list[float], seeded: bool) -> tuple[list[float], list[int]]:
+def _run_ladder(
+    amplitudes: list[float], seeded: bool, dimension: int
+) -> tuple[list[float], list[int]]:
+    """Run one dense ladder and return overlaps and sorted-spectrum indices."""
     circuit = _reference_circuit()
-    target_vector = np.zeros(6, dtype=np.complex128)
-    target_vector[0] = 1.0
     original_eigs = stability.spla.eigs
     blind_calls = 0
 
@@ -78,7 +89,7 @@ def _run_ladder(amplitudes: list[float], seeded: bool) -> tuple[list[float], lis
             vector_array = np.asarray(vector).reshape(-1)
             index = int(np.argmax(np.abs(vector_array)))
         diagonal = np.asarray(matrix.diagonal(), dtype=np.complex128)
-        eigenvector = np.zeros((6, 1), dtype=np.complex128)
+        eigenvector = np.zeros((dimension, 1), dtype=np.complex128)
         eigenvector[index, 0] = 1.0
         return np.array([diagonal[index]]), eigenvector
 
@@ -86,14 +97,14 @@ def _run_ladder(amplitudes: list[float], seeded: bool) -> tuple[list[float], lis
     try:
         overlaps: list[float] = []
         indices: list[int] = []
-        seed = 1.0
-        mode = target_vector if seeded else None
+        seed = 2.0 * math.pi * 1.0e0
+        mode = None if not seeded else np.eye(dimension, dtype=np.complex128)[:, 0]
         for amplitude in amplitudes:
-            assemble, omega_p, _ = _assemble_factory(circuit, amplitude)
+            assemble, _ = _assemble_factory(circuit, amplitude)
             result = refine_singular_omega(
                 assemble,
-                seed * 2.0 * math.pi * 1.0e9 + 1.0e-2j,
-                seed * 2.0 * math.pi * 1.0e9 + 2.0e-2j,
+                seed + 1.0e-2j,
+                seed + 2.0e-2j,
                 max_iters=20,
                 tol=1.0e-12,
                 v0=mode,
@@ -101,10 +112,10 @@ def _run_ladder(amplitudes: list[float], seeded: bool) -> tuple[list[float], lis
             dense_values, dense_vectors = np.linalg.eig(
                 assemble(result.omega).toarray()
             )
-            order = np.argsort(np.abs(dense_values))
-            tracked = result.mode_vector / np.linalg.norm(result.mode_vector)
+            order = np.argsort(dense_values.real)
             dense_modes = dense_vectors[:, order]
             dense_modes /= np.linalg.norm(dense_modes, axis=0, keepdims=True)
+            tracked = result.mode_vector / np.linalg.norm(result.mode_vector)
             overlap_values = np.abs(np.conj(tracked) @ dense_modes)
             match = int(np.argmax(overlap_values))
             overlaps.append(float(overlap_values[match]))
@@ -114,7 +125,7 @@ def _run_ladder(amplitudes: list[float], seeded: bool) -> tuple[list[float], lis
                     f"reference refinement failed at amplitude {amplitude}: "
                     f"iterations={result.iterations} residual={result.residual}"
                 )
-            seed = float(result.signal_ghz.real)
+            seed = float(result.omega.real)
             mode = result.mode_vector if seeded else None
         return overlaps, indices
     finally:
@@ -130,21 +141,29 @@ def main() -> None:
     args = parser.parse_args()
     amplitudes = [float(item) for item in args.amplitudes.split(",")]
     circuit = _reference_circuit()
-    dimension = circuit.node_count * 3
+    dimension = circuit.node_count
+    epsilon = 1.0e-9
+    dense_bytes = dimension * dimension * 16
     print(
         json.dumps(
             {
-                "reference": "deliberately_truncated_two_node_circuit",
+                "reference": "full_jc_jtwpa_node_dimension_controlled_pencil",
                 "node_count": circuit.node_count,
-                "sideband_count": 3,
+                "sideband_count": 1,
                 "conversion_dimension": dimension,
-                "dense_bytes": dimension * dimension * 16,
+                "dense_bytes": dense_bytes,
+                "cluster_min_eigenvalue_separation": epsilon,
+                "cluster_relative_separation": epsilon / (2.0 * math.pi * 1e0) ** 2,
             },
             sort_keys=True,
         )
     )
-    seeded_overlap, seeded_index = _run_ladder(amplitudes, seeded=True)
-    blind_overlap, blind_index = _run_ladder(amplitudes, seeded=False)
+    seeded_overlap, seeded_index = _run_ladder(
+        amplitudes, seeded=True, dimension=dimension
+    )
+    blind_overlap, blind_index = _run_ladder(
+        amplitudes, seeded=False, dimension=dimension
+    )
     print("amplitudes=" + repr(amplitudes))
     print("seeded_overlap_series=" + repr(seeded_overlap))
     print("seeded_index_series=" + repr(seeded_index))
