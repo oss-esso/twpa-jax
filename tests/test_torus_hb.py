@@ -14,6 +14,7 @@ from twpa_solver.multitone.source import AffineSourcePath, MultiToneDrive
 from twpa_solver.multitone.torus import (
     TorusProblem,
     apply_border_aware_preconditioner,
+    apply_one_border_preconditioner,
     lattice_label_audit,
 )
 from twpa_solver.pump.solver import bordered_solve_refined
@@ -227,6 +228,37 @@ def test_border_aware_preconditioner_matches_dense_solve() -> None:
     np.testing.assert_allclose(actual, expected, rtol=1.0e-10, atol=1.0e-10)
 
 
+def test_one_border_preconditioner_matches_dense_solve() -> None:
+    state_matrix = np.array(
+        [
+            [3.0, 0.2, -0.1],
+            [0.4, 2.0, 0.3],
+            [0.0, -0.2, 1.5],
+        ]
+    )
+    border_column = np.array([0.4, -0.3, 0.2])
+    constraint_row = np.array([0.1, -0.6, 0.5])
+    rhs = np.array([0.8, -0.4, 0.2, 0.1])
+    expected_matrix = np.block(
+        [
+            [state_matrix, border_column[:, None]],
+            [constraint_row[None, :], np.zeros((1, 1))],
+        ]
+    )
+    expected = np.linalg.solve(expected_matrix, rhs)
+
+    actual = apply_one_border_preconditioner(
+        lambda value: np.linalg.solve(state_matrix, value),
+        rhs[:3],
+        float(rhs[3]),
+        border_column,
+        constraint_row,
+        0.0,
+    )
+
+    np.testing.assert_allclose(actual, expected, rtol=1.0e-10, atol=1.0e-10)
+
+
 def test_torus_accepts_schur_problem_and_records_anchor_mapping() -> None:
     full = _torus_problem().base_problem
     reduced = build_multitone_schur_problem(full, [0])
@@ -285,6 +317,9 @@ def test_torus_linear_fidelity_report_separates_state_and_border() -> None:
     assert "augmented_preconditioner_fidelity" in report
     assert "state_only_gmres" in report
     assert "augmented_gmres" in report
+    assert "phase_frequency_gmres" in report
+    assert "diagonal_augmented_gmres" in report
+    assert report["phase_null_action_relative"] >= 0.0
     assert np.isfinite(report["border_schur_condition"])
 
 

@@ -59,6 +59,24 @@ def apply_border_aware_preconditioner(
     return np.concatenate((state, scalars))
 
 
+def apply_one_border_preconditioner(
+    state_solve: Callable[[np.ndarray], np.ndarray],
+    state_rhs: np.ndarray,
+    border_rhs: float,
+    border_column: np.ndarray,
+    constraint_row: np.ndarray,
+    border_scalar: float,
+) -> np.ndarray:
+    """Apply a state preconditioner with one scalar border unknown."""
+    state_result = np.asarray(state_solve(state_rhs), dtype=float)
+    solved_column = np.asarray(state_solve(border_column), dtype=float)
+    schur = float(border_scalar - constraint_row @ solved_column)
+    if abs(schur) <= 1.0e-15:
+        raise np.linalg.LinAlgError("one-border Schur complement is singular")
+    scalar = float((border_rhs - constraint_row @ state_result) / schur)
+    return np.concatenate((state_result - solved_column * scalar, [scalar]))
+
+
 def _append_timing_event(
     path: Path | None,
     stage: str,
@@ -161,9 +179,30 @@ def _short_gmres(
     restart: int,
 ) -> dict[str, Any]:
     """Run a bounded GMRES probe and retain its convergence history."""
+    _, report = _gmres_solve(
+        operator,
+        rhs,
+        preconditioner,
+        rtol=rtol,
+        maxiter=maxiter,
+        restart=restart,
+    )
+    return report
+
+
+def _gmres_solve(
+    operator: spla.LinearOperator,
+    rhs: np.ndarray,
+    preconditioner: spla.LinearOperator,
+    *,
+    rtol: float,
+    maxiter: int,
+    restart: int,
+) -> tuple[np.ndarray, dict[str, Any]]:
+    """Run GMRES and return both the update and convergence telemetry."""
     history: list[float] = []
     try:
-        _, info = spla.gmres(
+        update, info = spla.gmres(
             operator,
             rhs,
             M=preconditioner,
@@ -175,7 +214,7 @@ def _short_gmres(
             callback_type="pr_norm",
         )
     except TypeError:
-        _, info = spla.gmres(
+        update, info = spla.gmres(
             operator,
             rhs,
             M=preconditioner,
@@ -184,7 +223,7 @@ def _short_gmres(
             maxiter=maxiter,
             callback=history.append,
         )
-    return {
+    return update, {
         "info": int(info),
         "iterations": len(history),
         "residual_history": history,
@@ -558,6 +597,36 @@ class TorusProblem:
             constraint_rows,
             border_matrix,
         )
+        phase_frequency_column = border_columns[:, 0]
+        phase_frequency_row = constraint_rows[0]
+        phase_frequency_column_solved = state_preconditioner_solve(
+            phase_frequency_column
+        )
+        phase_frequency_schur = float(
+            -phase_frequency_row @ phase_frequency_column_solved
+        )
+
+        def phase_frequency_matvec(vector: np.ndarray) -> np.ndarray:
+            augmented = np.concatenate((vector, np.asarray([0.0])))
+            applied = augmented_matvec(augmented)
+            return np.concatenate((applied[:state_size], applied[-2:-1]))
+
+        def phase_frequency_preconditioner(vector: np.ndarray) -> np.ndarray:
+            return apply_one_border_preconditioner(
+                state_preconditioner_solve,
+                vector[:state_size],
+                float(vector[state_size]),
+                phase_frequency_column,
+                phase_frequency_row,
+                0.0,
+            )
+
+        def diagonal_augmented_preconditioner(vector: np.ndarray) -> np.ndarray:
+            return np.concatenate((
+                state_preconditioner_solve(vector[:state_size]),
+                vector[state_size:],
+            ))
+
         state_operator = spla.LinearOperator(
             shape=(state_size, state_size),
             matvec=matvec,
@@ -576,6 +645,21 @@ class TorusProblem:
         augmented_preconditioner_operator = spla.LinearOperator(
             shape=(state_size + 2, state_size + 2),
             matvec=augmented_preconditioner,
+            dtype=float,
+        )
+        phase_frequency_operator = spla.LinearOperator(
+            shape=(state_size + 1, state_size + 1),
+            matvec=phase_frequency_matvec,
+            dtype=float,
+        )
+        phase_frequency_preconditioner_operator = spla.LinearOperator(
+            shape=(state_size + 1, state_size + 1),
+            matvec=phase_frequency_preconditioner,
+            dtype=float,
+        )
+        diagonal_augmented_preconditioner_operator = spla.LinearOperator(
+            shape=(state_size + 2, state_size + 2),
+            matvec=diagonal_augmented_preconditioner,
             dtype=float,
         )
 
@@ -616,12 +700,44 @@ class TorusProblem:
             maxiter=gmres_maxiter,
             restart=gmres_restart,
         )
+        phase_frequency_rhs = np.concatenate((
+            state_rhs,
+            np.asarray([-phase_value]),
+        ))
+        phase_frequency_gmres = _short_gmres(
+            phase_frequency_operator,
+            phase_frequency_rhs,
+            phase_frequency_preconditioner_operator,
+            rtol=gmres_rtol,
+            maxiter=gmres_maxiter,
+            restart=gmres_restart,
+        )
+        diagonal_augmented_gmres = _short_gmres(
+            augmented_operator,
+            augmented_rhs,
+            diagonal_augmented_preconditioner_operator,
+            rtol=gmres_rtol,
+            maxiter=gmres_maxiter,
+            restart=gmres_restart,
+        )
         augmented_random = rng.normal(size=state_size + 2)
         augmented_random /= max(float(np.linalg.norm(augmented_random)), 1e-300)
         augmented_solved = augmented_preconditioner(augmented_random)
         augmented_fidelity = float(
             np.linalg.norm(augmented_matvec(augmented_solved) - augmented_random)
             / max(np.linalg.norm(augmented_random), 1e-30)
+        )
+        phase_mode = np.zeros_like(state)
+        for index, tone in enumerate(self.basis.tones):
+            if tone.q != 0:
+                phase_mode[index] = 1j * tone.q * state[index]
+        phase_mode_packed = pack_complex(phase_mode)
+        phase_null_action = float(
+            np.linalg.norm(matvec(phase_mode_packed))
+            / max(np.linalg.norm(phase_mode_packed), 1e-30)
+        )
+        border_singular_values = np.linalg.svd(
+            border_schur, compute_uv=False
         )
         return {
             "state_scale": state_scale,
@@ -632,8 +748,14 @@ class TorusProblem:
             "augmented_preconditioner_fidelity": augmented_fidelity,
             "state_only_gmres": state_gmres,
             "augmented_gmres": augmented_gmres,
+            "phase_frequency_gmres": phase_frequency_gmres,
+            "diagonal_augmented_gmres": diagonal_augmented_gmres,
+            "phase_null_action_relative": phase_null_action,
             "border_schur_matrix": border_schur.tolist(),
+            "border_schur_singular_values": border_singular_values.tolist(),
             "border_schur_condition": float(np.linalg.cond(border_schur)),
+            "phase_frequency_schur": phase_frequency_schur,
+            "phase_frequency_schur_abs": abs(phase_frequency_schur),
             "phase_residual": float(phase_value),
             "state_residual_norm": float(np.linalg.norm(state_rhs)),
             "lattice_labels": lattice_label_audit(problem, preconditioner),
@@ -1633,36 +1755,24 @@ class TorusProblem:
                 iteration=iteration,
                 residual_norm=norm,
             )
-            try:
-                update, gmres_info = spla.gmres(
-                    operator,
-                    -residual,
-                    M=preconditioner_operator,
-                    rtol=gmres_rtol,
-                    atol=0.0,
-                    restart=gmres_restart,
-                    maxiter=gmres_maxiter,
-                    callback=gmres_history.append,
-                    callback_type="pr_norm",
-                )
-            except TypeError:
-                update, gmres_info = spla.gmres(
-                    operator,
-                    -residual,
-                    M=preconditioner_operator,
-                    tol=gmres_rtol,
-                    restart=gmres_restart,
-                    maxiter=gmres_maxiter,
-                    callback=gmres_history.append,
-                )
+            update, gmres_report = _gmres_solve(
+                operator,
+                -residual,
+                preconditioner_operator,
+                rtol=gmres_rtol,
+                maxiter=gmres_maxiter,
+                restart=gmres_restart,
+            )
+            gmres_history.extend(gmres_report["residual_history"])
             gmres_history_by_newton.append(list(gmres_history))
+            gmres_info = int(gmres_report["info"])
             _append_timing_event(
                 timing_path,
                 "augmented_gmres",
                 "after",
                 iteration=iteration,
                 runtime_s=time.perf_counter() - gmres_start,
-                info=int(gmres_info),
+                info=gmres_info,
                 callback_iterations=len(gmres_history),
             )
             if gmres_info != 0:
@@ -1676,7 +1786,7 @@ class TorusProblem:
                     "gmres_iterations_total": sum(
                         len(item) for item in gmres_history_by_newton
                     ),
-                    "gmres_info": int(gmres_info),
+                    "gmres_info": gmres_info,
                     "factor_backend": factor_backends,
                     "linear_debug": linear_debug_report,
                     "border_schur_matrix": border_schur.tolist(),

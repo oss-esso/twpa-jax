@@ -2318,3 +2318,85 @@ Artifacts:
 D:\tmp\torus_fidelity_20260818\k5_linear_fidelity.json
 D:\tmp\torus_fidelity_20260818\k10_linear_fidelity.json
 ```
+
+### Phase-frequency border diagnostic (2026-08-18)
+
+The next diagnostic tested the proposed hierarchy
+`J -> [J R_omega; P_X 0] -> arclength` before changing the production
+corrector. It added a one-border dense helper and recorded:
+
+- the phase-null action `||J v_phi|| / ||v_phi||`;
+- the complete current `S_2` matrix, singular values, and condition number;
+- bounded GMRES for the phase-frequency system;
+- bounded GMRES with the simple `diag(M^-1, 1, 1)` control.
+
+The raw K=5 result was:
+
+```text
+phase_null_action_relative = 9.279951789292504e-05
+border_schur_matrix = [
+  [-116103581.91873951, -89525267.66547777],
+  [-609.2912012718136, -605.3661586629357]
+]
+border_schur_singular_values = [146611102.191011, 107.34672393752832]
+border_schur_condition = 1365771.5560684744
+phase_frequency_schur = -116103581.91873947
+phase_frequency_gmres = {
+  info: 2,
+  history: [0.0019803243081308636, 0.0005479575882486247,
+            0.0001389000009691886, 2.251473123457748e-05]
+}
+diagonal_augmented_gmres = {
+  info: 2,
+  history: [1751345.1694796642, 0.5978552726090486,
+            5572.1394237116065, 0.6188662540458721]
+}
+```
+
+The raw K=10 result was:
+
+```text
+phase_null_action_relative = 1393185.6283300417
+border_schur_matrix = [
+  [-0.9292200216941644, -0.6164121292326175],
+  [-1.9659452333329672, 0.007553985189684828]
+]
+border_schur_singular_values = [2.190624683773592, 0.5563946259455633]
+border_schur_condition = 3.937178005719845
+phase_frequency_schur = -0.9292200216941642
+phase_frequency_gmres = {
+  info: 2,
+  history: [0.005341224816948663, 0.00534121272880219,
+            0.005341224832331042, 0.0053404477450735306]
+}
+diagonal_augmented_gmres = {
+  info: 2,
+  history: [0.16939144291797523, 0.11224146565870663,
+            0.1122263496804787, 0.10367981865088081]
+}
+```
+
+The K=5 nested PALC control converged in two Newton iterations:
+
+```text
+converged       = True
+residual_norm   = 9.35153144413183e-13
+omega_a/omega_p = 0.09228947903092798
+source_tau      = 1.000010414054061
+GMRES total     = 12
+torus_radius^2  = 0.00010215123085027343
+```
+
+The K=10 nested PALC attempt was bounded at 180 seconds. It produced no point
+artifact and left a 3.0 GB orphaned Python process, which was terminated. The
+phase-frequency probe had already failed within two restart cycles, so nested
+bordering was not promoted to the production corrector. The known full
+augmented corrector remains active. No 10-point column was launched.
+
+Artifacts:
+
+```text
+D:\tmp\torus_fidelity_20260818\k5_linear_fidelity_border.json
+D:\tmp\torus_fidelity_20260818\k10_linear_fidelity_border.json
+D:\tmp\torus_fidelity_20260818\k5_nested_palc.json
+```
