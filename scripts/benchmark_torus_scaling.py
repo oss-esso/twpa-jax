@@ -417,10 +417,10 @@ def controller(args: argparse.Namespace) -> int:
                 "0",
                 "--factor-backend",
                 "pardiso",
-                "--seed-amplitudes",
-                "1e-6",
-                "1e-5",
-                "1e-4",
+                "--branch-step",
+                "0.05",
+                "--omitted-q-max",
+                "3",
                 "--min-off-comb-fraction",
                 "1e-8" if case_id.startswith("ipm_2c") else "0.0",
                 "--out",
@@ -428,6 +428,10 @@ def controller(args: argparse.Namespace) -> int:
             ]
             if config["kind"] == "circuit_dir" and case_id.startswith("ipm_2c"):
                 torus_command.append("--schur")
+            if config.get("floquet_seed_npz") is not None:
+                torus_command.extend(
+                    ["--floquet-seed-npz", str(config["floquet_seed_npz"])]
+                )
             torus_telemetry = run_child(
                 torus_command,
                 log_path=case_root / "torus.log",

@@ -29,6 +29,7 @@ def build_args(args: argparse.Namespace) -> argparse.Namespace:
         "--pump-power-max-dbm", str(args.power_max_dbm),
         "--pump-freq-min-ghz", str(args.freq_ghz),
         "--pump-freq-max-ghz", str(args.freq_ghz),
+        "--pump-port", str(args.pump_port),
         "--signal-detuning-mhz", "500", "--no-signal-spectrum",
         "--pump-mode-count", str(args.pump_mode_count),
         "--nt", str(max(args.nt, 4 * args.pump_mode_count + 4)),
@@ -47,6 +48,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--circuit-dir", type=Path, default=ROOT / "designs/ipm_2c_fixed")
     parser.add_argument("--outdir", type=Path, required=True)
     parser.add_argument("--freq-ghz", type=float, default=7.9)
+    parser.add_argument("--pump-port", type=int, default=1)
     parser.add_argument("--n-power", type=int, default=14)
     parser.add_argument(
         "--pump-mode-count", type=int, default=10,

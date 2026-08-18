@@ -47,6 +47,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def run(args: argparse.Namespace) -> dict[str, object]:
     """Solve the pump once, scan Tier 1, and refine ranked minima."""
+    output_json = Path(args.out_json)
+    output_json.parent.mkdir(parents=True, exist_ok=True)
     circuit = tracker.load_circuit(args.circuit_dir)
     pump = tracker.load_pump(Path(args.pump_dir), fallback_pump_freq_ghz=1.0)
     driver_args = tracker.parse_args(
@@ -115,6 +117,16 @@ def run(args: argparse.Namespace) -> dict[str, object]:
         classification = classify_floquet_resonance(
             resonance, pump_step.pump.omega_p
         )
+        seed_path: Path | None = None
+        if resonance.mode_vector is not None:
+            seed_path = output_json.with_name(
+                f"{output_json.stem}.candidate_{len(candidates):02d}.npz"
+            )
+            np.savez(
+                seed_path,
+                vector=np.asarray(resonance.mode_vector, dtype=np.complex128),
+                sidebands=np.asarray(modes, dtype=np.int64),
+            )
         candidates.append(
             {
                 "grid_index": int(index),
@@ -129,6 +141,7 @@ def run(args: argparse.Namespace) -> dict[str, object]:
                 "converged": resonance.converged,
                 "iterations": resonance.iterations,
                 "residual": resonance.residual,
+                "floquet_seed_npz": str(seed_path) if seed_path else None,
             }
         )
     result: dict[str, object] = {
@@ -140,7 +153,7 @@ def run(args: argparse.Namespace) -> dict[str, object]:
         "scan_max_ghz": args.scan_max_ghz,
         "candidates": candidates,
     }
-    Path(args.out_json).write_text(json.dumps(result, indent=2), encoding="utf-8")
+    output_json.write_text(json.dumps(result, indent=2), encoding="utf-8")
     return result
 
 

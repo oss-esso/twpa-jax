@@ -13,6 +13,7 @@ from twpa_solver.multitone.schur import build_multitone_schur_problem
 from twpa_solver.multitone.source import AffineSourcePath, MultiToneDrive
 from twpa_solver.multitone.torus import TorusProblem
 from twpa_solver.pump.solver import bordered_solve_refined
+from twpa_solver.signal.stability import audit_loss_convention
 
 
 def _torus_problem() -> TorusProblem:
@@ -86,6 +87,65 @@ def test_amplitude_solve_refuses_a_period1_start() -> None:
         problem.solve_newton_amplitude(state, 1.0e-9)
 
 
+def test_branch_switch_uses_the_critical_direction_before_arclength(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    problem = _torus_problem()
+    state = problem.full_problem().zeros()
+    state[problem.basis.index_of(ToneIndex(1, 0)), 0] = 1.0e-12
+    mode = np.zeros_like(state)
+    mode[problem.basis.index_of(ToneIndex(0, 1)), 0] = 1.0 + 0.25j
+    captured: dict[str, object] = {}
+
+    def fake_arclength(
+        X0: np.ndarray,
+        *,
+        previous_X: np.ndarray,
+        previous_omega_a: float,
+        previous_source_tau: float,
+        tangent: np.ndarray,
+        step_size: float,
+        **kwargs: object,
+    ) -> tuple[np.ndarray, float, float, dict[str, object], np.ndarray]:
+        captured["X0"] = X0
+        captured["previous_X"] = previous_X
+        captured["tangent"] = tangent
+        captured["step_size"] = step_size
+        captured["phase_reference"] = kwargs["phase_reference"]
+        return X0, previous_omega_a, previous_source_tau, {
+            "converged": True,
+        }, tangent
+
+    monkeypatch.setattr(problem, "solve_torus_arclength", fake_arclength)
+    result = problem.solve_torus_branch_switch(
+        state,
+        omega_a_ns=problem.omega_a,
+        source_tau_ns=1.0,
+        perturbation=mode,
+        step_size=0.05,
+    )
+
+    assert result[3]["converged"] is True
+    np.testing.assert_array_equal(captured["previous_X"], state)
+    assert float(captured["step_size"]) == 0.05
+    predicted = np.asarray(captured["X0"])
+    assert np.linalg.norm(predicted[problem.generator_rows()]) > 0.0
+    np.testing.assert_array_equal(captured["phase_reference"], mode)
+
+
+def test_omitted_q_residual_is_evaluated_on_a_larger_lattice() -> None:
+    problem = _torus_problem()
+    state = problem.full_problem().zeros()
+    state[problem.basis.index_of(ToneIndex(1, 0)), 0] = 1.0e-12
+    state[problem.basis.index_of(ToneIndex(0, 1)), 0] = 2.0e-13
+
+    result = problem.omitted_q_residual(state, evaluation_q_max=2)
+
+    assert result["omitted_q_max"] == 2.0
+    assert result["omitted_q_residual_abs"] >= 0.0
+    assert result["omitted_q_residual_rel"] >= 0.0
+
+
 def test_torus_bordered_step_matches_dense_reference() -> None:
     matrix = np.array(
         [
@@ -128,3 +188,16 @@ def test_torus_accepts_schur_problem_and_records_anchor_mapping() -> None:
     assert problem.is_schur
     assert problem.full_problem().n == reduced.n
     assert problem.anchor_full_node == 1
+
+
+def test_loss_convention_audit_is_nonblocking_for_analytic_stability_model() -> None:
+    problem = _torus_problem()
+    audit = audit_loss_convention(
+        problem.base_problem.circuit,
+        "current_complex_c",
+    )
+
+    assert audit["loss_model"] == "current_complex_c"
+    assert audit["analytic_in_omega"] is True
+    assert audit["conjugate_symmetric"] is False
+    assert "do not publish gain" in str(audit["interpretation"])

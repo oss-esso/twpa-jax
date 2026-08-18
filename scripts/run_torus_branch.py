@@ -21,12 +21,13 @@ from twpa_solver.multitone.schur import (  # noqa: E402
     build_multitone_schur_problem,
 )
 from twpa_solver.multitone.seed import (  # noqa: E402
+    promote_pump_solution,
     seed_torus_from_floquet,
-    seed_torus_from_pump,
 )
 from twpa_solver.multitone.source import AffineSourcePath, MultiToneDrive  # noqa: E402
 from twpa_solver.multitone.torus import TorusProblem  # noqa: E402
 from twpa_solver.signal.io import load_pump  # noqa: E402
+from twpa_solver.signal.stability import audit_loss_convention  # noqa: E402
 
 
 def _atomic_write(path: Path, payload: Any) -> None:
@@ -68,7 +69,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--floquet-seed-npz",
         type=Path,
         default=None,
-        help="Optional Phase-6 seed with vector and sidebands arrays.",
+        help="Critical Hill seed with vector and sidebands arrays.",
     )
     parser.add_argument(
         "--factor-backend",
@@ -79,20 +80,26 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--max-newton", type=int, default=20)
     parser.add_argument("--residual-tol", type=float, default=1e-9)
     parser.add_argument(
-        "--seed-amplitudes",
+        "--branch-step",
         type=float,
-        nargs="+",
+        default=0.05,
+        help="Initial normalized pseudo-arclength step.",
+    )
+    parser.add_argument("--gmres-rtol", type=float, default=1.0e-8)
+    parser.add_argument("--gmres-maxiter", type=int, default=240)
+    parser.add_argument("--gmres-restart", type=int, default=80)
+    parser.add_argument(
+        "--omitted-q-max",
+        type=int,
         default=None,
-        help="Relative perturbations to try when the direct seed fails.",
+        help="Evaluate residual content through this larger generator order.",
     )
     parser.add_argument(
         "--min-off-comb-fraction",
         type=float,
         default=0.0,
         help=(
-            "Minimum q != 0 norm fraction for physical-torus acceptance. "
-            "Numerically converged floor solutions are rejected and the "
-            "remaining seed amplitudes are tried."
+            "Minimum q != 0 norm fraction for physical-torus acceptance."
         ),
     )
     return parser.parse_args(argv)
@@ -153,88 +160,43 @@ def _to_problem_nodes(seed: np.ndarray, torus: TorusProblem) -> np.ndarray:
     return seed[:, torus.base_problem.partition.retained]
 
 
+def _pump_coordinate(pump: Any, basis: Any, torus: TorusProblem) -> np.ndarray:
+    """Promote and restrict the pump using the torus solver coordinates."""
+    return _to_problem_nodes(
+        promote_pump_solution(pump.X, pump.basis, basis), torus
+    )
+
+
 def _solve_seed(
     torus: TorusProblem,
     pump: Any,
     basis: Any,
     args: argparse.Namespace,
     previous_state: np.ndarray | None,
+    previous_omega: float | None,
+    previous_source_tau: float | None,
+    previous_tangent: np.ndarray | None,
     floquet_seed: tuple[np.ndarray, list[int]] | None,
 ) -> tuple[np.ndarray, float, dict[str, Any], str]:
-    if previous_state is not None:
-        state, omega, report = torus.solve_newton(
-            previous_state,
-            omega_a0=args.omega_a_ratio * pump.omega_p,
-            max_newton=args.max_newton,
-            residual_tol=args.residual_tol,
-        )
-        report = dict(report)
-        fraction = _off_comb_fraction(state, torus.basis)
-        report["off_comb_norm_fraction"] = fraction
-        report["physical_torus_gate_passed"] = bool(
-            report.get("converged")
-            and fraction >= args.min_off_comb_fraction
-        )
-        return state, omega, report, "warm_start"
-
-    amplitudes = args.seed_amplitudes
-    if amplitudes is None:
-        amplitudes = [1.0e-6]
-    attempts: list[dict[str, Any]] = []
-    seed_routes = [(float(amplitudes[0]), "pump_plus_perturbation")]
-    seed_routes.extend(
-        (float(value), "pump_amplitude_sweep") for value in amplitudes[1:]
-    )
-    last_state: np.ndarray | None = None
-    last_omega = args.omega_a_ratio * pump.omega_p
-    last_report: dict[str, Any] = {}
-    last_converged_report: dict[str, Any] | None = None
-    for amplitude, route in seed_routes:
-        seed = seed_torus_from_pump(
-            pump.X,
-            pump.basis,
-            basis,
-            amplitude=amplitude,
-            node_ref=args.node_ref,
-        )
-        seed = _to_problem_nodes(seed, torus)
-        state, omega, report = torus.solve_newton(
-            seed,
-            omega_a0=args.omega_a_ratio * pump.omega_p,
-            max_newton=args.max_newton,
-            residual_tol=args.residual_tol,
-        )
-        last_state = state
-        last_omega = omega
-        last_report = dict(report)
-        fraction = _off_comb_fraction(state, torus.basis)
-        gate_passed = bool(
-            report.get("converged")
-            and fraction >= args.min_off_comb_fraction
-        )
-        attempts.append(
-            {
-                "route": route,
-                "amplitude": amplitude,
-                "off_comb_norm_fraction": fraction,
-                "physical_torus_gate_passed": gate_passed,
-                **report,
-            }
-        )
-        if gate_passed:
-            report = dict(report)
-            report["off_comb_norm_fraction"] = fraction
-            report["physical_torus_gate_passed"] = True
-            report["seed_attempts"] = attempts
-            return state, omega, report, route
-
-        if report.get("converged"):
-            last_converged_report = dict(report)
-            last_converged_report["off_comb_norm_fraction"] = fraction
-
-    if floquet_seed is not None:
+    report: dict[str, Any]
+    if previous_state is None:
+        pump_state = _pump_coordinate(pump, basis, torus)
+        if floquet_seed is None:
+            return (
+                pump_state,
+                args.omega_a_ratio * pump.omega_p,
+                {
+                    "converged": False,
+                    "source_tau": 1.0,
+                    "physical_torus_gate_passed": False,
+                    "failure_reason": (
+                        "Floquet seed is required for NS branch switch"
+                    ),
+                },
+                "missing_floquet_seed",
+            )
         vector, sidebands = floquet_seed
-        seed = seed_torus_from_floquet(
+        seeded = seed_torus_from_floquet(
             pump.X,
             pump.basis,
             basis,
@@ -242,53 +204,68 @@ def _solve_seed(
             sidebands,
             omega_p=pump.omega_p,
             omega_a=args.omega_a_ratio * pump.omega_p,
+            perturbation_amplitude=1.0,
             node_ref=args.node_ref,
         )
-        seed = _to_problem_nodes(seed, torus)
-        state, omega, report = torus.solve_newton(
-            seed,
-            omega_a0=args.omega_a_ratio * pump.omega_p,
+        mode = _to_problem_nodes(seeded, torus) - pump_state
+        state, omega, tau, report, tangent = torus.solve_torus_branch_switch(
+            pump_state,
+            omega_a_ns=args.omega_a_ratio * pump.omega_p,
+            source_tau_ns=1.0,
+            perturbation=mode,
+            step_size=args.branch_step,
             max_newton=args.max_newton,
             residual_tol=args.residual_tol,
+            gmres_rtol=args.gmres_rtol,
+            gmres_maxiter=args.gmres_maxiter,
+            gmres_restart=args.gmres_restart,
         )
-        last_state = state
-        last_omega = omega
-        last_report = dict(report)
-        fraction = _off_comb_fraction(state, torus.basis)
-        gate_passed = bool(
-            report.get("converged")
-            and fraction >= args.min_off_comb_fraction
+        route = "floquet_branch_switch"
+    else:
+        if (
+            previous_omega is None
+            or previous_source_tau is None
+            or previous_tangent is None
+        ):
+            raise ValueError("a converged PALC point requires source and tangent")
+        predictor = torus.predict_torus_arclength(
+            previous_state,
+            previous_omega,
+            previous_source_tau,
+            previous_tangent,
+            args.branch_step,
         )
-        attempts.append(
-            {
-                "route": "optional_floquet",
-                "off_comb_norm_fraction": fraction,
-                "physical_torus_gate_passed": gate_passed,
-                **report,
-            }
+        state, omega, tau, report, tangent = torus.solve_torus_arclength(
+            predictor[0],
+            previous_X=previous_state,
+            previous_omega_a=previous_omega,
+            previous_source_tau=previous_source_tau,
+            tangent=previous_tangent,
+            step_size=args.branch_step,
+            omega_a0=predictor[1],
+            source_tau0=predictor[2],
+            phase_reference=previous_state,
+            max_newton=args.max_newton,
+            residual_tol=args.residual_tol,
+            gmres_rtol=args.gmres_rtol,
+            gmres_maxiter=args.gmres_maxiter,
+            gmres_restart=args.gmres_restart,
         )
-        if gate_passed:
-            report = dict(report)
-            report["off_comb_norm_fraction"] = fraction
-            report["physical_torus_gate_passed"] = True
-            report["seed_attempts"] = attempts
-            return state, omega, report, "optional_floquet"
-        if report.get("converged"):
-            last_converged_report = dict(report)
-            last_converged_report["off_comb_norm_fraction"] = fraction
+        route = "palc"
 
-    if last_state is None:
-        raise RuntimeError("no torus seed attempt was executed")
-    final_report = dict(last_converged_report or last_report)
-    final_report["solver_converged"] = bool(last_converged_report)
-    final_report["converged"] = False
-    final_report["physical_torus_gate_passed"] = False
-    final_report["gate_reason"] = (
-        "all seed attempts either failed Newton convergence or remained below "
-        "--min-off-comb-fraction"
+    report = dict(report)
+    report["source_tau"] = tau
+    fraction = _off_comb_fraction(state, torus.basis)
+    report["off_comb_norm_fraction"] = fraction
+    if args.omitted_q_max is not None and args.omitted_q_max > args.q_max:
+        report.update(torus.omitted_q_residual(state, args.omitted_q_max))
+    report["physical_torus_gate_passed"] = bool(
+        report.get("converged")
+        and fraction >= args.min_off_comb_fraction
     )
-    final_report["seed_attempts"] = attempts
-    return last_state, last_omega, final_report, "physical_gate_rejected"
+    if tangent is not None:
+        report["_tangent"] = tangent
+    return state, omega, report, route
 
 
 def run_branch(args: argparse.Namespace) -> dict[str, Any]:
@@ -296,11 +273,22 @@ def run_branch(args: argparse.Namespace) -> dict[str, Any]:
         raise ValueError("--q-max must be >= 1")
     if args.omega_a_ratio <= 0.0:
         raise ValueError("--omega-a-ratio must be positive")
+    if args.branch_step <= 0.0:
+        raise ValueError("--branch-step must be positive")
     circuit = load_circuit(args.circuit_dir)
+    loss_audit = audit_loss_convention(circuit, args.loss_model)
     controls = _controls(args)
     floquet_seed = _load_seed(args.floquet_seed_npz) if args.floquet_seed_npz else None
+    sideband_harmonics = None
+    if floquet_seed is not None:
+        sideband_harmonics = max(
+            abs(value) for value in floquet_seed[1]
+        )
     rows: list[dict[str, Any]] = []
     previous_state: np.ndarray | None = None
+    previous_omega: float | None = None
+    previous_source_tau: float | None = None
+    previous_tangent: np.ndarray | None = None
 
     for index, (pump_dir, control) in enumerate(
         zip(args.pump_solution_dirs, controls)
@@ -312,6 +300,7 @@ def run_branch(args: argparse.Namespace) -> dict[str, Any]:
             omega_a,
             pump.modes,
             args.q_max,
+            sideband_harmonics=sideband_harmonics,
         )
         pump_port = _pump_port(pump, circuit)
         drive = MultiToneDrive(
@@ -350,6 +339,7 @@ def run_branch(args: argparse.Namespace) -> dict[str, Any]:
             args.q_max,
             omega_a,
             node_ref=node_ref,
+            sideband_harmonics=sideband_harmonics,
             factor_backend=args.factor_backend,
         )
         state, omega, report, seed_route = _solve_seed(
@@ -358,8 +348,12 @@ def run_branch(args: argparse.Namespace) -> dict[str, Any]:
             basis,
             args,
             previous_state,
+            previous_omega,
+            previous_source_tau,
+            previous_tangent,
             floquet_seed,
         )
+        continuation_tangent = report.pop("_tangent", None)
         q0_norm, q1_norm = _q_norms(state, torus.basis)
         off_comb_fraction = q1_norm / max(q0_norm + q1_norm, 1.0e-300)
         rows.append(
@@ -383,7 +377,16 @@ def run_branch(args: argparse.Namespace) -> dict[str, Any]:
             args.out.with_name(f"{args.out.stem}.point_{index:03d}.json"),
             rows[-1],
         )
-        previous_state = state if report.get("converged") else None
+        if report.get("converged"):
+            previous_state = state
+            previous_omega = omega
+            previous_source_tau = float(report["source_tau"])
+            previous_tangent = continuation_tangent
+        else:
+            previous_state = None
+            previous_omega = None
+            previous_source_tau = None
+            previous_tangent = None
 
     return {
             "metadata": {
@@ -399,7 +402,11 @@ def run_branch(args: argparse.Namespace) -> dict[str, Any]:
             "seed_source": (
                 str(args.floquet_seed_npz) if args.floquet_seed_npz else None
             ),
-            "phase_anchor": "Im X[(0,1), node_ref] = 0",
+            "phase_condition": (
+                "critical q=+1 reference for branch switch and PALC"
+            ),
+            "branch_corrector": "matrix_free_augmented_palc",
+            "loss_audit": loss_audit,
         },
         "points": rows,
     }

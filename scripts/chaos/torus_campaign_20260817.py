@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import tempfile
 import time
 from typing import Any
 
@@ -126,7 +127,8 @@ def run_child(
 
 
 def _load_case(circuit_dir: Path, pump_dir: Path, omega_ratio: float, q_max: int,
-               use_schur: bool, factor_backend: str, k: int) -> tuple[Any, Any, Any, Any]:
+               use_schur: bool, factor_backend: str, k: int,
+               loss_model: str) -> tuple[Any, Any, Any, Any]:
     """Construct one torus problem and retain the pump metadata."""
     from twpa_solver.core import load_circuit
     from twpa_solver.multitone.basis import build_autonomous_torus_basis
@@ -134,15 +136,15 @@ def _load_case(circuit_dir: Path, pump_dir: Path, omega_ratio: float, q_max: int
     from twpa_solver.multitone.schur import build_multitone_schur_problem
     from twpa_solver.multitone.source import AffineSourcePath, MultiToneDrive
     from twpa_solver.multitone.torus import TorusProblem
-    from twpa_solver.pump.basis import positive_odd_modes
     from twpa_solver.signal.io import load_pump
 
     circuit = load_circuit(circuit_dir)
     pump = load_pump(pump_dir, fallback_pump_freq_ghz=7.9)
-    pump_modes = tuple(positive_odd_modes(k))
+    pump_modes = tuple(int(mode) for mode in pump.modes)
     omega_a = omega_ratio * pump.omega_p
     basis = build_autonomous_torus_basis(
-        pump.omega_p, omega_a, pump_modes, q_max
+        pump.omega_p, omega_a, pump_modes, q_max,
+        sideband_harmonics=k,
     )
     port = int(pump.metadata.get("pump_port", next(iter(circuit.port_to_index))))
     current = next(
@@ -160,7 +162,7 @@ def _load_case(circuit_dir: Path, pump_dir: Path, omega_ratio: float, q_max: int
         circuit,
         basis,
         AffineSourcePath.pump_turn_on(drive),
-        loss_model=pump.metadata.get("loss_model"),
+        loss_model=loss_model,
     )
     full_node_ref = 0
     retained_index: int | None = None
@@ -185,6 +187,7 @@ def _load_case(circuit_dir: Path, pump_dir: Path, omega_ratio: float, q_max: int
         omega_a,
         node_ref=node_ref,
         factor_backend=factor_backend,
+        sideband_harmonics=k,
         precond_reuse=1,
     )
     return torus, pump, basis, {
@@ -204,7 +207,11 @@ def _q_fraction(state: np.ndarray, torus: Any) -> float:
 
 def worker_amplitude(args: argparse.Namespace) -> int:
     """Solve one amplitude rung and write its result before returning."""
-    from twpa_solver.multitone.seed import seed_torus_from_pump
+    from twpa_solver.multitone.seed import (
+        promote_pump_solution,
+        seed_torus_from_floquet,
+        seed_torus_from_pump,
+    )
 
     started = time.perf_counter()
     torus, pump, basis, metadata = _load_case(
@@ -215,27 +222,56 @@ def worker_amplitude(args: argparse.Namespace) -> int:
         args.schur,
         args.factor_backend,
         args.k,
+        args.loss_model,
     )
-    target = float(args.amplitude_relative) * float(np.linalg.norm(pump.X))
+    pump_state = promote_pump_solution(pump.X, pump.basis, basis)
+    if args.schur:
+        pump_state = pump_state[:, torus.base_problem.partition.retained]
+    target = float(args.amplitude_relative) * float(
+        np.linalg.norm(pump_state)
+    )
     omega0 = args.omega_ratio * pump.omega_p
     tau0 = 1.0
-    state: np.ndarray
-    if args.warm_state is not None and args.warm_state.exists():
-        with np.load(args.warm_state) as data:
-            state = np.asarray(data["X"], dtype=np.complex128)
-        omega0 = float(args.warm_omega)
-        tau0 = float(args.warm_tau)
-    else:
-        state = seed_torus_from_pump(
-            pump.X,
-            pump.basis,
-            basis,
-            amplitude=args.amplitude_relative,
-            node_ref=metadata["full_node_ref"],
-        )
-        if args.schur:
-            state = state[:, torus.base_problem.partition.retained]
+    state = np.zeros_like(pump_state)
+    warm_loaded = args.warm_state is not None and args.warm_state.exists()
     try:
+        if warm_loaded:
+            with np.load(args.warm_state) as data:
+                state = np.asarray(data["X"], dtype=np.complex128)
+            omega0 = float(args.warm_omega) * pump.omega_p
+            tau0 = float(args.warm_tau)
+        elif args.floquet_seed_npz is None:
+            state = seed_torus_from_pump(
+                pump.X,
+                pump.basis,
+                basis,
+                amplitude=args.amplitude_relative,
+                node_ref=metadata["full_node_ref"],
+            )
+        else:
+            with np.load(args.floquet_seed_npz) as data:
+                if "vector" not in data or "sidebands" not in data:
+                    raise ValueError(
+                        "Floquet seed must contain vector and sidebands arrays"
+                    )
+                state = seed_torus_from_floquet(
+                    pump.X,
+                    pump.basis,
+                    basis,
+                    np.asarray(data["vector"], dtype=np.complex128),
+                    np.asarray(data["sidebands"], dtype=np.int64),
+                    omega_p=pump.omega_p,
+                    omega_a=omega0,
+                    node_ref=metadata["full_node_ref"],
+                )
+        if args.floquet_seed_npz is not None or not warm_loaded:
+            if args.schur and state.shape[1] != torus.base_problem.n:
+                state = state[:, torus.base_problem.partition.retained]
+            generator_rows = torus.generator_rows()
+            generator_norm = float(np.linalg.norm(state[generator_rows]))
+            if generator_norm <= 0.0:
+                raise ValueError("torus seed has an empty q != 0 sector")
+            state[generator_rows] *= target / generator_norm
         state, omega, tau, report = torus.solve_newton_amplitude(
             state,
             target,
@@ -272,6 +308,10 @@ def worker_amplitude(args: argparse.Namespace) -> int:
         "q_nonzero_norm_fraction": q_fraction,
         "wall_seconds": time.perf_counter() - started,
         "q_max": args.q_max,
+        "floquet_seed_npz": (
+            str(args.floquet_seed_npz)
+            if args.floquet_seed_npz is not None else None
+        ),
         "schur": args.schur,
         "factor_backend": args.factor_backend,
         "anchor_full_node": metadata["full_node_ref"],
@@ -290,7 +330,13 @@ def worker_amplitude(args: argparse.Namespace) -> int:
 
 
 def fixture_smoke() -> dict[str, Any]:
-    """Run the small fixture smoke from ``tests/test_torus_hb.py``."""
+    """Verify pump convergence and rejection of the fixture's trivial branch.
+
+    The small circuit is a period-1 fixture, not a manufactured torus.  A
+    successful amplitude solve on it would therefore be a false-positive
+    regression.  The smoke explicitly requires the nontrivial solve to be
+    rejected with a diagnostic.
+    """
     from twpa_solver.core.linear import default_loss_model_for
     from twpa_solver.core.nonlinear import make_branch_law
     from twpa_solver.multitone.basis import build_autonomous_torus_basis
@@ -369,6 +415,9 @@ def fixture_smoke() -> dict[str, Any]:
     return {
         "pump_converged": bool(pump_report.converged),
         "torus_converged": bool(report.get("converged")),
+        "torus_rejected": bool(
+            not report.get("converged") and report.get("failure_reason")
+        ),
         "torus_report": report,
     }
 
@@ -399,7 +448,7 @@ def preflight(root: Path, log_path: Path, rss_limit_gb: float) -> dict[str, Any]
                 "-p",
                 "no:cacheprovider",
                 "--basetemp",
-                r"D:\tmp\torus_campaign_20260817",
+                str(Path(tempfile.gettempdir()) / "torus_campaign_20260817"),
                 "tests/test_torus_hb.py",
                 "tests/test_multitone_seed.py",
                 "tests/test_multitone_basis.py",
@@ -426,8 +475,12 @@ def preflight(root: Path, log_path: Path, rss_limit_gb: float) -> dict[str, Any]
         raise RuntimeError(f"preflight memory gate failed: {resources}")
     smoke1 = fixture_smoke()
     _write_event(root, "smoke1", smoke1)
-    if not smoke1["pump_converged"] or not smoke1["torus_converged"]:
-        raise RuntimeError(f"fixture amplitude smoke failed: {smoke1}")
+    if (
+        not smoke1["pump_converged"]
+        or smoke1["torus_converged"]
+        or not smoke1["torus_rejected"]
+    ):
+        raise RuntimeError(f"fixture amplitude safety smoke failed: {smoke1}")
     artifact = ROOT / ".hybrid_outputs" / "period1_recovery_7p9_2c_v1" / "point_-23.800000" / "pump"
     if not (artifact / "pump_solution.npz").exists():
         raise RuntimeError(f"missing 2c smoke artifact: {artifact}")
@@ -445,19 +498,28 @@ def preflight(root: Path, log_path: Path, rss_limit_gb: float) -> dict[str, Any]
         "0.0917",
         "--q-max",
         "1",
+        "--k",
+        "5",
         "--amplitude-relative",
         "1e-5",
+        "--loss-model",
+        "current_complex_c",
         "--residual-tol",
         "1e-9",
         "--out",
         str(root / "preflight" / "smoke2.json"),
     ]
-    smoke2 = run_child(common + ["--k", "5"], root / "preflight" / "smoke2.log", 600.0, rss_limit_gb)
+    smoke2 = run_child(common, root / "preflight" / "smoke2.log", 600.0, rss_limit_gb)
     smoke2_result = _read_json(root / "preflight" / "smoke2.json")
     smoke2.update({"result": smoke2_result})
     _write_event(root, "smoke2_telemetry", smoke2)
-    if smoke2["return_code"] != 0 and not smoke2_result:
-        raise RuntimeError(f"K=5 smoke failed without result: {smoke2}")
+    if (
+        smoke2["return_code"] == 0
+        or not smoke2_result
+        or smoke2_result.get("converged")
+        or not smoke2_result.get("report", {}).get("failure_reason")
+    ):
+        raise RuntimeError(f"K=5 safety smoke failed: {smoke2}")
     if smoke2["peak_rss_gib"] > 4.0:
         resources["derived_workers"] = 1
     smoke3_command = [
@@ -474,8 +536,12 @@ def preflight(root: Path, log_path: Path, rss_limit_gb: float) -> dict[str, Any]
         "0.0917",
         "--q-max",
         "1",
+        "--k",
+        "10",
         "--amplitude-relative",
         "1e-5",
+        "--loss-model",
+        "current_complex_c",
         "--residual-tol",
         "1e-9",
         "--schur",
@@ -486,8 +552,13 @@ def preflight(root: Path, log_path: Path, rss_limit_gb: float) -> dict[str, Any]
     smoke3_result = _read_json(root / "preflight" / "smoke3.json")
     smoke3.update({"result": smoke3_result})
     _write_event(root, "smoke3_telemetry", smoke3)
-    if smoke3["return_code"] != 0 and not smoke3_result:
-        raise RuntimeError(f"K=10 smoke failed without result: {smoke3}")
+    if (
+        smoke3["return_code"] == 0
+        or not smoke3_result
+        or smoke3_result.get("converged")
+        or not smoke3_result.get("report", {}).get("failure_reason")
+    ):
+        raise RuntimeError(f"K=10 safety smoke failed: {smoke3}")
     skip_stage_d = smoke3["wall_seconds"] > 1800.0 or smoke3["peak_rss_gib"] > 5.5
     estimate = 51 * max(smoke2["wall_seconds"], 1.0) + 26 * max(smoke3["wall_seconds"], 1.0)
     counts = {"stage_c": 17, "stage_d": 13, "stage_e": 13}
@@ -535,6 +606,7 @@ def stage_spectrum(root: Path, log_path: Path, deadline: float, cases: list[dict
             "--case-id", str(case["case_id"]), "--circuit-dir", str(case["circuit_dir"]),
             "--pump-dir", str(case["pump_dir"]), "--omega-ratio", str(case["omega_ratio"]),
             "--q-max", "1", "--out-dir", str(case_root), "--points", "120",
+            "--loss-model", "current_complex_c",
         ]
         if case.get("schur"):
             command.append("--schur")
@@ -547,48 +619,57 @@ def stage_spectrum(root: Path, log_path: Path, deadline: float, cases: list[dict
 
 
 def worker_spectrum(args: argparse.Namespace) -> int:
-    """Estimate the smallest singular value of the q=+-1 real block."""
-    from scipy.sparse.linalg import LinearOperator, svds
-    from twpa_solver.pump.problem import pack_complex, unpack_complex
-    from twpa_solver.multitone.basis import ToneIndex, build_autonomous_torus_basis
+    """Estimate the smallest singular value of the autonomous q=+-1 block."""
+    from twpa_solver.signal.stability import estimate_sigma_min
+    from twpa_solver.signal.floquet import assemble_conversion_matrix
+    from twpa_solver.signal.gamma import build_khat, compute_gamma_hat
 
     torus, pump, _, metadata = _load_case(
         args.circuit_dir, args.pump_dir, args.omega_ratio, args.q_max,
-        args.schur, "pardiso", args.k
+        args.schur,
+        "pardiso",
+        args.k,
+        args.loss_model,
     )
     ratios = np.geomspace(0.02, 0.50, args.points)
     rows: list[dict[str, Any]] = []
     out_dir = args.out_dir
     out_dir.mkdir(parents=True, exist_ok=True)
+    circuit = metadata["circuit"]
+    ms = list(range(-args.k, args.k + 1))
+    max_ell = max(abs(left - right) for left in ms for right in ms)
+    gamma_nt = max(
+        int(getattr(pump, "nt_original", 0) or 0),
+        4 * max(abs(int(mode)) for mode in pump.modes) + 4,
+    )
+    dc_flux = pump.metadata.get("dc_branch_flux")
+    dc_branch_flux = (
+        None if dc_flux is None else np.asarray(dc_flux, dtype=float)
+    )
+    gamma_hat = compute_gamma_hat(
+        circuit,
+        pump,
+        max_ell=max_ell,
+        gamma_nt=gamma_nt,
+        dc_branch_flux=dc_branch_flux,
+    )
+    khat = build_khat(circuit.Bphi, gamma_hat, drop_tol=0.0)
     for index, ratio in enumerate(ratios):
-        current = torus.with_omega_a(float(ratio * pump.omega_p))
-        problem = current.full_problem()
-        basis = problem.basis
-        pump_state = np.zeros((basis.n_tones, problem.n), dtype=np.complex128)
-        for source_row, mode in enumerate(pump.basis.modes):
-            tone = type(basis.tones[0])(int(mode), 0)
-            if tone in basis.tones:
-                pump_state[basis.index_of(tone)] = pump.X[source_row]
-        tangent = problem.tangent_state(pump_state)
-        spectral = problem.spectral_tangent_state(tangent)
-        rows_q = [i for i, tone in enumerate(basis.tones) if tone.q != 0]
-        n = problem.n
-        dimension = 2 * len(rows_q) * n
-
-        def matvec(vector: np.ndarray) -> np.ndarray:
-            local = unpack_complex(vector, (len(rows_q), n))
-            full = np.zeros((basis.n_tones, n), dtype=np.complex128)
-            full[rows_q] = local
-            applied = problem.jvp_coeffs_with_spectral_tangent(full, spectral)
-            return pack_complex(applied[rows_q])
-
-        operator = LinearOperator((dimension, dimension), matvec=matvec, dtype=float)
+        omega_s = float(ratio * pump.omega_p)
+        operator = assemble_conversion_matrix(
+            circuit=circuit,
+            khat=khat,
+            omega_s=omega_s,
+            omega_p=pump.omega_p,
+            ms=ms,
+            loss_model=args.loss_model,
+        )
+        dimension = int(operator.shape[0])
         value: float | None = None
         error: str | None = None
         try:
-            singular = svds(operator, k=1, which="SM", ncv=4, maxiter=8,
-                             return_singular_vectors=False)
-            value = float(np.asarray(singular).reshape(-1)[0])
+            estimate = estimate_sigma_min(operator, iters=8, seed=index)
+            value = float(estimate.sigma_min)
         except (RuntimeError, ValueError, FloatingPointError) as exc:
             error = f"{type(exc).__name__}: {exc}"
         row = {
@@ -609,7 +690,7 @@ def worker_spectrum(args: argparse.Namespace) -> int:
             "anchor_full_node": metadata["full_node_ref"],
             "anchor_retained_index": metadata["retained_node_ref"],
         })
-    return 0
+    return 0 if all(row["error"] is None for row in rows) else 2
 
 
 def _case_definitions(root: Path, jtwpa_pump: Path | None) -> list[dict[str, Any]]:
@@ -648,6 +729,7 @@ def _ladder(
     case: dict[str, Any],
     count: int,
     q_max: int,
+    k: int,
     stage_name: str,
     use_schur: bool,
 ) -> list[dict[str, Any]]:
@@ -656,7 +738,7 @@ def _ladder(
     output = root / stage_name / str(case["case_id"])
     output.mkdir(parents=True, exist_ok=True)
     previous_state: Path | None = None
-    previous_omega = case["omega_ratio"] * 1.0
+    previous_omega_ratio = case["omega_ratio"] * 1.0
     previous_tau = 1.0
     failures = 0
     rows: list[dict[str, Any]] = []
@@ -671,7 +753,9 @@ def _ladder(
                 sys.executable, str(Path(__file__).resolve()), "--worker-amplitude",
                 "--case-id", str(case["case_id"]), "--circuit-dir", str(case["circuit_dir"]),
                 "--pump-dir", str(case["pump_dir"]), "--omega-ratio", str(case["omega_ratio"]),
-                "--q-max", str(q_max), "--amplitude-relative", f"{amplitude:.17g}",
+                "--q-max", str(q_max), "--k", str(k),
+                "--amplitude-relative", f"{amplitude:.17g}",
+                "--loss-model", "current_complex_c",
                 "--residual-tol", "1e-9", "--out", str(result_path),
             ]
             if use_schur:
@@ -679,7 +763,7 @@ def _ladder(
             if previous_state is not None and previous_state.exists():
                 command += [
                     "--warm-state", str(previous_state),
-                    "--warm-omega", f"{previous_omega:.17g}",
+                    "--warm-omega", f"{previous_omega_ratio:.17g}",
                     "--warm-tau", f"{previous_tau:.17g}",
                 ]
             telemetry = run_child(command, output / f"point_{index:03d}.log", 1800.0, 6.0)
@@ -692,7 +776,9 @@ def _ladder(
         if result.get("converged"):
             failures = 0
             previous_state = result_path.with_suffix(".state.npz")
-            previous_omega = float(result.get("omega_a_over_omega_p", case["omega_ratio"]))
+            previous_omega_ratio = float(
+                result.get("omega_a_over_omega_p", case["omega_ratio"])
+            )
             previous_tau = float(result.get("source_tau", 1.0))
         else:
             failures += 1
@@ -815,18 +901,25 @@ def campaign(args: argparse.Namespace) -> int:
                 "jtwpa_pump": str(jtwpa_pump) if jtwpa_pump else None,
             }
             stage_data["B"] = stage_spectrum(root, log_path, deadline, cases)
+            if any(
+                item["telemetry"]["return_code"] != 0
+                or not item["result"].get("rows")
+                or any(row.get("error") for row in item["result"].get("rows", []))
+                for item in stage_data["B"]
+            ):
+                raise RuntimeError("Stage B singular-value gate failed")
             counts = preflight_data["amplitude_counts"]
             stage_c: list[dict[str, Any]] = []
             for case in cases[:3]:
                 stage_c.extend(_ladder(
-                    root, log_path, deadline, case, counts["stage_c"], 1,
+                    root, log_path, deadline, case, counts["stage_c"], 1, 5,
                     "stage_c_k5", False,
                 ))
             stage_data["C"] = stage_c
             stage_d: list[dict[str, Any]] = []
             if not preflight_data["skip_stage_d"]:
                 stage_d = _ladder(
-                    root, log_path, deadline, cases[0], counts["stage_d"], 1,
+                    root, log_path, deadline, cases[0], counts["stage_d"], 1, 10,
                     "stage_d_k10", True,
                 )
             stage_data["D"] = {
@@ -836,7 +929,7 @@ def campaign(args: argparse.Namespace) -> int:
             stage_e: list[dict[str, Any]] = []
             if jtwpa_pump is not None:
                 stage_e = _ladder(
-                    root, log_path, deadline, cases[-1], counts["stage_e"], 1,
+                    root, log_path, deadline, cases[-1], counts["stage_e"], 1, 10,
                     "stage_e_jtwpa", False,
                 )
             stage_data["E"] = stage_e
@@ -845,11 +938,11 @@ def campaign(args: argparse.Namespace) -> int:
                 stage_data["F"] = {
                     "available_memory_gb": available_gb,
                     "q1": _ladder(
-                        root, log_path, deadline, cases[0], 1, 1,
+                        root, log_path, deadline, cases[0], 1, 1, 10,
                         "stage_f_q1", True,
                     ),
                     "q2": _ladder(
-                        root, log_path, deadline, cases[0], 1, 2,
+                        root, log_path, deadline, cases[0], 1, 2, 10,
                         "stage_f_q2", True,
                     ),
                 }
@@ -864,7 +957,7 @@ def campaign(args: argparse.Namespace) -> int:
     finally:
         stage_g(root, log_path, preflight_data, stage_data)
     log_line(log_path, "campaign complete")
-    return 0
+    return 2 if stage_data.get("controller_error") else 0
 
 
 def _read_memory_gb() -> float:
@@ -891,13 +984,22 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--k", type=int, default=10)
     parser.add_argument("--schur", action="store_true")
     parser.add_argument("--factor-backend", default="pardiso")
+    parser.add_argument(
+        "--loss-model",
+        default="current_complex_c",
+        help="Analytic loss convention used by the stability residual.",
+    )
     parser.add_argument("--amplitude-relative", type=float, default=1.0e-5)
     parser.add_argument("--residual-tol", type=float, default=1.0e-9)
     parser.add_argument("--max-newton", type=int, default=30)
     parser.add_argument("--out", type=Path, default=None)
     parser.add_argument("--warm-state", type=Path, default=None)
-    parser.add_argument("--warm-omega", type=float, default=0.0917)
+    parser.add_argument(
+        "--warm-omega", type=float, default=0.0917,
+        help="Previous omega_a / omega_p ratio; converted to rad/s by the worker.",
+    )
     parser.add_argument("--warm-tau", type=float, default=1.0)
+    parser.add_argument("--floquet-seed-npz", type=Path, default=None)
     parser.add_argument("--out-dir", type=Path, default=None)
     parser.add_argument("--points", type=int, default=120)
     args = parser.parse_args(argv)

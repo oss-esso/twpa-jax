@@ -1579,3 +1579,384 @@ take its eigenvector at the crossing, seed `solve_newton` (fixed drive, phase
 anchor) with it at an amplitude taken from the measured `relative_radius`, and
 continue upward. The amplitude-parameterized closure is not a substitute for
 that, because its extra parameter has no leverage on its extra constraints.
+
+
+ ## Confirmed blockers
+
+  1. The public torus driver still invokes the invalid phase-only formulation.
+
+     /D:/Projects/Thesis/twpa_jax/scripts/run_torus_branch.py:165 calls solve_newton, even though /D:/Projects/Thesis/twpa_jax/src/twpa_solver/multitone/torus.py:489 explicitly documents
+     that this formulation admits (X_pump, 0, any omega_a).
+
+     Therefore run_torus_branch.py and the scaling benchmark built on it cannot currently compute a physical torus.
+
+  2. The autonomous torus basis cannot represent a normal Hill eigenvector.
+
+     /D:/Projects/Thesis/twpa_jax/src/twpa_solver/multitone/basis.py:236 retains q=±1 only at the odd pump harmonics plus (0,1). However, /D:/Projects/Thesis/twpa_jax/src/twpa_solver/
+     multitone/seed.py:154 maps Hill sideband m to the torus tone (m,1), requiring all retained integer sidebands.
+
+     Direct result:
+
+     q rows [(0, 1), (1, -1), (1, 1), (3, -1), ..., (19, 1)]
+     ValueError: Floquet sideband -4 maps to missing tone ToneIndex(h=4, q=-1)
+
+     The inability to insert the tracked Hill eigenvector is confirmed. The stronger conclusion—that the odd-only basis selects the wrong parity family for unbiased four-wave mixing—is a     well-supported operator inference, but should be verified from the production khat sparsity.
+
+  3. The amplitude solver’s convergence norm mixes amperes and webers.
+
+     /D:/Projects/Thesis/twpa_jax/src/twpa_solver/multitone/torus.py:338 concatenates the HB coefficient residual with phase and amplitude constraints, then applies an absolute Euclidean     tolerance.
+
+     Consequences:
+      - The flux constraints are numerically negligible compared with current residuals.
+      - The line search optimizes the same dimensionally inconsistent norm.
+      - The smoke fixture declares convergence at iteration zero with a physically weak relative residual.
+
+     Observed smoke result:
+
+     residual = 3.4458e-12
+     source coefficient = 5.0e-10
+     relative residual ≈ 6.9e-3
+     generator amplitude = 5.336e-22
+
+     It passes only because 3.45e-12 < 1e-9 in absolute units.
+
+  4. The proposed q-block singular-value instrument is broken.
+
+     The campaign creates a LinearOperator with matvec only and passes it to svds. SciPy requires the adjoint action.
+
+     Direct reproduction:
+
+     NotImplementedError: rmatvec is not defined
+
+     The JTWPA Stage B artifact contains this error in all 120 rows. The 2c version fails earlier:
+
+     ValueError: could not broadcast input array from shape (6136,)
+     into shape (2518,)
+
+     This comes from copying a full-node pump state into a Schur-reduced state.
+
+  5. Campaign gates do not stop failed stages.
+
+     /D:/Projects/Thesis/twpa_jax/scripts/chaos/torus_campaign_20260817.py:450 accepts a smoke stage if it wrote result JSON, even when the worker returned failure and converged=false.
+
+     Existing artifact summary:
+
+     attempted torus points: 17
+     converged torus points: 0
+     controller_error: None
+
+     The campaign then reports completion. This is the most direct reason the existing campaign output cannot be treated as HB evidence.
+
+  6. Successful amplitude continuation would immediately encounter a frequency-unit defect.
+
+     The ladder stores omega_a_over_omega_p, then supplies that dimensionless number as --warm-omega. The worker interprets it as radians per second.
+
+     A value near 0.09 would therefore replace a physical angular frequency near 4e9 rad/s.
+
+  7. Full and Schur amplitude constraints use different coordinate spaces.
+
+     The campaign defines the target amplitude from the norm of the full 6,136-node pump, but evaluates the torus amplitude on the 2,518-node Schur state.
+
+     Therefore:
+      - A_rel changes meaning between full and Schur formulations.
+      - It is not directly comparable with the FDTD relative_radius.
+      - Full/Schur agreement cannot currently be assessed from this continuation coordinate.
+
+  8. The nominal K=5 campaign actually runs at K=10.
+
+     Stage C is labelled stage_c_k5, but its command does not pass --k; the parser default is 10. In addition, simply truncating a K=10 pump would not constitute a converged K=5 pump
+     solution.
+
+  9. The onset fit would pool incompatible points.
+
+     Stage G combines all converged 2c results across stages, Q values, anchors, and full/Schur representations. It then marks the fit established from three points without branch-
+     continuity, slope, or fit-quality gates.
+
+     Even after convergence is repaired, that fit must not combine differently normalized branches.
+
+  ## Important secondary gaps
+
+  - run_torus_branch.py resets omega_a to its original guess at each step instead of carrying the solved value.
+  - After a failed point, it cold-starts the next point, permitting branch replacement.
+  - The exact-frequency problem cache grows without a bound and may retain many full Schur partitions and factorizations during a successful solve.
+  - first_lyapunov_coefficient is not a complete Neimark–Sacker normal-form calculation. Its present test only mocks a sign.
+  - Torus stability currently assesses the q=0 pump-periodic slice, not the full quasiperiodic torus. It cannot yet establish the unstable torus skeleton or chaos boundary.
+  - The transition reporter accepts the first |lambda| >= 1 value without requiring a below-to-above bracket, convergence, or absence of a branch discontinuity.
+
+  ## Test coverage result
+
+  Focused torus/tracking suite:
+
+  The six failures are the known design CLI/compact, KIMPA, and loss-model failures. No additional regression failures arose from the torus area.
+
+  ## What remains valid
+
+  The following work should be retained:
+
+  - Mode-vector Hill root continuation and overlap checking.
+  - Re-solving the period-1 pump at every source-drive step.
+  - Stopping 2c natural continuation at its pump fold.
+  - The equation count of the amplitude-normalized formulation:
+    (X, omega_a, source_drive) with the HB residual, phase condition, and nonzero generator-amplitude condition.
+
+  - The measured FDTD period-1 → torus → chaos route and the rejection of period doubling.
+
+  This audit invalidates the existing HB torus campaign, not the FDTD evidence.
+
+  ## Recommended implementation order
+
+  1. Make the q-block singular-value gate work on converged jc_jtwpa and 2c pumps.
+  2. Construct the torus q-sector from the actual Hill sideband support and prove that a production Hill eigenvector maps into it.
+  3. Nondimensionalize every bordered residual and define a representation-consistent amplitude coordinate.
+  4. Add a manufactured nontrivial torus test that converges from multiple phase-rotated seeds.
+  5. Run full-versus-Schur equivalence on 418 and 4×418.
+  6. Continue nontrivial branches on jc_jtwpa and 2c and compare the recovered onset and rotation number with FDTD.
+  7. Implement full torus stability before claiming the unstable skeleton.
+
+  The 418 and 4×418 designs are suitable for scaling, memory, and full/Schur equivalence. They do not have an independent torus reference, so physical validation must come from jc_jtwpa
+  and ipm_2c_fixed.
+
+---
+
+## 5. Floquet confirmation and torus handoff (2026-08-18)
+
+This work advances the north star by establishing a physically meaningful
+period-1 instability before attempting a nonlinear torus solve. The pump is
+solved at every source-drive point; no scaled pump waveform is used.
+
+### Runner changes
+
+`scripts/chaos/run_physical_torus_column.py` now provides:
+
+- cold-start pump solution at the first requested source drive;
+- adaptive warm-start pump continuation at subsequent drives;
+- explicit loss-model selection and production Schur/PARDISO settings;
+- candidate enumeration at the lowest solved drive, with an optional explicit
+  frequency seed for a previously identified clustered root;
+- mode-vector Floquet continuation with overlap and discontinuity diagnostics;
+- `--floquet-only`, which disables the torus corrector for Floquet confirmation;
+- incremental main and per-branch CSV output;
+- optional incremental per-point mode-vector NPZ checkpoints.
+
+`scripts/chaos/plot_floquet_column.py` produces the growth-rate plot from the
+flat branch CSV. The torus corrector in `multitone/torus.py` was not changed or
+invoked in the confirmation runs.
+
+### Configuration distinction
+
+The 2c runs use `current_complex_c` for the analytic Hill/Floquet circuit
+operator. The external pump-line attenuation remains the measured A10 model
+through the production `run_gain_map` path (35.275128996894026 dB at 7.9 GHz).
+`current_complex_c` breaks conjugate symmetry and is a stability-analysis
+convention only; it must not be used for published gain or compression values.
+
+The production pump basis is `[1, 3, ..., 19]`. In `--floquet-only` mode,
+`--k 10` records the later production torus basis but does not alter the Hill
+operator; the Hill calculation in these runs uses `--sidebands 5`. The K=5 and
+K=10 labels therefore refer to the autonomous torus basis, not to a change in
+the Floquet sideband truncation.
+
+### K=5 physical Floquet column
+
+Device: `ipm_2c_fixed`, pump frequency 7.9 GHz, pump port 4,
+`current_complex_c`, Schur/PARDISO. The source ladder was -24.30 to -23.70
+dBm in 0.05 dB steps. All pump solves converged. The critical branch growth
+rates were:
+
+```text
+-24.30  -1.3093121e+07
+-24.25  -7.0049876e+06
+-24.20  -5.896099e+05
+-24.15  +6.2434447e+06
+-24.10  +1.3547069e+07
+-24.05  +2.1399892e+07
+-24.00  +2.9867167e+07
+-23.95  +3.8989666e+07
+-23.90  +4.9002436e+07
+-23.85  +6.0165773e+07
+-23.80  +7.2195080e+07
+-23.75  +8.4740508e+07
+-23.70  +9.7915305e+07
+```
+
+Linear interpolation gave `P_NS = -24.1956856 dBm`,
+`omega_a = 0.72909155 GHz`, and `omega_a/omega_p = 0.092290070`.
+
+### K=10 focused confirmation
+
+The first blind K=10 candidate enumeration did not include the K=5 critical
+root. One selected clustered root also showed a mode overlap of 0.003862. That
+run is retained as evidence of why candidate generation must be explicit; it
+was not interpreted as a physical disagreement.
+
+The corrected run included the lowest-drive seed
+`0.72495699945944 GHz`, retained five blind candidates, and tracked the seeded
+root through the bracket. Full critical-branch table:
+
+| drive [dBm] | Re(omega) [GHz] | growth [s^-1] | multiplier magnitude | overlap | discontinuity |
+| ---: | ---: | ---: | ---: | ---: | :---: |
+| -24.30 | 0.7249569995 | -1.3093121e7 | 0.998344016 | -- | false |
+| -24.25 | 0.7268596699 | -7.0049876e6 | 0.999113686 | 0.999602008 | false |
+| -24.20 | 0.7289021930 | -5.8960994e5 | 0.999925369 | 0.999547073 | false |
+| -24.15 | 0.7310966708 | +6.2434447e6 | 1.000790622 | 0.999480745 | false |
+| -24.10 | 0.7334496730 | +1.3547069e7 | 1.001716290 | 0.999406936 | false |
+| -24.05 | 0.7359803011 | +2.1399892e7 | 1.002712519 | 0.999318632 | false |
+
+The other five tracked branches remained below zero. Scheduled untracked
+probes returned best growth rates of `-3.790e6`, `-5.604e6`, and `-4.959e6`
+s^-1 at -24.30, -24.20, and -24.10 dBm, respectively. No stronger untracked
+root was found.
+
+The K=5/K=10 mode-vector comparison used the same 67,496-component Hill basis:
+
+```text
+-24.20 dBm: overlap = 1.000000000000000
+-24.15 dBm: overlap = 1.000000000000000
+```
+
+### NS refinement
+
+A three-point K=10 refinement was run at -24.200, -24.195, and -24.190 dBm:
+
+| drive [dBm] | growth [s^-1] | Re(omega) [GHz] | multiplier magnitude |
+| ---: | ---: | ---: | ---: |
+| -24.200 | -5.896099e5 | 0.7289021930 | 0.999925369 |
+| -24.195 | +7.336233e4 | 0.7291149343 | 1.000009286 |
+| -24.190 | +7.401915e5 | 0.7293291832 | 1.000093700 |
+
+The refined linear estimate is:
+
+```text
+P_NS             = -24.1955501 dBm
+omega_a          = 0.72909136 GHz
+omega_a/omega_p  = 0.092290046
+```
+
+This is the same branch and the same generator frequency as the K=5 result.
+The independent FDTD reference ratio is 0.0917; the absolute difference is
+0.000590046, or +0.6435 percent.
+
+### Validation and artifacts
+
+Focused validation after the runner changes:
+
+```text
+python -m pytest -q -p no:cacheprovider --basetemp D:\tmp\physical_torus_k10_tests3 tests/test_branch_tracking.py tests/test_floquet_stability.py
+19 passed in 0.82s
+```
+
+`git diff --check` completed cleanly. `graphify update .` completed with 8,011
+nodes; only pre-existing ACL warnings for generated temporary directories were
+reported.
+
+Ignored run artifacts:
+
+- `D:\tmp\physical_torus_k5_20260818\`
+- `D:\tmp\physical_torus_k10_20260818\`
+- `D:\tmp\physical_torus_k10_seeded_20260818\`
+- `D:\tmp\physical_torus_k10_refine_20260818\`
+- `D:\tmp\physical_torus_mode_compare_k5_20260818\`
+- `D:\tmp\physical_torus_mode_compare_k10_20260818\`
+
+The K=10 growth plot is
+`D:\tmp\physical_torus_k10_seeded_20260818\growth_rates.png`.
+
+### Current conclusion and next gate
+
+O1 is resolved for the physical 2c period-1 branch: one tracked complex mode
+crosses the unit multiplier circle, with no mode-vector discontinuity and no
+stronger untracked root in the diagnostic probes. This is a Floquet NS result,
+not yet a nonlinear torus result.
+
+The next gate is the K=5 eigenvector branch switch and short torus PALC. It
+must use the saved critical Floquet eigenvector, a nonzero branch-switch
+arclength condition, and must not use the rejected source-drive amplitude
+closure. The K=10/Schur torus continuation, omitted-sector residual test, and
+FDTD comparison remain outstanding.
+
+### Single K=5 branch-switch experiment
+
+The manual convention audit passed before the run:
+
+```text
+loss_model=current_complex_c
+analytic_in_omega=True
+conjugate_symmetric=False
+circuit_has_imaginary_capacitance_loss=False
+```
+
+The result is interpreted only as an analytic stability-analysis result. The
+convention must not produce published gain or compression values.
+
+At the refined drive `P_NS = -24.1955501 dBm`, the normal adaptive pump path
+was run from a cold start. The authoritative checkpoint contains a converged
+period-1 state:
+
+```text
+pump_current_a   = 6.721961811076382e-06
+pump_coeff_rel   = 2.289350211742537e-12
+pump_time_rel    = 2.289365787536506e-12
+pump_iterations  = 15
+```
+
+The historical K=10 refinement did not persist its pump state or critical
+eigenvector, so the requested comparison to that exact state cannot be made.
+As a reproducibility substitute, a second independent cold-start solve at the
+same drive gave:
+
+```text
+e_X_fresh_vs_replay       = 0.0000000000000000e+00
+mode_overlap_fresh_replay = 0.9999999999999998
+```
+
+The fresh K=5 Floquet seed was:
+
+```text
+signal_real_ghz       = 0.7290914538559431
+signal_imag_ghz       = -3.7247328545705696e-08
+growth_rate_per_s     = 2.3403186745006883e+02
+multiplier_magnitude  = 1.0000000296242872
+floquet_residual      = 3.7762989580180845e-07
+```
+
+The first branch-switch corrector was attempted at `Delta s = 0.01`, then
+retried at `0.005` and `0.0025`. The dedicated runner initially had a lower
+hard-coded GMRES budget; it was extended to expose the production values
+`gmres_maxiter = 240` and `gmres_restart = 80`. The Schur/PARDISO integrated
+runner was also tested.
+
+All correctors failed before the first Newton update with:
+
+```text
+failure_reason = augmented GMRES failed
+gmres_info     = 240
+```
+
+At `Delta s = 0.0025`, the residual and nonzero-sector diagnostics were:
+
+```text
+residual_norm          = 8.94103086493591e-05
+off_comb_norm_fraction = 2.493765586034913e-03
+omitted_q_residual_rel = 1.2258318167386909e-06
+```
+
+The residual decreased with step halving, but no converged torus point was
+obtained. The five-to-ten-point PALC branch was therefore not started. Newton
+step components, finite displacement, and NS-mode overlap of a corrected torus
+state are unavailable because GMRES failed before an update was accepted.
+
+Artifacts:
+
+- `D:\tmp\ns_branch_switch_20260818\checkpoint_replay\`
+- `D:\tmp\ns_branch_switch_20260818\checkpoint_replay_b\`
+- `D:\tmp\ns_branch_switch_20260818\modes_replay\`
+- `D:\tmp\ns_branch_switch_20260818\floquet_seed.npz`
+- `D:\tmp\ns_branch_switch_20260818\branch_switch_k5.json`
+- `D:\tmp\ns_branch_switch_20260818\branch_switch_k5_ds005.json`
+- `D:\tmp\ns_branch_switch_20260818\branch_switch_k5_ds0025.json`
+- `D:\tmp\ns_branch_switch_20260818\branch_switch_k5_ds0025_gmres240.json`
+- `D:\tmp\ns_branch_switch_20260818\integrated_k5_schur.json`
+
+Current status: Floquet confirmation and pump reproducibility pass; the first
+nonlinear branch-switch gate fails at augmented GMRES. No physical column was
+run after that failure.

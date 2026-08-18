@@ -70,6 +70,29 @@ def test_seed_torus_from_floquet_populates_generator_sector_and_anchor() -> None
     assert generator.imag == pytest.approx(0.0)
 
 
+def test_seed_torus_from_floquet_accepts_a_complete_sideband_window() -> None:
+    basis = build_autonomous_torus_basis(
+        10.0, 1.0, [1, 3], 1, sideband_harmonics=4
+    )
+    pump_basis = PumpBasis([1, 3], "dense_real", 10.0)
+    pump = np.ones((2, 1), dtype=np.complex128)
+    vector = np.ones(9, dtype=np.complex128)
+
+    seed = seed_torus_from_floquet(
+        pump,
+        pump_basis,
+        basis,
+        vector,
+        list(range(-4, 5)),
+        omega_p=10.0,
+        omega_a=1.0,
+        node_ref=0,
+    )
+
+    assert np.linalg.norm(seed[[i for i, tone in enumerate(basis.tones)
+                                if tone.q != 0]]) > 0.0
+
+
 def test_seed_torus_from_pump_populates_both_first_sideband_sectors() -> None:
     basis = build_autonomous_torus_basis(10.0, 1.0, [1], 1)
     pump_basis = PumpBasis([1], "dense_real", 10.0)

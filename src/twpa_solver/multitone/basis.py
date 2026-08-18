@@ -239,6 +239,7 @@ def build_autonomous_torus_basis(
     pump_modes: Iterable[int],
     q_max: int,
     *,
+    sideband_harmonics: int | None = None,
     n_p: int | None = None,
     n_delta: int | None = None,
 ) -> MultiToneBasis:
@@ -258,11 +259,20 @@ def build_autonomous_torus_basis(
     modes = [int(mode) for mode in pump_modes]
     if not modes or any(mode <= 0 for mode in modes):
         raise ValueError("pump_modes must contain positive harmonics")
+    sideband_limit = max(modes) if sideband_harmonics is None else int(
+        sideband_harmonics
+    )
+    if sideband_limit < 1:
+        raise ValueError("sideband_harmonics must be >= 1")
 
     candidates: list[ToneIndex] = []
     for mode in modes:
+        candidates.append(ToneIndex(mode, 0))
+    for h in range(-sideband_limit, sideband_limit + 1):
         for q in range(-q_max, q_max + 1):
-            tone, _conjugated = canonicalize(ToneIndex(mode, q), omega_p, omega_a)
+            if q == 0:
+                continue
+            tone, _conjugated = canonicalize(ToneIndex(h, q), omega_p, omega_a)
             candidates.append(tone)
     generator, _conjugated = canonicalize(ToneIndex(0, 1), omega_p, omega_a)
     candidates.append(generator)

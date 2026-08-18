@@ -59,6 +59,43 @@ NON_ANALYTIC_LOSS_MODELS = (
 )
 
 
+def audit_loss_convention(
+    circuit: CircuitMatrices,
+    loss_model: str | None,
+) -> dict[str, object]:
+    """Record the stability interpretation of an explicit loss convention.
+
+    This is an audit only.  It does not reject an analytic convention when the
+    circuit has no imaginary capacitance loss, because ``current_complex_c`` is
+    intentionally used for complex-frequency Hill refinement in that case.
+    """
+    selected = require_explicit_loss_model(loss_model)
+    analytic = selected not in NON_ANALYTIC_LOSS_MODELS
+    conjugate_symmetric = selected not in {
+        "current_complex_c",
+        "complex_c_sign_omega",
+    }
+    result: dict[str, object] = {
+        "loss_model": selected,
+        "analytic_in_omega": analytic,
+        "conjugate_symmetric": conjugate_symmetric,
+        "circuit_has_imaginary_capacitance_loss": bool(circuit.has_loss),
+    }
+    if selected == "current_complex_c":
+        result["interpretation"] = (
+            "analytic stability-analysis convention; conjugate symmetry is "
+            "not preserved; do not publish gain or compression values"
+        )
+    elif not analytic:
+        result["interpretation"] = (
+            "real-frequency Tier-1 convention only; complex-omega refinement "
+            "is not analytic"
+        )
+    else:
+        result["interpretation"] = "analytic stability convention"
+    return result
+
+
 def require_explicit_loss_model(loss_model: str | None) -> str:
     """Validate the loss convention used by a stability calculation.
 

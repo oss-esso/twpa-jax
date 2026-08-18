@@ -625,3 +625,31 @@ New files: `multitone/torus.py`, `signal/branch_tracking.py`,
 Edits to existing modules are additive constructors and additive fields.
 Phase 8 is a flag defaulting off. No production path changes behaviour until
 Phase 8, and Phase 8 changes nothing unless its flag is passed.
+
+## Superseding torus continuation architecture (2026-08-18)
+
+The amplitude-parameterized closure is retained only as a diagnostic. The
+system `(X, omega_a, source_tau)` plus a generator-norm constraint is
+structurally ill-conditioned near the NS point because the source parameter has
+weak leverage on the first-order q != 0 constraints. A converged residual from
+that formulation is therefore not evidence of a torus.
+
+The production route is now:
+
+1. Continue the period-1 pump and track one Hill/Floquet mode by eigenvector
+   overlap.
+2. At the NS point, map the critical Floquet eigenfunction into the complete
+   retained sideband lattice and branch-switch with a nonzero predictor.
+3. Correct `(X, omega_a, source_tau)` using the residual, a torus phase
+   condition, and an explicit pseudo-arclength equation.
+4. Continue subsequent torus points with the same matrix-free augmented PALC
+   corrector and the existing fast state preconditioner as a block
+   preconditioner.
+5. Evaluate residual content in omitted q sectors before accepting a finite-Q
+   solution. Q=1 is a local NS basis, not automatically a finite-amplitude
+   production basis.
+
+`run_torus_branch.py` consequently requires a critical Floquet seed for the
+first point and does not fall back to arbitrary pump perturbations or the
+amplitude closure. The FDTD torus remains an independent validation oracle, not
+the primary HB branch initializer.

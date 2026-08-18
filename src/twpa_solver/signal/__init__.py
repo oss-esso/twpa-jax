@@ -38,6 +38,7 @@ from twpa_solver.signal.period_doubled import (
     solve_period_doubled_gain,
 )
 from twpa_solver.signal.stability import (
+    audit_loss_convention,
     FloquetClassification,
     NON_ANALYTIC_LOSS_MODELS,
     ComplexResonance,
@@ -89,6 +90,7 @@ __all__ = [
     "period_doubled_idler_sideband",
     "solve_period_doubled_gain",
     "NON_ANALYTIC_LOSS_MODELS",
+    "audit_loss_convention",
     "ComplexResonance",
     "FloquetClassification",
     "SigmaMinEstimate",

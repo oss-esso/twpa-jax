@@ -37,6 +37,16 @@ def test_autonomous_torus_basis_contains_generator_without_signal_sector() -> No
     assert basis.require_signal_sector is False
 
 
+def test_autonomous_basis_covers_hill_sidebands_in_both_q_sectors() -> None:
+    basis = build_autonomous_torus_basis(
+        10.0, 1.0, [1, 3], 1, sideband_harmonics=4
+    )
+
+    for sideband in range(-4, 5):
+        tone, _ = canonicalize(ToneIndex(sideband, 1), 10.0, 1.0)
+        assert tone in basis.tones
+
+
 def test_lattice_basis_has_required_tones_and_alias_guard() -> None:
     basis = build_lattice_basis([1, 3], 2, 10.0, 1.0, 40.0)
 
