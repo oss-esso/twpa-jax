@@ -621,6 +621,15 @@ class TorusProblem:
                 0.0,
             )
 
+        def direct_phase_frequency_solve(vector: np.ndarray) -> np.ndarray:
+            """Solve the phase-frequency border with two state solves."""
+            state_rhs = np.asarray(vector[:state_size], dtype=float)
+            phase_rhs = float(vector[state_size])
+            y = state_preconditioner_solve(state_rhs)
+            z = state_preconditioner_solve(phase_frequency_column)
+            eta = (phase_rhs - phase_frequency_row @ y) / phase_frequency_schur
+            return np.concatenate((y - z * eta, np.asarray([eta])))
+
         def diagonal_augmented_preconditioner(vector: np.ndarray) -> np.ndarray:
             return np.concatenate((
                 state_preconditioner_solve(vector[:state_size]),
@@ -675,6 +684,77 @@ class TorusProblem:
         if np.linalg.norm(q_plus_vector) > 0.0:
             state_vectors["q_plus_1"] = q_plus_vector / np.linalg.norm(q_plus_vector)
 
+        phase_mode = np.zeros_like(state)
+        for index, tone in enumerate(self.basis.tones):
+            if tone.q != 0:
+                phase_mode[index] = 1j * tone.q * state[index]
+        phase_mode_packed = pack_complex(phase_mode)
+
+        q_residual = np.zeros_like(coefficients)
+        for index, tone in enumerate(self.basis.tones):
+            if tone.q != 0:
+                q_residual[index] = 1j * tone.q * coefficients[index]
+        phase_equivariance_relative = float(
+            np.linalg.norm(matvec(phase_mode_packed) - pack_complex(q_residual))
+            / max(
+                np.linalg.norm(matvec(phase_mode_packed))
+                + np.linalg.norm(pack_complex(q_residual)),
+                1e-30,
+            )
+        )
+
+        def phase_frequency_residual(
+            trial_state: np.ndarray,
+            trial_omega_a: float,
+        ) -> np.ndarray:
+            trial_problem = replace(
+                current.with_omega_a(trial_omega_a),
+                source_tau=source_tau,
+            ).full_problem()
+            trial_coefficients = trial_problem.residual_coeffs(
+                trial_state, source_tau
+            )
+            trial_phase, _ = current._phase_constraint(
+                trial_state, state_scale, phase_reference
+            )
+            return np.concatenate((
+                pack_complex(trial_coefficients) / residual_scale,
+                np.asarray([trial_phase]),
+            ))
+
+        phase_frequency_base = phase_frequency_residual(state, omega_a)
+        fd_step = max(float(current.omega_fd_relative_step), 1e-7)
+        fd_directions: dict[str, np.ndarray] = {"random": rng.normal(
+            size=state_size + 1
+        )}
+        fd_directions["omega"] = np.zeros(state_size + 1)
+        fd_directions["omega"][state_size] = 1.0
+        if np.linalg.norm(phase_mode_packed) > 0.0:
+            fd_directions["phase_mode"] = np.concatenate((
+                phase_mode_packed / state_scale,
+                np.asarray([0.0]),
+            ))
+        for name, direction in fd_directions.items():
+            fd_directions[name] = direction / max(
+                float(np.linalg.norm(direction)), 1e-300
+            )
+
+        phase_frequency_fd_errors: dict[str, float] = {}
+        for name, direction in fd_directions.items():
+            trial_state = state + fd_step * state_scale * unpack_complex(
+                direction[:state_size], state.shape
+            )
+            trial_omega_a = omega_a + fd_step * omega_scale * direction[state_size]
+            finite_difference = (
+                phase_frequency_residual(trial_state, trial_omega_a)
+                - phase_frequency_base
+            ) / fd_step
+            analytic = phase_frequency_matvec(direction)
+            phase_frequency_fd_errors[name] = float(
+                np.linalg.norm(finite_difference - analytic)
+                / max(np.linalg.norm(analytic), 1e-30)
+            )
+
         state_fidelity: dict[str, float] = {}
         for name, rhs in state_vectors.items():
             solved = np.asarray(preconditioner.solve(rhs), dtype=float)
@@ -727,15 +807,41 @@ class TorusProblem:
             np.linalg.norm(augmented_matvec(augmented_solved) - augmented_random)
             / max(np.linalg.norm(augmented_random), 1e-30)
         )
-        phase_mode = np.zeros_like(state)
-        for index, tone in enumerate(self.basis.tones):
-            if tone.q != 0:
-                phase_mode[index] = 1j * tone.q * state[index]
-        phase_mode_packed = pack_complex(phase_mode)
         phase_null_action = float(
             np.linalg.norm(matvec(phase_mode_packed))
             / max(np.linalg.norm(phase_mode_packed), 1e-30)
         )
+        phase_frequency_rhs_cases = {
+            "random": rng.normal(size=state_size + 1),
+            "actual_newton": phase_frequency_rhs,
+            "pure_phase": np.concatenate((
+                np.zeros(state_size),
+                np.asarray([1.0]),
+            )),
+            "omega_column": np.concatenate((
+                phase_frequency_column,
+                np.asarray([0.0]),
+            )),
+            "phase_mode": np.concatenate((
+                phase_mode_packed / max(state_scale, 1e-300),
+                np.asarray([0.0]),
+            )),
+        }
+        phase_frequency_preconditioner_fidelity: dict[str, float] = {}
+        direct_bordered_residual: dict[str, float] = {}
+        for name, rhs in phase_frequency_rhs_cases.items():
+            rhs = np.asarray(rhs, dtype=float)
+            rhs /= max(float(np.linalg.norm(rhs)), 1e-300)
+            preconditioned = phase_frequency_preconditioner(rhs)
+            phase_frequency_preconditioner_fidelity[name] = float(
+                np.linalg.norm(phase_frequency_matvec(preconditioned) - rhs)
+                / max(np.linalg.norm(rhs), 1e-30)
+            )
+            direct_solution = direct_phase_frequency_solve(rhs)
+            direct_bordered_residual[name] = float(
+                np.linalg.norm(phase_frequency_matvec(direct_solution) - rhs)
+                / max(np.linalg.norm(rhs), 1e-30)
+            )
         border_singular_values = np.linalg.svd(
             border_schur, compute_uv=False
         )
@@ -751,6 +857,12 @@ class TorusProblem:
             "phase_frequency_gmres": phase_frequency_gmres,
             "diagonal_augmented_gmres": diagonal_augmented_gmres,
             "phase_null_action_relative": phase_null_action,
+            "phase_equivariance_relative": phase_equivariance_relative,
+            "phase_frequency_fd_errors": phase_frequency_fd_errors,
+            "phase_frequency_preconditioner_fidelity": (
+                phase_frequency_preconditioner_fidelity
+            ),
+            "direct_bordered_residual": direct_bordered_residual,
             "border_schur_matrix": border_schur.tolist(),
             "border_schur_singular_values": border_singular_values.tolist(),
             "border_schur_condition": float(np.linalg.cond(border_schur)),

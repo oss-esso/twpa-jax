@@ -319,6 +319,18 @@ def test_torus_linear_fidelity_report_separates_state_and_border() -> None:
     assert "augmented_gmres" in report
     assert "phase_frequency_gmres" in report
     assert "diagonal_augmented_gmres" in report
+    assert "phase_equivariance_relative" in report
+    assert "phase_frequency_fd_errors" in report
+    assert "phase_frequency_preconditioner_fidelity" in report
+    assert "direct_bordered_residual" in report
+    assert all(
+        np.isfinite(value)
+        for value in report["phase_frequency_fd_errors"].values()
+    )
+    assert all(
+        np.isfinite(value)
+        for value in report["direct_bordered_residual"].values()
+    )
     assert report["phase_null_action_relative"] >= 0.0
     assert np.isfinite(report["border_schur_condition"])
 

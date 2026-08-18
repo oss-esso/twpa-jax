@@ -2400,3 +2400,112 @@ D:\tmp\torus_fidelity_20260818\k5_linear_fidelity_border.json
 D:\tmp\torus_fidelity_20260818\k10_linear_fidelity_border.json
 D:\tmp\torus_fidelity_20260818\k5_nested_palc.json
 ```
+
+### Direct phase-border fidelity diagnostics (2026-08-18)
+
+The next diagnostic round tested the exact interface between the K=10 state
+operator and the phase-frequency border, without changing the production
+corrector. It added four measurements to `linear_fidelity_report()`:
+
+- the phase-equivariance identity `J(QX) = Q R(X)`;
+- finite-difference errors for the complete normalized phase-frequency JVP;
+- true-operator residuals after applying the one-border preconditioner;
+- true-operator residuals after the direct two-state-solve scalar Schur formula.
+
+The bounded commands were the same K=5 and K=10 probes as the preceding
+audit, with outputs written to:
+
+```text
+D:\tmp\torus_fidelity_20260818\k5_linear_fidelity_direct.json
+D:\tmp\torus_fidelity_20260818\k10_linear_fidelity_direct.json
+```
+
+The implementation passed the focused regression suite before the physical
+probes:
+
+```text
+33 passed in 3.99s
+```
+
+The raw measured diagnostic values were:
+
+```text
+K=5:
+  phase_equivariance_relative = 3.306687720823198e-01
+  phase_frequency_fd_errors = {
+    random: 1.3378936187992515e-08,
+    omega: 2.8009254990193437e-06,
+    phase_mode: 2.45743560613821e-05
+  }
+  phase_frequency_preconditioner_fidelity = {
+    random: 6.21513782216625e+01,
+    actual_newton: 8.128297984573887e+00,
+    pure_phase: 4.372637228741658e-06,
+    omega_column: 2.003398554979257e+04,
+    phase_mode: 1.05126001262403e+05
+  }
+  direct_bordered_residual = {
+    random: 6.21513782216625e+01,
+    actual_newton: 8.128297984573887e+00,
+    pure_phase: 4.372637228741658e-06,
+    omega_column: 2.003398554979257e+04,
+    phase_mode: 1.05126001262403e+05
+  }
+  phase_frequency_schur = -1.1610358191873947e+08
+  state_preconditioner_fidelity = {
+    random: 1.8375422131517016e-01,
+    q_plus_1: 8.46464689494503e+00
+  }
+
+K=10:
+  phase_equivariance_relative = 4.070195641543211e-11
+  phase_frequency_fd_errors = {
+    random: 1.4229951899476918e-08,
+    omega: 2.8009254990194187e-06,
+    phase_mode: 2.3135574113836635e-06
+  }
+  phase_frequency_preconditioner_fidelity = {
+    random: 4.298323979703532e+01,
+    actual_newton: 7.338092432315269e-02,
+    pure_phase: 4.7571946547545445e+01,
+    omega_column: 2.2542176681796376e+02,
+    phase_mode: 8.055501732163133e+03
+  }
+  direct_bordered_residual = {
+    random: 4.298323979703532e+01,
+    actual_newton: 7.338092432315269e-02,
+    pure_phase: 4.7571946547545445e+01,
+    omega_column: 2.2542176681796376e+02,
+    phase_mode: 8.055501732163133e+03
+  }
+  phase_frequency_schur = 1.2966098300742201e+01
+  state_preconditioner_fidelity = {
+    random: 1.1507819874257176e-09,
+    q_plus_1: 1.0070958617348213e-07
+  }
+```
+
+The complete normalized phase-frequency JVP is consistent with finite
+differences at K=10, and the phase-equivariance identity is satisfied to
+`4.07e-11`. The absolute phase-null action is therefore not used as a
+standalone diagnostic for the non-converged lifted predictor.
+
+The direct scalar-border gate failed. Although the K=10 state preconditioner
+is accurate for state-only right-hand sides, applying the one-border inverse
+to the true phase-frequency operator leaves residuals of `7.34e-2` for the
+actual Newton right-hand side and `4.30e1` for a random right-hand side. The
+preconditioner and direct scalar-border results are identical because both use
+the same two state solves and Schur formula. The direct border solve is not
+promoted to production, and no K=10 torus correction or physical column was
+launched.
+
+This result localizes the remaining issue to the cross-coupling of the state
+solve with the phase row/`omega_a` column, or to the interpretation of the
+border solve in the normalized coordinates. It does not justify changing the
+torus equations, the K=10 state factorization, or the Floquet seed.
+
+The focused tests after implementation remained green:
+
+```text
+33 passed in 3.99s
+```
