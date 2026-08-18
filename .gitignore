@@ -27,6 +27,16 @@ pytest-of-*/
 industrial_completion_outputs/
 references/**/__pycache__/
 
+# Stability continuation campaign outputs.  These remain disposable evidence
+# files; source scripts and test fixtures are tracked separately.
+/track_critical_root_*.csv
+/track_followup_*.csv
+/track_followup_*.json
+/jtwpa_pump_m29p40.log
+/jtwpa_pump_m29p40/
+/stage_a/
+/plot_artifacts/
+
 # --- LaTeX build artifacts ---------------------------------------------------
 # Every rule is scoped to thesis/, never blanket. Blanket *.aux/*.out/*.toc
 # would shadow the tracked build products of the reports under
