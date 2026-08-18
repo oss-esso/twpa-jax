@@ -883,7 +883,9 @@ class TorusProblem:
         ))
         history: list[float] = []
         gmres_history: list[float] = []
+        gmres_history_by_newton: list[list[float]] = []
         factor_backends: list[str] = []
+        border_condition_history: list[float] = []
         linear_debug_report: dict[str, Any] | None = None
 
         def evaluate(
@@ -961,10 +963,16 @@ class TorusProblem:
                     "residual_norm": norm,
                     "residual_history": history,
                     "gmres_residual_history": gmres_history,
+                    "gmres_history_by_newton": gmres_history_by_newton,
+                    "gmres_iterations_total": sum(
+                        len(item) for item in gmres_history_by_newton
+                    ),
                     "factor_backend": factor_backends,
+                    "border_schur_condition_history": border_condition_history,
                     "source_tau": tau,
                     "arclength_step": step_size,
                     "phase_constraint": phase_value,
+                    "arclength_residual": arclength,
                     "linear_debug": linear_debug_report,
                 }, new_tangent
             if iteration == max_newton:
@@ -1065,6 +1073,7 @@ class TorusProblem:
                 preconditioned_columns
             )
             border_schur_condition = float(np.linalg.cond(border_schur))
+            border_condition_history.append(border_schur_condition)
 
             def augmented_preconditioner(vector: np.ndarray) -> np.ndarray:
                 state_result = state_preconditioner_solve(vector[:state_size])
@@ -1222,6 +1231,7 @@ class TorusProblem:
                     maxiter=gmres_maxiter,
                     callback=gmres_history.append,
                 )
+            gmres_history_by_newton.append(list(gmres_history))
             if gmres_info != 0:
                 return X, omega, tau, {
                     "converged": False,
@@ -1229,11 +1239,18 @@ class TorusProblem:
                     "residual_norm": norm,
                     "residual_history": history,
                     "gmres_residual_history": gmres_history,
+                    "gmres_history_by_newton": gmres_history_by_newton,
+                    "gmres_iterations_total": sum(
+                        len(item) for item in gmres_history_by_newton
+                    ),
                     "gmres_info": int(gmres_info),
                     "factor_backend": factor_backends,
                     "linear_debug": linear_debug_report,
                     "border_schur_matrix": border_schur.tolist(),
                     "border_schur_condition": border_schur_condition,
+                    "border_schur_condition_history": border_condition_history,
+                    "phase_constraint": phase_value,
+                    "arclength_residual": arclength,
                     "failure_reason": "augmented GMRES failed",
                 }, None
 
@@ -1276,10 +1293,17 @@ class TorusProblem:
                     "residual_norm": norm,
                     "residual_history": history,
                     "gmres_residual_history": gmres_history,
+                    "gmres_history_by_newton": gmres_history_by_newton,
+                    "gmres_iterations_total": sum(
+                        len(item) for item in gmres_history_by_newton
+                    ),
                     "factor_backend": factor_backends,
                     "linear_debug": linear_debug_report,
                     "border_schur_matrix": border_schur.tolist(),
                     "border_schur_condition": border_schur_condition,
+                    "border_schur_condition_history": border_condition_history,
+                    "phase_constraint": phase_value,
+                    "arclength_residual": arclength,
                     "failure_reason": "line search failed",
                 }, None
 
@@ -1289,7 +1313,12 @@ class TorusProblem:
             "residual_norm": float(history[-1]),
             "residual_history": history,
             "gmres_residual_history": gmres_history,
+            "gmres_history_by_newton": gmres_history_by_newton,
+            "gmres_iterations_total": sum(
+                len(item) for item in gmres_history_by_newton
+            ),
             "factor_backend": factor_backends,
+            "border_schur_condition_history": border_condition_history,
             "linear_debug": linear_debug_report,
             "failure_reason": "maximum Newton iterations reached",
         }, None

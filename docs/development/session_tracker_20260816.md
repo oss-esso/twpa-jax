@@ -2027,3 +2027,100 @@ The K=5 branch-switch linear gate therefore passes. No PALC ladder, K=10
 solve, Q=2 solve, or production column was run in this step. The final JSON
 artifact is
 `D:\tmp\ns_branch_switch_20260818\branch_switch_k5_ds01_final_debug.json`.
+
+### K=5 PALC smoke and production-basis gate (2026-08-18)
+
+The successful branch-switch milestone was committed on `dev` before PALC
+work:
+
+```text
+7f05c79 feat(chaos): validate augmented torus branch switch
+```
+
+The PALC runner was extended to retain the finite torus as its predictor after
+the first branch switch. It now writes the signed effective source-drive
+distance from the NS point, the explicit radius
+
+```text
+r2 = (||X[q=+1]||^2 + ||X[q=-1]||^2) / ||X[q=0]||^2
+```
+
+and per-point state/mode overlaps, tangent angle, phase and arclength
+residuals, omitted-sector residuals, border-condition history, and total plus
+per-Newton GMRES counts. State/tangent checkpoints can be promoted between
+sideband bases by matching common `(h, q)` tones.
+
+The five-point K=5 full-node PALC smoke used the same converged pump
+checkpoint at `-24.1955501 dBm` for every row. The pump checkpoint was not
+re-solved between rows because the continuation variable was the torus source
+scale; the torus state was warm-started from the preceding PALC point.
+
+Full per-point output:
+
+```text
+point  effective_P_dbm       dP_db       omega_a/omega_p       r2
+0      -24.195528314711932   2.1785e-05  0.09228990266408323   2.6082281831283387e-05
+1      -24.195459645208340   9.0455e-05  0.09228947903131639   1.0215116435701930e-04
+2      -24.195345857804270   2.0424e-04  0.09228877719293296   2.2821137537875805e-04
+3      -24.195186976588715   3.6312e-04  0.09228779749858572   4.0425342001614043e-04
+4      -24.194983033760817   5.6707e-04  0.09228654043403287   6.3026480927754770e-04
+```
+
+```text
+point  residual_norm          Newton  GMRES_total  critical_overlap  prev_overlap       tangent_angle  omitted_rel          phase_residual       arclength_residual
+0      9.5316650818698e-13    3       17            0.999999999887359  --                 --              4.2217622441207e-06  -8.8054035365820e-20  8.6736173798840e-19
+1      9.2508960297899e-13    2       12            0.999999998429502  0.999987501191223  5.7686266971e-03  1.6534641245412e-05  -2.6677542087632e-19  2.6020852105116e-18
+2      9.3493486668690e-13    2       12            0.999999992307928  0.999987503417208  5.6310791094e-03  3.6939768226584e-05  -3.2110855726863e-19  0.0000000000000e+00
+3      9.2612991843280e-13    2       12            0.999999976033434  0.999987506533339  5.6366243712e-03  6.5436215146344e-05  -1.1981119221705e-18  -8.6736173798840e-19
+4      9.3147787348936e-13    2       12            0.999999941959792  0.999987510557541  5.6444327838e-03  1.0202281564071e-04   4.6825675041145e-19  0.0000000000000e+00
+```
+
+All five rows converged through the PALC route after the first row. The local
+branch runs toward higher drive. A least-squares fit of `r2` against signed
+`dP` gave:
+
+```text
+slope      = 1.1080216077421166 r2/dB
+intercept  = 1.924723836095472e-06
+R_squared  = 0.9999999939862152
+```
+
+The K=5 smoke gate passed. The artifact is
+`D:\tmp\ns_branch_switch_20260818\k5_palc_smoke_5points.json`.
+
+For production promotion, a full-node K=5 state/tangent checkpoint was
+written to:
+
+```text
+D:\tmp\ns_branch_switch_20260818\k5_full_state\point_000.npz
+```
+
+A direct K=5 Schur checkpoint attempt timed out after `304` seconds without a
+point artifact. The full-node checkpoint was therefore restricted to the
+Schur retained coordinates before promotion; no full-node state was passed to
+the Schur solver.
+
+The one-point K=10, Q=1, Schur/PARDISO production gate was then launched with
+the promoted state and `Delta s = 0.005`. The exact process limit was `300 s`
+(`304.0 s` including command overhead). It timed out without writing either a
+point JSON or a converged state:
+
+```text
+command = run_torus_branch.py --device ipm_2c_fixed --q-max 1
+          --sideband-harmonics 10 --schur --factor-backend pardiso
+          --initial-state-npz k5_full_state\point_000.npz
+result  = process exit 124; no k10_schur_one_point.point_000.json
+```
+
+This is classified as a K=10 production scaling/backend blocker, not as
+evidence that the torus branch is absent. The 10-point physical column was
+not launched because the production-basis gate did not pass.
+
+The final focused verification after the PALC/checkpoint changes was:
+
+```text
+40 passed in 4.82s
+```
+
+`graphify update .` completed and rebuilt the code graph. Existing permission
+warnings for unreadable disposable output directories remain unchanged.
