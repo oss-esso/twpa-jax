@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import json
+import time
 from dataclasses import dataclass, field, replace
+from pathlib import Path
 from typing import Any, Callable
 
 import numpy as np
@@ -54,6 +57,30 @@ def apply_border_aware_preconditioner(
     scalars = np.linalg.solve(schur, border - rows @ y)
     state = y - solved_columns @ scalars
     return np.concatenate((state, scalars))
+
+
+def _append_timing_event(
+    path: Path | None,
+    stage: str,
+    status: str,
+    iteration: int | None = None,
+    **fields: Any,
+) -> None:
+    """Append one flushed stage event to an optional JSONL telemetry file."""
+    if path is None:
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    event: dict[str, Any] = {
+        "timestamp": time.time(),
+        "stage": stage,
+        "status": status,
+    }
+    if iteration is not None:
+        event["iteration"] = iteration
+    event.update(fields)
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(event) + "\n")
+        handle.flush()
 
 
 @dataclass
@@ -830,6 +857,7 @@ class TorusProblem:
         gmres_restart: int = 60,
         linear_debug: bool = False,
         linear_debug_fd_step: float = 1.0e-6,
+        timing_path: Path | None = None,
     ) -> tuple[np.ndarray, float, float, dict[str, Any], np.ndarray | None]:
         """Correct one torus point with a matrix-free PALC system.
 
@@ -887,6 +915,16 @@ class TorusProblem:
         factor_backends: list[str] = []
         border_condition_history: list[float] = []
         linear_debug_report: dict[str, Any] | None = None
+        preconditioner_solve_count = 0
+
+        _append_timing_event(
+            timing_path,
+            "torus_corrector",
+            "start",
+            source_tau=tau,
+            omega_a=omega,
+            state_size=state_size,
+        )
 
         def evaluate(
             state: np.ndarray, frequency: float, source_tau: float
@@ -929,6 +967,7 @@ class TorusProblem:
             ))
 
         for iteration in range(max_newton + 1):
+            residual_start = time.perf_counter()
             (
                 current,
                 coefficients,
@@ -937,6 +976,16 @@ class TorusProblem:
                 phase_value,
                 arclength,
             ) = evaluate(X, omega, tau)
+            _append_timing_event(
+                timing_path,
+                "residual_evaluation",
+                "after",
+                iteration=iteration,
+                runtime_s=time.perf_counter() - residual_start,
+                residual_norm=float(
+                    np.linalg.norm(pack_complex(coefficients))
+                ),
+            )
             residual = residual_from_evaluation((
                 current,
                 coefficients,
@@ -978,8 +1027,21 @@ class TorusProblem:
             if iteration == max_newton:
                 break
 
+            linearization_start = time.perf_counter()
             matvec, preconditioner = current._linearization(
                 current.full_problem(), X
+            )
+            _append_timing_event(
+                timing_path,
+                "linearization_and_preconditioner",
+                "after",
+                iteration=iteration,
+                runtime_s=time.perf_counter() - linearization_start,
+                assembly_runtime_s=preconditioner.last_assembly_runtime_s,
+                factor_runtime_s=preconditioner.last_factor_runtime_s,
+                factor_phase=preconditioner.last_factor_phase,
+                factor_backend=preconditioner.last_factor_backend,
+                pardiso_analyzed=bool(getattr(preconditioner, "_analyzed", False)),
             )
             factor_backends.append(preconditioner.last_factor_backend)
             omega_step = current.omega_fd_relative_step * max(abs(omega), 1.0)
@@ -1040,6 +1102,7 @@ class TorusProblem:
                     np.asarray([phase_part, arclength_part]),
                 ))
 
+            border_start = time.perf_counter()
             border_columns = np.column_stack((
                 b_omega * omega_scale / residual_scale,
                 b_tau * tau_scale,
@@ -1060,8 +1123,19 @@ class TorusProblem:
             )
 
             def state_preconditioner_solve(vector: np.ndarray) -> np.ndarray:
+                nonlocal preconditioner_solve_count
+                preconditioner_solve_count += 1
+                solve_start = time.perf_counter()
                 physical = residual_scale * np.asarray(
                     preconditioner.solve(vector), dtype=float
+                )
+                _append_timing_event(
+                    timing_path,
+                    "preconditioner_solve",
+                    "after",
+                    iteration=iteration,
+                    call_index=preconditioner_solve_count,
+                    runtime_s=time.perf_counter() - solve_start,
                 )
                 return physical / state_scale
 
@@ -1074,6 +1148,14 @@ class TorusProblem:
             )
             border_schur_condition = float(np.linalg.cond(border_schur))
             border_condition_history.append(border_schur_condition)
+            _append_timing_event(
+                timing_path,
+                "augmented_border_setup",
+                "after",
+                iteration=iteration,
+                runtime_s=time.perf_counter() - border_start,
+                schur_condition=border_schur_condition,
+            )
 
             def augmented_preconditioner(vector: np.ndarray) -> np.ndarray:
                 state_result = state_preconditioner_solve(vector[:state_size])
@@ -1209,6 +1291,14 @@ class TorusProblem:
                 dtype=float,
             )
             gmres_history.clear()
+            gmres_start = time.perf_counter()
+            _append_timing_event(
+                timing_path,
+                "augmented_gmres",
+                "before",
+                iteration=iteration,
+                residual_norm=norm,
+            )
             try:
                 update, gmres_info = spla.gmres(
                     operator,
@@ -1232,6 +1322,15 @@ class TorusProblem:
                     callback=gmres_history.append,
                 )
             gmres_history_by_newton.append(list(gmres_history))
+            _append_timing_event(
+                timing_path,
+                "augmented_gmres",
+                "after",
+                iteration=iteration,
+                runtime_s=time.perf_counter() - gmres_start,
+                info=int(gmres_info),
+                callback_iterations=len(gmres_history),
+            )
             if gmres_info != 0:
                 return X, omega, tau, {
                     "converged": False,
@@ -1273,7 +1372,16 @@ class TorusProblem:
                 if trial_omega <= 0.0 or trial_tau <= 0.0:
                     alpha *= 0.5
                     continue
+                line_search_start = time.perf_counter()
                 trial_data = evaluate(trial_X, trial_omega, trial_tau)
+                _append_timing_event(
+                    timing_path,
+                    "line_search_residual",
+                    "after",
+                    iteration=iteration,
+                    alpha=alpha,
+                    runtime_s=time.perf_counter() - line_search_start,
+                )
                 trial_residual = np.concatenate((
                     pack_complex(trial_data[1]) / trial_data[2],
                     np.asarray([trial_data[4], trial_data[5]]),

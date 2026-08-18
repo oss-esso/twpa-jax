@@ -6,6 +6,7 @@ import argparse
 import json
 import os
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -28,7 +29,10 @@ from twpa_solver.multitone.seed import (  # noqa: E402
     seed_torus_from_floquet,
 )
 from twpa_solver.multitone.source import AffineSourcePath, MultiToneDrive  # noqa: E402
-from twpa_solver.multitone.torus import TorusProblem  # noqa: E402
+from twpa_solver.multitone.torus import (  # noqa: E402
+    TorusProblem,
+    _append_timing_event,
+)
 from twpa_solver.pump.problem import pack_complex, unpack_complex  # noqa: E402
 from twpa_solver.signal.io import load_pump  # noqa: E402
 from twpa_solver.signal.stability import audit_loss_convention  # noqa: E402
@@ -117,6 +121,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--linear-debug-fd-step", type=float, default=1.0e-6)
     parser.add_argument(
+        "--timing-path",
+        type=Path,
+        default=None,
+        help="Append flushed stage timing events to a JSONL file.",
+    )
+    parser.add_argument(
         "--omitted-q-max",
         type=int,
         default=None,
@@ -181,6 +191,7 @@ def _remap_state_basis(
     state: np.ndarray,
     source_basis: Any,
     target_basis: Any,
+    q_zero_state: np.ndarray | None = None,
 ) -> np.ndarray:
     """Promote a torus state by matching common ``(h, q)`` tones."""
     source_rows = {
@@ -194,6 +205,8 @@ def _remap_state_basis(
         source_index = source_rows.get(ToneIndex(tone.h, tone.q))
         if source_index is not None:
             promoted[target_index] = state[source_index]
+        elif q_zero_state is not None and tone.q == 0:
+            promoted[target_index] = q_zero_state[target_index]
     return promoted
 
 
@@ -379,6 +392,7 @@ def _solve_seed(
             gmres_restart=args.gmres_restart,
             linear_debug=args.linear_debug,
             linear_debug_fd_step=args.linear_debug_fd_step,
+            timing_path=args.timing_path,
         )
         route = "floquet_branch_switch"
     else:
@@ -412,6 +426,7 @@ def _solve_seed(
             gmres_restart=args.gmres_restart,
             linear_debug=args.linear_debug,
             linear_debug_fd_step=args.linear_debug_fd_step,
+            timing_path=args.timing_path,
         )
         route = "palc"
 
@@ -462,8 +477,24 @@ def run_branch(args: argparse.Namespace) -> dict[str, Any]:
     for index, (pump_dir, control) in enumerate(
         zip(args.pump_solution_dirs, controls)
     ):
+        _append_timing_event(
+            args.timing_path,
+            "point",
+            "before",
+            point_index=index,
+            control=control,
+        )
+        stage_start = time.perf_counter()
         pump = load_pump(pump_dir, fallback_pump_freq_ghz=7.0)
+        _append_timing_event(
+            args.timing_path,
+            "pump_load",
+            "after",
+            point_index=index,
+            runtime_s=time.perf_counter() - stage_start,
+        )
         omega_a = args.omega_a_ratio * pump.omega_p
+        stage_start = time.perf_counter()
         basis = build_autonomous_torus_basis(
             pump.omega_p,
             omega_a,
@@ -471,7 +502,16 @@ def run_branch(args: argparse.Namespace) -> dict[str, Any]:
             args.q_max,
             sideband_harmonics=sideband_harmonics,
         )
+        _append_timing_event(
+            args.timing_path,
+            "basis_build",
+            "after",
+            point_index=index,
+            runtime_s=time.perf_counter() - stage_start,
+            n_tones=basis.n_tones,
+        )
         pump_port = _pump_port(pump, circuit)
+        stage_start = time.perf_counter()
         drive = MultiToneDrive(
             basis.pump_tone,
             circuit.port_to_index[pump_port],
@@ -483,7 +523,15 @@ def run_branch(args: argparse.Namespace) -> dict[str, Any]:
             AffineSourcePath.pump_turn_on(drive),
             loss_model=args.loss_model,
         )
+        _append_timing_event(
+            args.timing_path,
+            "full_problem_build",
+            "after",
+            point_index=index,
+            runtime_s=time.perf_counter() - stage_start,
+        )
         if args.schur:
+            stage_start = time.perf_counter()
             port_indices = list(circuit.port_to_index.values())
             base = build_multitone_schur_problem(
                 full_base,
@@ -498,10 +546,27 @@ def run_branch(args: argparse.Namespace) -> dict[str, Any]:
                     "partition"
                 )
             node_ref = retained_pos
+            _append_timing_event(
+                args.timing_path,
+                "schur_setup",
+                "after",
+                point_index=index,
+                runtime_s=time.perf_counter() - stage_start,
+                retained_nodes=base.n,
+            )
         else:
             base = full_base
             full_node_ref = args.node_ref
             node_ref = args.node_ref
+            _append_timing_event(
+                args.timing_path,
+                "schur_setup",
+                "after",
+                point_index=index,
+                runtime_s=0.0,
+                retained_nodes=base.n,
+            )
+        stage_start = time.perf_counter()
         torus = TorusProblem(
             base,
             tuple(pump.modes),
@@ -511,7 +576,16 @@ def run_branch(args: argparse.Namespace) -> dict[str, Any]:
             sideband_harmonics=sideband_harmonics,
             factor_backend=args.factor_backend,
         )
+        _append_timing_event(
+            args.timing_path,
+            "torus_problem_setup",
+            "after",
+            point_index=index,
+            runtime_s=time.perf_counter() - stage_start,
+        )
+        pump_state = _pump_coordinate(pump, basis, torus)
         if initial_checkpoint is not None and not checkpoint_applied:
+            stage_start = time.perf_counter()
             source_basis = build_autonomous_torus_basis(
                 pump.omega_p,
                 initial_checkpoint["omega_a"],
@@ -535,7 +609,10 @@ def run_branch(args: argparse.Namespace) -> dict[str, Any]:
                     source_tangent[source_state_size:],
                 ))
             previous_state = _remap_state_basis(
-                source_state, source_basis, torus.basis
+                source_state,
+                source_basis,
+                torus.basis,
+                q_zero_state=pump_state,
             )
             previous_omega = initial_checkpoint["omega_a"]
             previous_source_tau = initial_checkpoint["source_tau"]
@@ -547,7 +624,15 @@ def run_branch(args: argparse.Namespace) -> dict[str, Any]:
                 max(float(np.linalg.norm(pack_complex(previous_state))), 1e-300),
             )
             checkpoint_applied = True
-        pump_state = _pump_coordinate(pump, basis, torus)
+            _append_timing_event(
+                args.timing_path,
+                "basis_promotion",
+                "after",
+                point_index=index,
+                runtime_s=time.perf_counter() - stage_start,
+                source_tones=source_basis.n_tones,
+                target_tones=torus.basis.n_tones,
+            )
         critical_reference: np.ndarray | None = None
         if floquet_seed is not None:
             vector, seed_sidebands = floquet_seed
@@ -635,6 +720,13 @@ def run_branch(args: argparse.Namespace) -> dict[str, Any]:
         _atomic_write(
             args.out.with_name(f"{args.out.stem}.point_{index:03d}.json"),
             rows[-1],
+        )
+        _append_timing_event(
+            args.timing_path,
+            "point",
+            "after",
+            point_index=index,
+            converged=bool(report.get("converged")),
         )
         if report.get("converged"):
             previous_state = state

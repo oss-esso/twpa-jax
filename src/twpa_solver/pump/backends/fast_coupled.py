@@ -169,6 +169,7 @@ class FastCoupledPreconditioner:
         self._singular_fallback = False
         self.last_assembly_runtime_s = 0.0
         self.last_factor_runtime_s = 0.0
+        self.last_factor_phase = ""
         self.last_pardiso_error = ""
         self.last_factor_backend = ""
         self.pardiso_strict = _env_true("TWPA_REQUIRE_PARDISO")
@@ -606,6 +607,7 @@ class FastCoupledPreconditioner:
 
         if self.use_banded:
             self._factor_banded()
+            self.last_factor_phase = "numeric_only"
             self.last_factor_runtime_s = time.perf_counter() - t0
             return
 
@@ -622,11 +624,13 @@ class FastCoupledPreconditioner:
                     with _pardiso_thread_context():
                         self._pardiso.factorize(A)  # analysis + numeric
                     self._analyzed = True
+                    self.last_factor_phase = "analysis_and_numeric"
                 else:
                     self._pardiso._check_A(A)
                     self._pardiso.set_phase(22)  # numeric only, reuse analysis
                     with _pardiso_thread_context():
                         self._pardiso._call_pardiso(A, np.zeros(A.shape[0]))
+                    self.last_factor_phase = "numeric_only"
 
                 self._lu = None
                 self.last_pardiso_error = ""
@@ -648,6 +652,7 @@ class FastCoupledPreconditioner:
                 self.use_pardiso = False
                 self._pardiso = None
                 self._analyzed = False
+                self.last_factor_phase = "fallback"
                 try:
                     self._lu = spla.splu(self.M.tocsc())
                     self.last_factor_backend = "superlu_fallback"
@@ -668,6 +673,7 @@ class FastCoupledPreconditioner:
             try:
                 self._lu = spla.splu(self.M.tocsc())
                 self.last_factor_backend = "superlu"
+                self.last_factor_phase = "numeric_only"
                 _log_factor_backend_once("superlu")
             except RuntimeError as superlu_exc:
                 self._lu = None

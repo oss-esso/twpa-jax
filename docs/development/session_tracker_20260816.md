@@ -2124,3 +2124,92 @@ The final focused verification after the PALC/checkpoint changes was:
 
 `graphify update .` completed and rebuilt the code graph. Existing permission
 warnings for unreadable disposable output directories remain unchanged.
+
+### K=10 execution-stage diagnostics (2026-08-18)
+
+The two memory-intensive Python processes left behind by the timed-out
+experiments were inspected before starting new work. They were orphaned
+continuation children, not independent production campaigns:
+
+```text
+PID    approximate RSS  command
+9380   1.87 GB          K=10/Q=1 Schur/PARDISO torus run
+27580  0.80 GB          K=5 Schur checkpoint torus run
+```
+
+Both processes were terminated explicitly and then rechecked. Neither PID was
+still present. Free memory after termination was `4.602 GB`.
+
+The runner and torus corrector now support flushed JSONL stage telemetry through
+`--timing-path`. The telemetry covers basis promotion, residual evaluation,
+Schur setup, state linearization and factorization, bordered setup,
+preconditioner solves, augmented GMRES, line-search evaluations, and point
+completion. The factor backend also reports whether PARDISO performed analysis
+plus numeric factorization or numeric-only refactorization. K=5-to-K=10 basis
+promotion now fills newly introduced `q=0` tones from the K=10 period-1 pump
+state instead of leaving them zero.
+
+The diagnostic ladder used the existing K=5 finite torus checkpoint promoted to
+the 31-tone K=10/Q=1 basis (`156116` real state coordinates, `2518` Schur
+retained nodes). It did not launch the 10-point physical column.
+
+Stage A, residual only:
+
+```text
+basis promotion       0.00654 s
+full problem build    0.03106 s
+Schur setup           0.18724 s
+torus residual        0.16764 s
+residual norm         1.555498427e-04
+off-comb fraction     1.555411376e-02
+```
+
+The residual path is therefore not the K=10 timeout.
+
+Stage B, one short augmented GMRES run (`restart=2`, `maxiter=2`):
+
+```text
+linearization/setup   9.64905 s
+matrix assembly       0.57491 s
+PARDISO factor        3.80113 s (analysis_and_numeric)
+border setup           0.30734 s
+border condition       3.852946342048099
+preconditioner solves 0.142--0.171 s each
+GMRES                  3.20815 s, info=1, callbacks=13
+```
+
+The same run with the factor-phase instrumentation reported `9.3664 s` for
+linearization/setup, `0.56497 s` assembly, `3.62117 s` factorization, and the
+same bordered condition and GMRES plateau. The factorization is measurable but
+not dominant.
+
+Stage C, ten GMRES restart cycles, recorded `100` callbacks and `22.7766 s`.
+Each restart returned the residual to approximately `7e-2`; the first cycle
+temporarily reduced it to approximately `7e-7`, and later cycles reached only
+approximately `2e-6`. This identifies restarted augmented GMRES convergence as
+the primary blocker rather than residual construction or PARDISO setup.
+
+Stage D, one restart of length `80`, recorded `80` callbacks and `18.0375 s`.
+The callback residual reached `6.17972016874422e-09`, but SciPy still returned
+`info=1`, so the true convergence criterion was not met.
+
+Stage E, exploratory `rtol=1e-6` with one restart of length `80`, also failed
+the corrector. It produced `13` callbacks, `gmres_info=1`, and the following
+history:
+
+```text
+6.916748242742762e-02, 6.848468518659444e-02,
+6.602275872694803e-02, 4.756998458448758e-03,
+4.756997256261547e-03, 8.012623739940794e-05,
+8.012623739927499e-05, 7.298459836591386e-07,
+7.297079251486565e-07, 7.297046291624026e-07,
+3.9713019274212926e-07, 3.9713019274212926e-07,
+6.088056236153935e-08
+```
+
+This exploratory tolerance was not promoted to a production setting. The K=10
+production-basis gate remains failed because the augmented GMRES solve does not
+converge under the current corrector criterion. No K=10 finite torus point and
+no 10-point physical column are claimed. The next implementation target is
+the augmented Krylov/preconditioner convergence path, with the stage artifacts
+preserved under `D:\tmp\ns_branch_switch_20260818`.
