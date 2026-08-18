@@ -913,15 +913,23 @@ class TorusProblem:
         for row, tone in enumerate(self.basis.tones):
             if tone in evaluation_basis.tones:
                 evaluation_state[evaluation_basis.index_of(tone)] = X[row]
-        source_path = self.base_problem.source_path
+        if self.is_schur:
+            source_start = np.asarray(self.base_problem.source_start)
+            source_delta = np.asarray(self.base_problem.source_delta)
+            source_basis = self.base_problem.basis
+        else:
+            source_path = self.base_problem.source_path
+            source_start = np.asarray(source_path.source_start)
+            source_delta = np.asarray(source_path.source_delta)
+            source_basis = self.base_problem.basis
         evaluation_start = np.zeros(
             (evaluation_basis.n_tones, self.base_problem.n), dtype=np.complex128
         )
         evaluation_delta = np.zeros_like(evaluation_start)
-        for row, tone in enumerate(self.base_problem.basis.tones):
+        for row, tone in enumerate(source_basis.tones):
             target_row = evaluation_basis.index_of(tone)
-            evaluation_start[target_row] = source_path.source_start[row]
-            evaluation_delta[target_row] = source_path.source_delta[row]
+            evaluation_start[target_row] = source_start[row]
+            evaluation_delta[target_row] = source_delta[row]
         evaluation_source = AffineSourcePath(
             evaluation_start, evaluation_delta
         )

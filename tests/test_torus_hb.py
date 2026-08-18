@@ -151,6 +151,21 @@ def test_omitted_q_residual_is_evaluated_on_a_larger_lattice() -> None:
     assert result["omitted_q_residual_rel"] >= 0.0
 
 
+def test_omitted_q_residual_supports_schur_coordinates() -> None:
+    full = _torus_problem().base_problem
+    reduced = build_multitone_schur_problem(full, [0])
+    problem = TorusProblem(reduced, (1,), 1, 1.0e9, node_ref=1)
+    state = problem.full_problem().zeros()
+    state[problem.basis.index_of(ToneIndex(1, 0)), 0] = 1.0e-12
+    state[problem.basis.index_of(ToneIndex(0, 1)), 0] = 2.0e-13
+
+    result = problem.omitted_q_residual(state, evaluation_q_max=2)
+
+    assert result["omitted_q_max"] == 2.0
+    assert result["omitted_q_residual_abs"] >= 0.0
+    assert result["omitted_q_residual_rel"] >= 0.0
+
+
 def test_torus_bordered_step_matches_dense_reference() -> None:
     matrix = np.array(
         [

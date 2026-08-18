@@ -2509,3 +2509,58 @@ The focused tests after implementation remained green:
 ```text
 33 passed in 3.99s
 ```
+
+### K=5 column attempt and Phase C overlay (2026-08-18)
+
+The requested ten pump checkpoints were solved first with the production pump
+continuation path at 7.9 GHz, `pump_port=4`, and explicit
+`current_complex_c`. All ten pump checkpoints converged:
+
+```text
+-24.1955501 dBm  6.721961811e-06 A
+-24.05      dBm  6.835551282e-06 A
+-23.90      dBm  6.954622253e-06 A
+-23.80      dBm  7.035152983e-06 A
+-23.70      dBm  7.116616215e-06 A
+-23.60      dBm  7.199022747e-06 A
+-23.50      dBm  7.282383502e-06 A
+-23.40      dBm  7.366709528e-06 A
+-23.30      dBm  7.452012004e-06 A
+-23.20      dBm  7.538302236e-06 A
+```
+
+The first K=5 full-node PALC run used `Delta s=0.01`. It wrote nine atomic
+converged points before the computer crashed during point 10. The points are
+valid local PALC points, but their effective drive remained near the NS point
+because `Delta s=0.01` is a local continuation step; they do not constitute a
+ten-point physical power column.
+
+| point | effective current (uA) | omega_a/omega_p | r^2 | residual | Newton | omitted-q residual |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 0 | 6.7220333 | 0.0922894669093 | 1.043280999e-4 | 3.435e-11 | 3 | 1.689e-5 |
+| 1 | 6.7222463 | 0.0922877695384 | 4.092788927e-4 | 9.232e-13 | 3 | 6.515e-5 |
+| 2 | 6.7220553 | 0.0922892920670 | 1.357287890e-4 | 2.830e-12 | 3 | 2.123e-5 |
+| 3 | 6.7220504 | 0.0922893312925 | 1.287230356e-4 | 2.171e-10 | 2 | 1.991e-5 |
+| 4 | 6.7230777 | 0.0922811556801 | 1.600106284e-3 | 8.212e-11 | 3 | 2.447e-4 |
+| 5 | 6.7234785 | 0.0922779722668 | 2.174659678e-3 | 9.462e-13 | 3 | 3.287e-4 |
+| 6 | 6.7235939 | 0.0922770569331 | 2.340065867e-3 | 1.681e-10 | 2 | 3.497e-4 |
+| 7 | 6.7234088 | 0.0922785260446 | 2.074668133e-3 | 3.970e-10 | 2 | 3.065e-4 |
+| 8 | 6.7234313 | 0.0922783470734 | 2.106960190e-3 | 5.617e-11 | 2 | 3.077e-4 |
+
+The attempted Schur recovery of point 10 exposed and fixed a real bug in
+`TorusProblem.omitted_q_residual()`: Schur problems store `source_start` and
+`source_delta` directly rather than through `source_path`. The regression test
+now covers omitted-q evaluation in Schur coordinates. A subsequent
+`Delta s=0.5` Schur run was stopped after no atomic point was produced within
+the bounded interval; it was not interpreted as a physical failure.
+
+The updated Phase C figure is:
+
+```text
+D:\tmp\phase_c_three_way_2c_plot\ipm_2c_fixed_k5_torus.png
+```
+
+It overlays the nine K=5 torus junction-utilization and wall-time points in
+purple. The gain panel deliberately does not plot them: an autonomous torus
+has no imposed signal input, so `gain_vs_off_db` is undefined. The plot marks
+that distinction explicitly rather than comparing different observables.
