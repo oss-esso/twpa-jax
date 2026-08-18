@@ -276,6 +276,7 @@ def refine_singular_omega(
     omega1: complex,
     max_iters: int = 30,
     tol: float = 1e-9,
+    v0: np.ndarray | None = None,
 ) -> ComplexResonance:
     """Complex secant search for omega where ``assemble_fn(omega)`` is singular.
 
@@ -286,7 +287,7 @@ def refine_singular_omega(
     complex eigenvalue of a synthetic matrix pencil.
     """
     w_prev, w_curr = complex(omega0), complex(omega1)
-    _, v_seed = _nearest_zero_eigenpair(assemble_fn(w_prev))
+    _, v_seed = _nearest_zero_eigenpair(assemble_fn(w_prev), v0=v0)
     f_prev, _ = _nearest_zero_eigenpair(assemble_fn(w_prev), v0=v_seed)
     f_curr, v_curr = _nearest_zero_eigenpair(assemble_fn(w_curr), v0=v_seed)
 
@@ -329,6 +330,7 @@ def refine_complex_resonance(
     tol: float = 1e-9,
     perturbation: complex = 1e-4 + 1e-4j,
     khat_base: sp.spmatrix | None = None,
+    v0: np.ndarray | None = None,
 ) -> ComplexResonance:
     """Refine a Tier 1 real-omega candidate into a complex Floquet exponent.
 
@@ -358,7 +360,14 @@ def refine_complex_resonance(
 
     omega0 = 2.0 * math.pi * complex(signal_ghz_guess) * 1e9
     omega1 = omega0 * (1.0 + perturbation)
-    return refine_singular_omega(assemble, omega0, omega1, max_iters=max_iters, tol=tol)
+    return refine_singular_omega(
+        assemble,
+        omega0,
+        omega1,
+        max_iters=max_iters,
+        tol=tol,
+        v0=v0,
+    )
 
 
 def refine_resonances(
@@ -371,13 +380,14 @@ def refine_resonances(
     max_iters: int = 30,
     tol: float = 1e-9,
     khat_base: sp.spmatrix | None = None,
+    v0: np.ndarray | None = None,
 ) -> list[ComplexResonance]:
     loss_model = require_explicit_loss_model(loss_model)
     return [
         refine_complex_resonance(
             circuit=circuit, khat=khat, omega_p=omega_p, ms=ms,
             signal_ghz_guess=fs, loss_model=loss_model, max_iters=max_iters, tol=tol,
-            khat_base=khat_base,
+            khat_base=khat_base, v0=v0,
         )
         for fs in candidates_ghz
     ]

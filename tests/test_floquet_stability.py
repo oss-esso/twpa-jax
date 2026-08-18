@@ -106,6 +106,65 @@ def test_refine_singular_omega_finds_known_complex_eigenvalue() -> None:
     assert result.residual < 1e-6
 
 
+def test_seeded_refinement_stays_on_target_in_a_degenerate_cluster() -> None:
+    """A supplied mode vector prevents a synthetic cluster hop."""
+    import twpa_solver.signal.stability as stability
+
+    cluster_offsets = np.array([0.0, 5.0e-10, -5.0e-10], dtype=float)
+    target_vector = np.array([1.0, 0.0, 0.0], dtype=np.complex128)
+
+    def run(offset: float, seeded: bool) -> complex:
+        roots = 1.0 + offset + cluster_offsets + 0.2j
+        matrix = np.diag(roots)
+
+        def assemble(omega: complex) -> sp.csc_matrix:
+            return sp.csc_matrix(omega * np.eye(3) - matrix)
+
+        original_eigs = stability.spla.eigs
+
+        def choose_cluster_member(
+            matrix_arg: sp.spmatrix, **kwargs: object
+        ) -> tuple[np.ndarray, np.ndarray]:
+            vector = kwargs.get("v0")
+            vector_array = None if vector is None else np.asarray(vector)
+            index = (
+                0
+                if vector_array is not None and abs(vector_array[0]) > 0.5
+                else 1
+            )
+            diagonal = np.asarray(matrix_arg.diagonal(), dtype=np.complex128)
+            eigenvalue = diagonal[index]
+            eigenvector = np.zeros((3, 1), dtype=np.complex128)
+            eigenvector[index, 0] = 1.0
+            return np.array([eigenvalue]), eigenvector
+
+        stability.spla.eigs = choose_cluster_member
+        try:
+            result = refine_singular_omega(
+                assemble,
+                1.0 + offset + 0.01j,
+                1.0 + offset + 0.02j,
+                max_iters=10,
+                tol=1e-12,
+                v0=target_vector if seeded else None,
+            )
+        finally:
+            stability.spla.eigs = original_eigs
+        assert result.converged
+        return result.omega
+
+    seeded_roots = [run(offset, seeded=True) for offset in (0.0, 0.03)]
+    blind_roots = [run(offset, seeded=False) for offset in (0.0, 0.03)]
+
+    np.testing.assert_allclose(
+        seeded_roots, [1.0 + offset + 0.2j for offset in (0.0, 0.03)]
+    )
+    assert any(
+        abs(blind - seeded) > 1.0e-10
+        for blind, seeded in zip(blind_roots, seeded_roots)
+    )
+
+
 def test_refine_complex_resonance_rejects_non_analytic_loss_model() -> None:
     with pytest.raises(ValueError, match="not analytic"):
         refine_complex_resonance(
