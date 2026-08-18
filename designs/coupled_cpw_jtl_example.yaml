@@ -1,0 +1,63 @@
+schema_version: 1
+name: coupled_cpw_jtl_example
+
+parameters:
+  config: ipm_default
+  Lj: $Lj$ / 2
+  Cg: 2 * $Cg$
+
+topology:
+  - line: 1
+    port in: 1
+    port out: 2
+    blocks:
+      - type: input_ports
+        name: input_signal
+
+      - type: cpw
+        name: signal_cpw
+        cells: 200
+
+      - type: directional_coupler
+        name: coupler_1
+        port in signal: 1
+        port in pump: 3
+        port out signal: 2
+        port out pump: 4
+
+      - type: jtl
+        name: jtl_1
+        rows: 3
+        jj number: 435
+
+      - type: jtl
+        name: jtl_2
+        rows: 2
+        jj number: 100
+        Lj: 150e-12
+
+      - type: output_ports
+        name: output_signal
+
+  - line: 2
+    port in: 3
+    port out: 4
+    blocks:
+      - type: input_ports
+        name: input_pump
+
+      - type: cpw
+        name: pump_cpw
+        cells: 500
+
+      - type: directional_coupler
+        name: coupler_1
+
+      - type: jtl
+        name: jtl_1
+
+      - type: jtl
+        name: jtl_2
+
+      - type: output_ports
+        name: output_pump
