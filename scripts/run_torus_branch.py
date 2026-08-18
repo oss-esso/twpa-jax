@@ -111,6 +111,30 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=0.05,
         help="Initial normalized pseudo-arclength step.",
     )
+    parser.add_argument(
+        "--adaptive-branch-step",
+        action="store_true",
+        help="Adapt the PALC step after each accepted or failed corrector.",
+    )
+    parser.add_argument("--branch-min-step", type=float, default=1.0e-3)
+    parser.add_argument("--branch-max-step", type=float, default=0.5)
+    parser.add_argument("--branch-growth", type=float, default=1.5)
+    parser.add_argument("--branch-shrink", type=float, default=0.5)
+    parser.add_argument("--branch-max-retries", type=int, default=4)
+    parser.add_argument("--easy-newton-iterations", type=int, default=3)
+    parser.add_argument("--max-tangent-angle-rad", type=float, default=0.35)
+    parser.add_argument(
+        "--stop-drive-dbm",
+        type=float,
+        default=None,
+        help="Stop after an accepted point reaches this effective drive.",
+    )
+    parser.add_argument(
+        "--ns-control-dbm",
+        type=float,
+        default=None,
+        help="Reference dBm used for drive deltas when the first input is later.",
+    )
     parser.add_argument("--gmres-rtol", type=float, default=1.0e-8)
     parser.add_argument("--gmres-maxiter", type=int, default=240)
     parser.add_argument("--gmres-restart", type=int, default=80)
@@ -359,6 +383,7 @@ def _solve_seed(
     previous_source_tau: float | None,
     previous_tangent: np.ndarray | None,
     floquet_seed: tuple[np.ndarray, list[int]] | None,
+    branch_step: float,
 ) -> tuple[np.ndarray, float, dict[str, Any], str]:
     report: dict[str, Any]
     if previous_state is None:
@@ -395,7 +420,7 @@ def _solve_seed(
             omega_a_ns=args.omega_a_ratio * pump.omega_p,
             source_tau_ns=1.0,
             perturbation=mode,
-            step_size=args.branch_step,
+            step_size=branch_step,
             max_newton=args.max_newton,
             residual_tol=args.residual_tol,
             gmres_rtol=args.gmres_rtol,
@@ -418,7 +443,7 @@ def _solve_seed(
             previous_omega,
             previous_source_tau,
             previous_tangent,
-            args.branch_step,
+            branch_step,
         )
         state, omega, tau, report, tangent = torus.solve_torus_arclength(
             predictor[0],
@@ -426,7 +451,7 @@ def _solve_seed(
             previous_omega_a=previous_omega,
             previous_source_tau=previous_source_tau,
             tangent=previous_tangent,
-            step_size=args.branch_step,
+            step_size=branch_step,
             omega_a0=predictor[1],
             source_tau0=predictor[2],
             phase_reference=previous_state,
@@ -463,6 +488,12 @@ def run_branch(args: argparse.Namespace) -> dict[str, Any]:
         raise ValueError("--omega-a-ratio must be positive")
     if args.branch_step <= 0.0:
         raise ValueError("--branch-step must be positive")
+    if args.branch_min_step <= 0.0 or args.branch_max_step < args.branch_min_step:
+        raise ValueError("invalid PALC step bounds")
+    if args.branch_growth <= 1.0 or not 0.0 < args.branch_shrink < 1.0:
+        raise ValueError("invalid adaptive PALC growth or shrink factor")
+    if args.branch_max_retries < 0:
+        raise ValueError("--branch-max-retries must be non-negative")
     circuit = load_circuit(args.circuit_dir)
     loss_audit = audit_loss_convention(circuit, args.loss_model)
     controls = _controls(args)
@@ -482,8 +513,14 @@ def run_branch(args: argparse.Namespace) -> dict[str, Any]:
     previous_omega: float | None = None
     previous_source_tau: float | None = None
     previous_tangent: np.ndarray | None = None
-    ns_control = controls[0] if controls else None
+    ns_control = (
+        args.ns_control_dbm
+        if args.ns_control_dbm is not None
+        else (controls[0] if controls else None)
+    )
     checkpoint_applied = False
+    branch_step = min(args.branch_step, args.branch_max_step)
+    attempt_serial = 0
 
     for index, (pump_dir, control) in enumerate(
         zip(args.pump_solution_dirs, controls)
@@ -661,6 +698,7 @@ def run_branch(args: argparse.Namespace) -> dict[str, Any]:
             critical_reference = _to_problem_nodes(seeded, torus) - pump_state
         prior_state = previous_state
         prior_tangent = previous_tangent
+        attempt = 0
         if args.linear_fidelity_only:
             if (
                 previous_state is None
@@ -694,22 +732,54 @@ def run_branch(args: argparse.Namespace) -> dict[str, Any]:
             continuation_tangent = previous_tangent
             seed_route = "linear_fidelity"
         else:
-            state, omega, report, seed_route = _solve_seed(
-                torus,
-                pump,
-                basis,
-                args,
-                previous_state,
-                previous_omega,
-                previous_source_tau,
-                previous_tangent,
-                floquet_seed,
-            )
-            continuation_tangent = report.pop("_tangent", None)
+            attempt = 0
+            while True:
+                state, omega, report, seed_route = _solve_seed(
+                    torus,
+                    pump,
+                    basis,
+                    args,
+                    previous_state,
+                    previous_omega,
+                    previous_source_tau,
+                    previous_tangent,
+                    floquet_seed,
+                    branch_step,
+                )
+                continuation_tangent = report.pop("_tangent", None)
+                if report.get("converged") or not args.adaptive_branch_step:
+                    break
+                attempt_serial += 1
+                failed_attempt = {
+                    "point_index": index,
+                    "attempt": attempt,
+                    "branch_step": branch_step,
+                    "pump_dir": str(pump_dir),
+                    "control": control,
+                    "converged": False,
+                    "failure_reason": report.get("failure_reason"),
+                    "iterations": report.get("iterations"),
+                    "residual_norm": report.get("residual_norm"),
+                    "residual_history": report.get("residual_history", []),
+                }
+                _atomic_write(
+                    args.out.with_name(
+                        f"{args.out.stem}.attempt_{attempt_serial:04d}.json"
+                    ),
+                    failed_attempt,
+                )
+                if attempt >= args.branch_max_retries:
+                    break
+                next_step = branch_step * args.branch_shrink
+                if next_step < args.branch_min_step:
+                    break
+                branch_step = next_step
+                attempt += 1
         q0_norm, q1_norm = _q_norms(state, torus.basis)
         off_comb_fraction = q1_norm / max(q0_norm + q1_norm, 1.0e-300)
         source_tau = float(report.get("source_tau", 1.0))
         effective_drive_dbm = _effective_drive_dbm(control, source_tau)
+        effective_current_a = _pump_current(pump) * source_tau
         radius_squared = _torus_radius_squared(state, torus.basis)
         previous_state_overlap = _vector_overlap(state, prior_state)
         critical_mode_overlap = _sector_overlap(
@@ -721,6 +791,8 @@ def run_branch(args: argparse.Namespace) -> dict[str, Any]:
                 "point_index": index,
                 "control": control,
                 "effective_drive_dbm": effective_drive_dbm,
+                "pump_current_a_achieved": _pump_current(pump),
+                "effective_current_a": effective_current_a,
                 "drive_delta_from_ns_db": (
                     None
                     if effective_drive_dbm is None or ns_control is None
@@ -739,6 +811,9 @@ def run_branch(args: argparse.Namespace) -> dict[str, Any]:
                 "anchor_full_node": full_node_ref,
                 "anchor_retained_index": node_ref if args.schur else None,
                 "min_off_comb_fraction": args.min_off_comb_fraction,
+                "branch_step_used": branch_step,
+                "branch_attempts": attempt + 1,
+                "adaptive_branch_step": args.adaptive_branch_step,
                 "seed_route": seed_route,
                 **report,
             }
@@ -774,16 +849,30 @@ def run_branch(args: argparse.Namespace) -> dict[str, Any]:
         )
         if args.linear_fidelity_only:
             break
-        if report.get("converged"):
-            previous_state = state
-            previous_omega = omega
-            previous_source_tau = float(report["source_tau"])
-            previous_tangent = continuation_tangent
-        else:
-            previous_state = None
-            previous_omega = None
-            previous_source_tau = None
-            previous_tangent = None
+        if not report.get("converged"):
+            break
+        previous_state = state
+        previous_omega = omega
+        previous_source_tau = float(report["source_tau"])
+        previous_tangent = continuation_tangent
+        if args.adaptive_branch_step:
+            angle = tangent_angle
+            easy = int(report.get("iterations", args.max_newton)) <= (
+                args.easy_newton_iterations
+            )
+            smooth = angle is None or angle <= args.max_tangent_angle_rad
+            if easy and smooth:
+                branch_step = min(
+                    args.branch_max_step,
+                    branch_step * args.branch_growth,
+                )
+        if (
+            args.stop_drive_dbm is not None
+            and report.get("converged")
+            and effective_drive_dbm is not None
+            and effective_drive_dbm >= args.stop_drive_dbm
+        ):
+            break
 
     return {
             "metadata": {
@@ -803,6 +892,13 @@ def run_branch(args: argparse.Namespace) -> dict[str, Any]:
                 "critical q=+1 reference for branch switch and PALC"
             ),
             "branch_corrector": "matrix_free_augmented_palc",
+            "adaptive_branch_step": args.adaptive_branch_step,
+            "branch_step_initial": args.branch_step,
+            "branch_step_min": args.branch_min_step,
+            "branch_step_max": args.branch_max_step,
+            "branch_step_growth": args.branch_growth,
+            "branch_step_shrink": args.branch_shrink,
+            "stop_drive_dbm": args.stop_drive_dbm,
             "loss_audit": loss_audit,
         },
         "points": rows,

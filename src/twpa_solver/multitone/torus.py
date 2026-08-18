@@ -914,16 +914,19 @@ class TorusProblem:
             if tone in evaluation_basis.tones:
                 evaluation_state[evaluation_basis.index_of(tone)] = X[row]
         if self.is_schur:
-            source_start = np.asarray(self.base_problem.source_start)
-            source_delta = np.asarray(self.base_problem.source_delta)
-            source_basis = self.base_problem.basis
+            full_base = self.base_problem.full
+            source_start = np.asarray(full_base.source_path.source_start)
+            source_delta = np.asarray(full_base.source_path.source_delta)
+            source_basis = full_base.basis
+            source_nodes = full_base.circuit.node_count
         else:
             source_path = self.base_problem.source_path
             source_start = np.asarray(source_path.source_start)
             source_delta = np.asarray(source_path.source_delta)
             source_basis = self.base_problem.basis
+            source_nodes = self.base_problem.n
         evaluation_start = np.zeros(
-            (evaluation_basis.n_tones, self.base_problem.n), dtype=np.complex128
+            (evaluation_basis.n_tones, source_nodes), dtype=np.complex128
         )
         evaluation_delta = np.zeros_like(evaluation_start)
         for row, tone in enumerate(source_basis.tones):

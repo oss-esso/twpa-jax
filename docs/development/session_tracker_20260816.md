@@ -2564,3 +2564,60 @@ It overlays the nine K=5 torus junction-utilization and wall-time points in
 purple. The gain panel deliberately does not plot them: an autonomous torus
 has no imposed signal input, so `gain_vs_off_db` is undefined. The plot marks
 that distinction explicitly rather than comparing different observables.
+
+### Adaptive K=5 Schur continuation and signal overlay (2026-08-18)
+
+The torus runner now supports adaptive PALC steps. An accepted easy and smooth
+corrector grows the step by `1.5`; a failed corrector writes an atomic attempt
+record and retries with a step reduced by `0.5`, bounded below by `1e-3`.
+Rows also record the achieved pump current, effective current, step used, and
+retry count. A physical effective-drive stop can terminate the run.
+
+The bounded Schur-only continuation was attempted with K=5, Q=1, PARDISO,
+`current_complex_c`, actual pump controls from `-24.05` through `-23.20 dBm`,
+and the converged point-000 state as its initial checkpoint. The first run did
+not produce an atomic point after approximately 15 minutes and was stopped
+with stable memory. A final single-step attempt from point 008 toward
+`-23.20 dBm` recorded:
+
+```text
+point_index=0  branch_step=0.05  converged=False
+failure_reason=augmented GMRES failed
+iterations=0  residual_norm=1.122463529285e-02
+```
+
+The smaller-step retry was also stopped at the time boundary without an
+accepted checkpoint. This is an execution failure of the Schur PALC corrector,
+not evidence that the torus branch terminates. The first attempt also exposed
+a second Schur-only omitted-q diagnostic allocation error: the evaluation
+source must be allocated in full circuit-node coordinates before constructing
+the reduced Schur problem. That defect is fixed, and the focused tests remain
+green:
+
+```text
+19 passed in 1.26s
+```
+
+To make the comparison plot carry a signal observable, a separate finite-signal
+HB probe was added. It uses the existing pump-plus-signal sideband basis at
+`f_s=7.4 GHz`, `I_s=1e-12 A`, pump port 4, source port 1, output port 2, Schur
+coordinates, and explicit `current_complex_c`. It is intentionally labelled a
+`K=5 pump+signal probe`: it is a period-1 pump response evaluated at the same
+pump checkpoints, not gain of the autonomous two-generator torus. All ten
+probe points converged and were flushed incrementally to:
+
+```text
+D:\tmp\torus_signal_probe.csv
+```
+
+The measured probe gain decreases from `11.6504708 dB` at `6.7219618 uA` to
+`7.9975588 dB` at `7.5383022 uA`. The regenerated plot is:
+
+```text
+D:\tmp\phase_c_three_way_2c_plot\ipm_2c_fixed_k5_torus_signal.png
+```
+
+The plot overlays the ten finite-signal probe gains in purple and retains the
+nine autonomous-torus `r_J` and runtime points. A note on the gain panel states
+that a true torus gain observable requires a third independent frequency; no
+autonomous-torus gain value is substituted for it.

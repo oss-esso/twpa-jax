@@ -39,6 +39,14 @@ def _read_rows(path: Path) -> list[dict[str, Any]]:
     return payload.get("points", payload.get("rows", []))
 
 
+def _read_signal_probe(path: Path | None) -> list[dict[str, Any]]:
+    """Read optional finite-signal probe rows."""
+    if path is None:
+        return []
+    with path.open(newline="", encoding="utf-8") as handle:
+        return list(csv.DictReader(handle))
+
+
 def _pump_current(pump: Any) -> float:
     """Read the achieved pump current from checkpoint metadata."""
     for key in ("pump_current_a", "pump_current_peak_a", "current_a"):
@@ -119,6 +127,7 @@ def _timings(path: Path) -> dict[int, float]:
 def _plot(
     base_rows: list[dict[str, Any]],
     torus_rows: list[dict[str, Any]],
+    signal_rows: list[dict[str, Any]],
     output: Path,
 ) -> None:
     """Write the three-panel Phase C plot with torus diagnostics overlaid."""
@@ -148,11 +157,20 @@ def _plot(
                 label=label,
             )
     gain_ax.set_ylabel("gain_vs_off (dB)")
+    if signal_rows:
+        gain_ax.plot(
+            [float(row["pump_current_a"]) * 1.0e6 for row in signal_rows],
+            [float(row["gain_vs_off_db"]) for row in signal_rows],
+            "D--",
+            color="tab:purple",
+            label="K=5 pump+signal probe",
+        )
     gain_ax.legend()
     gain_ax.text(
         0.99,
         0.04,
-        "K=5 autonomous torus: gain_vs_off undefined",
+        "Autonomous torus gain requires a third independent frequency;\n"
+        "purple gain is the separate pump+signal HB probe.",
         transform=gain_ax.transAxes,
         ha="right",
         va="bottom",
@@ -225,6 +243,7 @@ def main() -> int:
     parser.add_argument("--torus-json", type=Path, required=True)
     parser.add_argument("--state-dir", type=Path, required=True)
     parser.add_argument("--timing-jsonl", type=Path, required=True)
+    parser.add_argument("--signal-probe-csv", type=Path, default=None)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--circuit-dir", type=Path, required=True)
     parser.add_argument("--pump-port", type=int, default=4)
@@ -232,6 +251,7 @@ def main() -> int:
     circuit = load_circuit(args.circuit_dir)
     base_rows = _read_rows(args.base_csv)
     torus_rows = _read_rows(args.torus_json)
+    signal_rows = _read_signal_probe(args.signal_probe_csv)
     timings = _timings(args.timing_jsonl)
     enriched: list[dict[str, Any]] = []
     for row in torus_rows:
@@ -259,8 +279,9 @@ def main() -> int:
                 "torus_radius_squared": row["torus_radius_squared"],
             }
         )
-    _plot(base_rows, enriched, args.output)
-    print(json.dumps({"output": str(args.output), "points": enriched}, indent=2))
+    _plot(base_rows, enriched, signal_rows, args.output)
+    print(json.dumps({"output": str(args.output), "points": enriched,
+                      "signal_probe_points": signal_rows}, indent=2))
     return 0
 
 

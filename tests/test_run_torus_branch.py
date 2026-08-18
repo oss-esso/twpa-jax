@@ -9,6 +9,7 @@ from scripts.run_torus_branch import (
     _remap_state_basis,
     _torus_radius_squared,
 )
+from scripts.chaos.run_torus_signal_probe import gain_vs_off_db
 from twpa_solver.multitone.basis import ToneIndex
 
 
@@ -38,3 +39,7 @@ def test_remap_state_basis_preserves_common_tones_and_zero_fills() -> None:
 def test_effective_drive_dbm_uses_source_amplitude_scaling() -> None:
     assert _effective_drive_dbm(-24.0, 1.0) == -24.0
     np.testing.assert_allclose(_effective_drive_dbm(-24.0, 2.0), -17.97940009)
+
+
+def test_signal_probe_gain_is_normalized_to_pump_off_response() -> None:
+    assert gain_vs_off_db(2.0 + 0.0j, 1.0 + 0.0j) == 20.0 * np.log10(2.0)
