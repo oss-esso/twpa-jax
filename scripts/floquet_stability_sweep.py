@@ -291,6 +291,14 @@ def _run_sweep(
             "converged": resonance.converged,
             "iterations": resonance.iterations,
             "residual": resonance.residual,
+            "mode_vector": (
+                None
+                if resonance.mode_vector is None
+                else {
+                    "real": np.asarray(resonance.mode_vector).real.tolist(),
+                    "imag": np.asarray(resonance.mode_vector).imag.tolist(),
+                }
+            ),
             "floquet": {
                 "multiplier_real": floquet.multiplier.real,
                 "multiplier_imag": floquet.multiplier.imag,
