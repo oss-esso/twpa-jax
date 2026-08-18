@@ -340,18 +340,57 @@ def _tone_gain_row(
     }
 
 
+def _integrator_dt_s(
+    name: str, t: np.ndarray, dt_norm: float, record_stride: int
+) -> float:
+    """Return the INTEGRATOR step, not the stored-sample spacing.
+
+    The two kernels write their time axes differently, measured 2026-08-17:
+    the paper (guarcello) kernel's ``t`` advances by the stored-sample spacing,
+    which is physically correct, while the JC kernels' ``t`` advances by the
+    integrator step and is therefore ``record_stride`` times shorter than real
+    time. ``np.mean(np.diff(t))`` consequently means different things per
+    device.
+
+    Consumers -- ``nonlinear_diagnostics.stroboscopic_section`` above all --
+    expect the JC convention and multiply this field by ``record_stride`` to
+    recover the sample spacing. Writing guarcello's already-strided value here
+    made that multiplication double-count: at ``--record-stride 4`` the strobe
+    stepped a quarter of a pump period instead of a whole one, so a period-1
+    orbit produced four distinct phases, ``sigma`` equal to the full signal
+    amplitude, ``D2 = 1.02`` and ``K = 0`` at every power -- a torus reading
+    everywhere, entirely spurious. Correcting it drops the -70 dBm guarcello
+    strobe spread from 3.45e-05 to 3.60e-09.
+    """
+    if name == "guarcello":
+        return float(dt_norm / PAPER.Device().omega_plasma)
+    return float(np.mean(np.diff(t)))
+
+
 def _run_point(
     name: str, power: float, output: Path, dt_norm: float, tmax_norm: float,
     signal_current_a: float = 0.0, signal_dbm: float | None = None,
-    pump_off_output: float | None = None,
+    pump_off_output: float | None = None, record_stride: int = 20,
 ) -> dict[str, Any]:
+    """Integrate one point.
+
+    ``record_stride`` controls how many integrator steps pass between stored
+    samples. The default 20 is fine for the JC devices (149-304 stored samples
+    per pump period) but starves guarcello: its ``dt_s`` and 7 GHz pump give
+    only 6.23 stored samples per pump period, below the eight-sample guard in
+    ``nonlinear_diagnostics.stroboscopic_section``, so every guarcello point
+    measured before 2026-08-17 silently fell back to the Poincare upward
+    crossings -- a different observable in different units. Pass 4 for
+    guarcello to obtain a comparable stroboscopic section.
+    """
     output.mkdir(parents=True, exist_ok=True)
     started = time.perf_counter()
     trace: tuple[np.ndarray, np.ndarray] | None = None
     try:
         if name == "guarcello":
             t, v, runtime, signal_hz = _pump_only_paper(
-                power, dt_norm, tmax_norm, signal_dbm=signal_dbm,
+                power, dt_norm, tmax_norm, record_stride=record_stride,
+                signal_dbm=signal_dbm,
             )
             trace = (t, v)
             solver_row: dict[str, Any] = {"signal_installed": False}
@@ -421,8 +460,9 @@ def _run_point(
             "control_axis": solver_row.get("control_axis", "pump_power_dbm"),
             "signal_installed": False, "gain_db": None, "gain_wideband_db": None,
             "trace_path": str((output / "trace.npz").resolve().relative_to(ROOT.resolve())),
-            "record_stride": 20, "steady_state_start_index": int(t.size // 2),
-            "n_steps": int((t.size - 1) * 20), "dt_s": float(np.mean(np.diff(t))),
+            "record_stride": int(record_stride),
+            "steady_state_start_index": int(t.size // 2),
+            "n_steps": int((t.size - 1) * 20), "dt_s": _integrator_dt_s(name, t, dt_norm, record_stride),
             **solver_row, **reduced,
         }
         (output / "result.json").write_text(json.dumps(_json_safe(row), indent=2), encoding="utf-8")

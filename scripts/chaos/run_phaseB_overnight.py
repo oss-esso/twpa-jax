@@ -125,6 +125,13 @@ def main() -> int:
     parser.add_argument("--output", type=Path, default=ROOT / "outputs" / "chaos" / "phaseB")
     parser.add_argument("--workers", type=int, default=3)
     parser.add_argument("--dt-norm", type=float, default=0.01)
+    parser.add_argument(
+        "--record-stride", type=int, default=20,
+        help="integrator steps between stored samples. 20 gives the JC devices "
+             "149-304 samples per pump period but only 6.23 for guarcello, "
+             "below the eight-sample guard for a stroboscopic section; pass 4 "
+             "for guarcello.",
+    )
     parser.add_argument("--devices", default="guarcello,jc_jtwpa,jc_fqjtwpa")
     parser.add_argument("--dry-run", action="store_true",
                         help="print the plan and the cost estimate, integrate nothing")
@@ -257,6 +264,7 @@ def main() -> int:
             pool.submit(
                 PHASEB._run_point, device, power, path, args.dt_norm, budgets[device],
                 args.signal_current_a, args.signal_dbm, references[device],
+                args.record_stride,
             ): (device, power, path)
             for device, power, path in todo
         }

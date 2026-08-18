@@ -26,6 +26,30 @@ sys.path.insert(0, str(ROOT / "scripts" / "chaos"))
 import nonlinear_diagnostics as nd  # noqa: E402
 
 
+def write_rows_atomically(
+    out_path: Path, rows: list[dict[str, object]], attempts: int = 20
+) -> None:
+    """Replace ``out_path`` with ``rows``, retrying past a transient lock.
+
+    On Windows ``os.replace`` raises ``PermissionError`` if any other process
+    holds the target open, so a reader tailing the file mid-run can abort a
+    campaign outright -- which is exactly what the per-point write exists to
+    prevent. Measured 2026-08-16: a 5 s polling loop killed a 71-of-87 run.
+    Retry with a short backoff, and only give up after the file has stayed
+    locked for several seconds.
+    """
+    tmp = out_path.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(rows, indent=1), encoding="utf-8")
+    for attempt in range(attempts):
+        try:
+            tmp.replace(out_path)
+            return
+        except PermissionError:
+            if attempt == attempts - 1:
+                raise
+            time.sleep(0.25)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--campaign", type=Path, required=True)
@@ -78,9 +102,7 @@ def main() -> int:
                 )
             # Written every point: seven earlier long runs in this project were
             # lost to end-buffered writes.
-            tmp = out_path.with_suffix(".json.tmp")
-            tmp.write_text(json.dumps(rows, indent=1), encoding="utf-8")
-            tmp.replace(out_path)
+            write_rows_atomically(out_path, rows)
 
         usable = [
             r for r in rows
