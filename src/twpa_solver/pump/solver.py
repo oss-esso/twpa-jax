@@ -776,6 +776,7 @@ class HarmonicNewtonKrylovSolver:
         fallback_fixed_steps: int,
         controller: str = "fixed",
         max_wall_s: float = 0.0,
+        lambda_start: float = 0.0,
     ) -> tuple[np.ndarray, list[StepReport], ContinuationTrace]:
         reports: list[StepReport] = []
         trace = empty_continuation_trace("adaptive")
@@ -789,15 +790,17 @@ class HarmonicNewtonKrylovSolver:
             raise ValueError("--adaptive-growth must be >= 1")
         if shrink <= 0.0 or shrink >= 1.0:
             raise ValueError("--adaptive-shrink must be in (0, 1)")
+        if lambda_start < 0.0 or lambda_start >= 1.0:
+            raise ValueError("lambda_start must lie in [0, 1)")
 
         X_current = problem.zeros() if x_init is None else np.array(x_init, dtype=np.complex128, copy=True)
-        lambda_current = 0.0
+        lambda_current = float(lambda_start)
         step = float(initial_step)
 
         X_prevprev: np.ndarray | None = None
         X_prev = X_current
         lam_prevprev: float | None = None
-        lam_prev: float | None = 0.0
+        lam_prev: float | None = float(lambda_start)
 
         while lambda_current < 1.0 - 1e-12:
             if max_wall_s > 0.0 and time.perf_counter() - continuation_t0 > max_wall_s:
@@ -896,6 +899,9 @@ class HarmonicNewtonKrylovSolver:
             next_step = step * shrink
             if next_step < min_step:
                 trace.fallback_used = True
+                if fallback_fixed_steps <= 0:
+                    trace.accepted_steps = len(trace.accepted_lambdas)
+                    return X_current, reports, trace
                 if (
                     max_wall_s > 0.0
                     and time.perf_counter() - continuation_t0 > max_wall_s
