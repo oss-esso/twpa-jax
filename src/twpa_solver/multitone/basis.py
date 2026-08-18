@@ -86,6 +86,7 @@ class MultiToneBasis:
     n_p: int | None = None
     n_delta: int | None = None
     pump_tone_index: ToneIndex = ToneIndex(1, 0)
+    require_signal_sector: bool = True
     _index: dict[ToneIndex, int] = field(init=False, repr=False)
     _theta_flat: np.ndarray = field(init=False, repr=False)
 
@@ -105,10 +106,11 @@ class MultiToneBasis:
         if any(tone.omega(self.omega_p, self.delta) <= 0.0 for tone in self.tones):
             raise ValueError("all retained tones must have strictly positive frequency")
 
-        required = {
-            ToneIndex(1, 0), ToneIndex(1, -1), ToneIndex(1, 1),
-            self.pump_tone_index,
-        }
+        required = {self.pump_tone_index}
+        if self.require_signal_sector:
+            required.update({ToneIndex(1, -1), ToneIndex(1, 1)})
+        else:
+            required.add(ToneIndex(0, 1))
         missing = required.difference(self.tones)
         if missing:
             raise ValueError(f"basis is missing required tones: {sorted(missing)}")
@@ -175,6 +177,7 @@ class MultiToneBasis:
             "pump_tone": {"h": self.pump_tone.h, "q": self.pump_tone.q},
             "n_p": self.n_p,
             "n_delta": self.n_delta,
+            "require_signal_sector": self.require_signal_sector,
             "real_reconstruction_factor": REAL_RECONSTRUCTION_FACTOR,
             "phase_convention": "exp_plus_i_(h_theta_p_plus_q_theta_delta)",
         }
@@ -227,6 +230,50 @@ def build_three_tone_basis(omega_p: float, delta: float) -> MultiToneBasis:
         tones=[ToneIndex(1, 0), ToneIndex(1, -1), ToneIndex(1, 1)],
         omega_p=omega_p,
         delta=delta,
+    )
+
+
+def build_autonomous_torus_basis(
+    omega_p: float,
+    omega_a: float,
+    pump_modes: Iterable[int],
+    q_max: int,
+    *,
+    n_p: int | None = None,
+    n_delta: int | None = None,
+) -> MultiToneBasis:
+    """Build a positive-frequency lattice for an autonomous second tone.
+
+    The generator frequency is ``omega_a`` and is represented by the
+    ``(0, 1)`` tone; its conjugate is supplied by the real reconstruction and
+    is therefore not stored as a second positive-frequency row.  The
+    signal/idler requirement of :class:`MultiToneBasis` is deliberately
+    disabled because those tones encode a known signal detuning, which is not
+    part of an autonomous torus ansatz.
+    """
+    if omega_p <= 0.0 or omega_a <= 0.0:
+        raise ValueError("omega_p and omega_a must be positive")
+    if q_max < 1:
+        raise ValueError("q_max must be >= 1")
+    modes = [int(mode) for mode in pump_modes]
+    if not modes or any(mode <= 0 for mode in modes):
+        raise ValueError("pump_modes must contain positive harmonics")
+
+    candidates: list[ToneIndex] = []
+    for mode in modes:
+        for q in range(-q_max, q_max + 1):
+            tone, _conjugated = canonicalize(ToneIndex(mode, q), omega_p, omega_a)
+            candidates.append(tone)
+    generator, _conjugated = canonicalize(ToneIndex(0, 1), omega_p, omega_a)
+    candidates.append(generator)
+    tones = list(dict.fromkeys(sorted(candidates, key=lambda tone: (tone.h, tone.q))))
+    return MultiToneBasis(
+        tones=tones,
+        omega_p=omega_p,
+        delta=omega_a,
+        n_p=n_p,
+        n_delta=n_delta,
+        require_signal_sector=False,
     )
 
 

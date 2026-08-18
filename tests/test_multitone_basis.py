@@ -8,6 +8,7 @@ from twpa_solver.multitone.basis import (
     ToneIndex,
     build_sideband_matched_basis,
     build_lattice_basis,
+    build_autonomous_torus_basis,
     build_three_tone_basis,
     canonicalize,
     covered_sidebands,
@@ -26,6 +27,14 @@ def test_three_tone_transform_round_trip() -> None:
 
     assert np.isrealobj(waveform)
     np.testing.assert_allclose(basis.project(waveform), coefficients, atol=1e-14)
+
+
+def test_autonomous_torus_basis_contains_generator_without_signal_sector() -> None:
+    basis = build_autonomous_torus_basis(10.0, 1.0, [1, 3], 2)
+
+    assert ToneIndex(1, 0) in basis.tones
+    assert ToneIndex(0, 1) in basis.tones
+    assert basis.require_signal_sector is False
 
 
 def test_lattice_basis_has_required_tones_and_alias_guard() -> None:

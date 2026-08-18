@@ -6,6 +6,7 @@ from twpa_solver.multitone.basis import (
     ToneIndex,
     build_sideband_matched_basis,
     build_lattice_basis,
+    build_autonomous_torus_basis,
     build_three_tone_basis,
     canonicalize,
     covered_sidebands,
@@ -19,6 +20,7 @@ from twpa_solver.multitone.resources import (
 )
 from twpa_solver.multitone.grid import TorusGrid
 from twpa_solver.multitone.problem import FullMultiToneProblem
+from twpa_solver.multitone.torus import TorusProblem
 from twpa_solver.multitone.source import AffineSourcePath, MultiToneDrive
 from twpa_solver.multitone.schur import SchurMultiToneProblem, build_multitone_schur_problem
 from twpa_solver.multitone.preconditioners import (
@@ -29,6 +31,7 @@ from twpa_solver.multitone.seed import (
     promote_pump_solution,
     pump_plus_floquet_seed,
     seed_from_floquet,
+    seed_torus_from_floquet,
 )
 from twpa_solver.multitone.compression import (
     SignalPowerPoint,
@@ -66,10 +69,12 @@ __all__ = [
     "covered_sidebands",
     "build_sideband_matched_basis",
     "build_lattice_basis",
+    "build_autonomous_torus_basis",
     "build_three_tone_basis",
     "canonicalize",
     "TorusGrid",
     "FullMultiToneProblem",
+    "TorusProblem",
     "AffineSourcePath",
     "MultiToneDrive",
     "SchurMultiToneProblem",
@@ -79,6 +84,7 @@ __all__ = [
     "promote_pump_solution",
     "pump_plus_floquet_seed",
     "seed_from_floquet",
+    "seed_torus_from_floquet",
     "SignalPowerPoint",
     "solve_signal_power_point",
     "run_compression_sweep",

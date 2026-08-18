@@ -2,12 +2,19 @@ from __future__ import annotations
 
 import numpy as np
 import math
+import pytest
 
 from tests.test_multitone_physics import _basis, _jpa, _pump, _pump_source
 from twpa_solver.multitone.basis import build_three_tone_basis
+from twpa_solver.multitone.basis import build_autonomous_torus_basis, ToneIndex
 from twpa_solver.multitone.problem import FullMultiToneProblem
 from twpa_solver.multitone.source import AffineSourcePath, MultiToneDrive
-from twpa_solver.multitone.seed import promote_pump_solution, seed_from_floquet
+from twpa_solver.multitone.seed import (
+    promote_pump_solution,
+    seed_from_floquet,
+    seed_torus_from_pump,
+    seed_torus_from_floquet,
+)
 from twpa_solver.pump import HarmonicNewtonKrylovSolver
 from twpa_solver.pump.basis import PumpBasis
 from twpa_solver.signal.floquet import solve_gain_one_schur
@@ -39,6 +46,47 @@ def test_seed_from_floquet_maps_sideband_to_signal_tone() -> None:
     np.testing.assert_allclose(
         seed[basis.index_of(basis.signal_tone), 0], (2.0 + 1.0j) * 1e-6
     )
+
+
+def test_seed_torus_from_floquet_populates_generator_sector_and_anchor() -> None:
+    basis = build_autonomous_torus_basis(10.0, 1.0, [1], 1)
+    pump_basis = PumpBasis([1], "dense_real", 10.0)
+    pump = np.array([[2.0 + 0.0j]], dtype=np.complex128)
+    vector = np.array([1.0 + 1.0j])
+
+    seed = seed_torus_from_floquet(
+        pump,
+        pump_basis,
+        basis,
+        vector,
+        [0],
+        omega_p=10.0,
+        omega_a=1.0,
+        node_ref=0,
+    )
+
+    generator = seed[basis.index_of(ToneIndex(0, 1)), 0]
+    assert abs(generator) > 0.0
+    assert generator.imag == pytest.approx(0.0)
+
+
+def test_seed_torus_from_pump_populates_both_first_sideband_sectors() -> None:
+    basis = build_autonomous_torus_basis(10.0, 1.0, [1], 1)
+    pump_basis = PumpBasis([1], "dense_real", 10.0)
+    pump = np.array([[2.0 + 0.0j]], dtype=np.complex128)
+
+    seed = seed_torus_from_pump(
+        pump,
+        pump_basis,
+        basis,
+        amplitude=1.0e-3,
+        node_ref=0,
+    )
+
+    values = [seed[row, 0] for row, tone in enumerate(basis.tones) if tone.q != 0]
+    assert len(values) == 3
+    assert all(abs(value) > 0.0 for value in values)
+    assert seed[basis.index_of(ToneIndex(0, 1)), 0].imag == pytest.approx(0.0)
 
 
 def test_real_floquet_seed_warm_starts_finite_signal_sweep() -> None:
