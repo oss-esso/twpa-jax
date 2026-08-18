@@ -3535,6 +3535,41 @@ def uses_traversal_orchestrator(args: argparse.Namespace) -> bool:
 # Gate
 # =============================================================================
 
+def apply_stability_gate(
+    rows: list[dict[str, Any]],
+    branch_payload: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Label rows past a tracked NS/fold crossing without changing defaults."""
+    branch_rows = branch_payload.get("points", branch_payload.get("target", []))
+    if isinstance(branch_rows, dict):
+        branch_rows = [branch_rows]
+    if not isinstance(branch_rows, list):
+        raise ValueError("stability branch JSON must contain a points list")
+    by_parameter = {
+        float(point["parameter"]): point
+        for point in branch_rows
+        if isinstance(point, dict) and "parameter" in point
+    }
+    output: list[dict[str, Any]] = []
+    for row in rows:
+        copied = dict(row)
+        parameter = copied.get("pump_power_dbm")
+        matched = None
+        if parameter is not None and by_parameter:
+            candidates = np.asarray(list(by_parameter), dtype=float)
+            index = int(np.argmin(np.abs(candidates - float(parameter))))
+            if abs(candidates[index] - float(parameter)) <= 1.0e-8:
+                matched = by_parameter[float(candidates[index])]
+        verdict = None if matched is None else matched.get("stability_verdict")
+        copied["stability_verdict"] = verdict or "UNDECIDED"
+        if verdict in {"UNSTABLE_NS", "UNSTABLE_FOLD"}:
+            copied["status"] = "PAST_NS"
+            copied["gain_status"] = "PAST_NS"
+            copied["gain_db"] = float("nan")
+            copied["gain_vs_off_db"] = float("nan")
+        output.append(copied)
+    return output
+
 @dataclass
 class GateResult:
     evaluated: bool
@@ -3785,6 +3820,11 @@ def write_summary(
         "mode": args.mode,
         "workflow_mode": getattr(args, "workflow_mode", None),
         "compact_output": bool(getattr(args, "compact_output", False)),
+        "stability_gate": bool(getattr(args, "stability_gate", False)),
+        "stability_branch_json": (
+            str(args.stability_branch_json)
+            if getattr(args, "stability_branch_json", None) is not None else None
+        ),
         "output_dir": str(outdir),
         "grid": {"n_power": args.n_power, "n_frequency": args.n_frequency},
         "grid_from_measurement_dir": (
@@ -3942,6 +3982,17 @@ def load_measurement_grid(measurement_dir: Path) -> tuple[np.ndarray, np.ndarray
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__)
+    p.add_argument(
+        "--stability-gate",
+        action="store_true",
+        help="Opt-in: label points past the tracked Floquet crossing as PAST_NS.",
+    )
+    p.add_argument(
+        "--stability-branch-json",
+        type=Path,
+        default=None,
+        help="Tracked branch JSON consumed by --stability-gate.",
+    )
     p.add_argument("--mode", choices=["cold", "warmstart", "both"], default="warmstart")
     p.add_argument("--loss-model", choices=["auto", "current_complex_c", "real_capacitance",
                                               "conjugate_complex_c", "complex_c_sign_omega",
@@ -4994,6 +5045,16 @@ def main(argv: list[str] | None = None) -> int:
         print(f"spot-checking {len(spot)} point(s) cold for the gate", flush=True)
         cold_rows = cold_pass(spot, outdir / "cold_spotcheck")
         logger.debug("main_spotcheck_complete n_points=%d", len(cold_rows))
+
+    if args.stability_gate:
+        branch_path = args.stability_branch_json or (outdir / "hb_floquet_branch.json")
+        if not branch_path.exists():
+            raise FileNotFoundError(
+                f"--stability-gate requires tracked branch JSON: {branch_path}"
+            )
+        branch_payload = json.loads(branch_path.read_text(encoding="utf-8"))
+        cold_rows = apply_stability_gate(cold_rows, branch_payload)
+        warm_rows = apply_stability_gate(warm_rows, branch_payload)
 
     if args.mode == "both" or (args.mode == "warmstart" and cold_rows):
         gate = evaluate_gate(

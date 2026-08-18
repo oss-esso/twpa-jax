@@ -786,6 +786,23 @@ SMALL_SIGNAL_FLOOR_TOL_DB = 0.05
 _CONTINUATION_MIN_STEP_FLOOR = 1.0 / 4096.0
 
 
+def _fallback_fixed_steps_for_span(
+    span: float,
+    nominal_step: float = 0.25,
+) -> int:
+    """Size the deterministic fallback from the remaining lambda span.
+
+    The adaptive solver applies this count to the remaining interval rather
+    than restarting at zero.  Four steps is therefore the exact count for the
+    production unit span at the nominal quarter-span fallback step.
+    """
+    if not np.isfinite(span) or span <= 0.0:
+        raise ValueError("fallback continuation span must be positive and finite")
+    if not np.isfinite(nominal_step) or nominal_step <= 0.0:
+        raise ValueError("fallback nominal step must be positive and finite")
+    return max(1, int(math.ceil(float(span) / float(nominal_step) - 1.0e-12)))
+
+
 def _derived_continuation_min_step(
     span: float, nominal_step: float = 0.01,
 ) -> float:
@@ -912,7 +929,7 @@ def _solve_pump_from_scratch(
         min_step=_derived_continuation_min_step(1.0),
         growth=1.5,
         shrink=0.5,
-        fallback_fixed_steps=4,
+        fallback_fixed_steps=_fallback_fixed_steps_for_span(1.0),
         max_wall_s=float(getattr(args, "signal_continuation_deadline_s", 0.0)),
     )
     continuation_info = {
