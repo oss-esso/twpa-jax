@@ -703,9 +703,201 @@ carries that claim, and it covers the approach rather than the window itself.
 **Lambda_1 remains the decisive measurement**: negative for periodic, zero for
 quasi-periodic, positive for chaos, at every point on one axis.
 
+### guarcello has NO stroboscopic section (2026-08-17)
+
+`outputs/chaos/phaseB/guarcello`, 87 pump-only points, -70..-45 dBm, reduced to
+`outputs/chaos/nonlinear_guarcello`. Every point reports `strobe = 0`.
+
+`record_stride = 20` at `dt_s = 1.1474e-12` and `f_p = 7 GHz` gives **6.23
+stored samples per pump period**, below the eight-sample guard in
+`nonlinear_diagnostics.py:567`. So `stroboscopic_section` returns empty and
+every guarcello point silently takes the `poincare_branches['upward']`
+fallback:
+
+| | jc_jtwpa / ipm_2c_fixed | guarcello |
+| --- | --- | --- |
+| section | stroboscopic, 1 sample/pump period | Poincare upward crossings |
+| observable | node voltage [V] | `dv/dt` at crossings [device units] |
+| sigma range | 1.6e-8 .. 4.4e-5 | 9.5e2 .. 1.1e7 |
+| samples | 1049 | 300 |
+
+Consequences:
+
+- **sigma is not comparable across devices** and `FLOOR_SIGMA = 1e-7` is
+  meaningless for guarcello. The plot script classifies it on K alone and
+  labels the axis and panel; do not put it on a shared sigma scale.
+- **The beta = 0.666 +- 0.033 at R^2 = 0.914 result was fitted on this
+  Poincare `dv/dt` spread**, not on the stroboscopic spread used for the other
+  devices. It is a real quantity but a different observable, and must not be
+  compared to jc_jtwpa's beta without that caveat.
+- **Pre-transition K is unusable.** It swings between -0.69 and +0.70 between
+  adjacent points across the whole -70..-54 dBm range -- the signature of a
+  statistic computed on an unresolved section, not of physical structure. The
+  regime shading below the transition in `regime_map.png` is noise. Read only
+  the transition itself.
+
+What survives: the transition is clear at about **-53.5 dBm**, where sigma
+jumps roughly x1000 and K locks to 0.99+ and stays there to -45 dBm. And at
+**-53.75 dBm the return map is a closed curve** (sparse, 300 points, K =
++0.0031) -- a third device showing an invariant circle immediately below its
+chaos onset. That claim rests on the *shape*, not on K, since K is untrustworthy
+in that band.
+
+Fix requires a re-run, not re-analysis: `record_stride <= 15` clears the guard,
+`stride = 4` gives 31 samples per period and a directly comparable sigma. Fold
+it into any future guarcello campaign.
+
+### Instrument defect: a reader can kill a campaign on Windows
+
+`run_nonlinear_diagnostics.py` writes per point via `tmp.replace(out_path)`.
+On Windows `os.replace` raises `PermissionError [WinError 5]` if any other
+process holds the target open. Measured 2026-08-16: a 5 s polling loop reading
+`guarcello.json` aborted the run at 71 of 87 points -- the exact loss the
+per-point write exists to prevent. Fixed by `write_rows_atomically`, which
+retries 20 times at 250 ms. Apply the same pattern to any other per-point
+writer before tailing its output.
+
+### Overnight campaign 2026-08-17: results
+
+`scripts/chaos/run_overnight_campaign_20260817.ps1`, 4 h 25 min, all stages
+exit 0. 112 new FDTD points. (A `.sh` version was written first and cost the
+user eight hours of unattended time -- `bash` in PowerShell resolves to a
+broken WSL. PowerShell only from now on; see [[no-bash-scripts-powershell-only]].)
+
+**A serious instrument defect was found and fixed, exposed by the gap-4 fix
+itself.** `run_phaseB_pump_only.py` wrote `dt_s` as
+`np.mean(np.diff(t))`, but the two kernels write `t` differently: the paper
+(guarcello) kernel's axis advances by the stored-sample spacing, the JC
+kernels' by the integrator step. `stroboscopic_section` expects the JC
+convention and multiplies by `record_stride`, so guarcello's value was
+double-strided. At `--record-stride 4` the strobe therefore stepped a
+**quarter pump period**, and a period-1 orbit produced four phases:
+`sigma` equal to the full signal amplitude, `D2 = 1.02` and `K = 0` at every
+power from -70 dBm up -- a torus reading everywhere, entirely spurious.
+Before the stride fix the eight-sample guard had accidentally hidden this by
+forcing the Poincare fallback. Fixed by `_integrator_dt_s`; the -70 dBm strobe
+spread drops **3.45e-05 -> 3.60e-09**. The traces were always valid -- only the
+metadata field was wrong -- so 81 existing points were repaired in place and
+re-reduced with no re-integration.
+
+**guarcello, with a real stroboscopic section (1049 points, was 300):**
+
+| range [dBm] | sigma | K | reading |
+| --- | --- | --- | --- |
+| -70.00..-54.05 | 3.6e-9 -> 5e-8 | -0.721 constant | period-1; statistics on noise |
+| **-54.00..-53.55** | 5.2e-6 -> 1.4e-5 | **+0.014..+0.080** | **regular window, 0.45 dB** |
+| -53.50..-53.40 | 2.2-3.1e-5 | 0.25 -> 0.66 | transitional |
+| -52.50..-45.00 | 3.4e-5 -> 1.5e-4 | 0.991-0.998 | chaotic |
+
+`sigma` jumps **x100 in one 0.05 dB step** at -54.00. The constant `K = -0.721`
+across the whole floor is the not-classifiable signature, consistent with the
+standing rule -- it is a fixed artefact of running the test on a constant
+series, not a measurement.
+
+**jc_fqjtwpa, 2100 periods, 13 points:** transition between -32.0 (K = 0.104)
+and -31.8 (K = 0.992). **Gap 2 is NOT closed for this device** -- the scan
+range -32.0..-30.8 was chosen wrong and is 11/13 chaotic, so its regular
+window lies below -32.0 and was never sampled.
+
+### Gap 3 resolved, with a negative answer: there is no normal-form exponent
+
+Dense onset data now exists on three devices (jc_jtwpa 0.025 dB, ipm_2c_fixed
+0.0025, guarcello 0.05). Fitting `sigma = C (A - A_c)^beta` in **linear pump
+amplitude** (a power law in dB is meaningless) is unstable across every
+reasonable window:
+
+| device | window | beta |
+| --- | --- | ---: |
+| jc_jtwpa | -29.50..-29.23, 16 pts | 1.23 +/- 0.13 |
+| jc_jtwpa | -29.50..-29.33, 11 pts | 2.13 +/- 0.38 |
+| ipm_2c_fixed | 0.5850..0.6000, 7 pts | 0.36 +/- 0.32 |
+| ipm_2c_fixed | 0.5850..0.5950, 5 pts | 10.82 +/- 3.24 |
+
+**beta spans 0.36 to 10.8 on data 10-20x denser than the previous grid.** The
+cause is not sampling: `sigma` grows **210x across 0.27 dB** on jc_jtwpa (a 3.2%
+change in amplitude), x100 in 0.05 dB on guarcello, x300 across 0.01 in
+`I/I_bound` on 2c. A supercritical Neimark-Sacker grows as
+`(A - A_c)^(1/2)`, so reproducing 210x inside a 3.2% amplitude span requires
+`A_c` to sit within 1e-6 of the window's lower edge, which leaves no lever arm
+to measure the exponent with.
+
+So the transition is **hard on every device even at 10-20x finer sampling**,
+and the invariant circle appears at finite size rather than growing from zero.
+That is a physical statement -- a subcritical or otherwise discontinuous onset
+-- not a fit failure, and it means **no supercritical normal form applies and
+no beta should be quoted**. The earlier "the transition is graded, not a clean
+supercritical bifurcation" reading was right about the conclusion and wrong
+about the mechanism: it is graded in `K`, abrupt in `sigma`.
+
+The summary `normal_form_fit` emitted by `run_nonlinear_diagnostics.py` is
+still a GLOBAL fit over the whole sweep including the saturated region, so its
+numbers (guarcello 3.88, jc_jtwpa 6.60, ipm_2c 4.96, jc_fqjtwpa 0.19) measure
+saturation and must not be quoted. That defect is unchanged from 2026-08-16.
+
+### WHY HB FAILS: it dies at the torus onset, and that is physical (2026-08-17)
+
+The HB columns die exactly where the T-periodic solution stops existing. Two
+devices, independent columns, measured against today's pump-only FDTD:
+
+| device | HB last converged | HB first failure | FDTD torus onset | FDTD chaos onset |
+| --- | ---: | ---: | ---: | ---: |
+| jc_jtwpa | -29.6842 dBm | **-29.0526 dBm** | **-29.44 dBm** | -29.06 dBm |
+| jc_fqjtwpa (fine) | -32.1356 dBm | **-31.9322 dBm** | transition bracket (-32.0, -31.8) | |
+
+jc_jtwpa's HB column steps 0.632 dB, so its failure bracket is
+`(-29.684, -29.053]` -- the torus onset at -29.44 sits **inside** it, and the
+first failed point coincides with the end of the K~0 window and the start of
+chaos. jc_fqjtwpa's fine column brackets the failure to `(-32.136, -31.932]`
+against an FDTD regime change in `(-32.0, -31.8)`; the two overlap.
+
+**Mechanism.** HB assumes `phi(t) = sum_k X_k exp(i k omega_p t)`, strictly
+T-periodic. At the torus onset the attractor acquires a second incommensurate
+frequency -- measured `f_a/f_p = 0.1217` (jc_jtwpa), `0.0917` (ipm_2c_fixed),
+`0.3555` (guarcello) -- carrying 1.9%, 9.6% and 0.26% of in-band power. **The
+pump-only basis has no function that can represent it.** The period-1 orbit
+loses stability through a Neimark-Sacker bifurcation, and above the onset
+Newton is chasing a solution that is at best unstable.
+
+**The failure signature confirms this rather than a step-size problem.** All
+columns report `stalled at Newton N (reduction ratio 0.81-0.88)`. A reduction
+ratio approaching 1 means Newton is no longer reducing the residual, i.e. the
+Jacobian is near-singular in one direction -- exactly what a complex
+multiplier pair crossing the unit circle produces. It also explains the
+2026-08-15 finding that fixed continuation ladders fail where solutions exist
+and adaptive ones need `dlambda` down to `0.004454`: below onset the solution
+survives but its basin shrinks as the multipliers approach the circle.
+
+**Not a drive limit.** At jc_jtwpa's last converged point
+`pump_branch_current_max_over_ic = 0.6168` and `branch_min_cos_phase = 0.787`.
+The junctions are comfortably under-driven, consistent with
+[[fold-plan-g1-5-fold-is-basis-converged]].
+
+**RETRACTION: "the high-power wall is numerical" is withdrawn**
+([[jtwpa-high-power-wall-also-numerical]]). That verdict rested on PALC
+reporting zero `fold_lambda` events through -24 dBm. PALC searches for a
+**fold** (a real multiplier through +1). A Neimark-Sacker is a **complex pair**
+crossing, which a fold locator cannot see by construction. Finding no fold was
+correct and meant the opposite of what was concluded: the wall is a genuine
+loss of stability of the periodic orbit, not a solver artifact.
+
+**What this buys the solver.** The auxiliary-generator closure is now
+justified by direct measurement and its cost is known: one extra generator
+explains **0.999 / 0.986 / 1.000** of the off-comb power in the window
+(jc_jtwpa / ipm_2c_fixed / guarcello), and a lattice of `n <= 6, |m| <= 2`
+reaches 99.9% of in-band power on all three (5 / 4 / 3 lines actually carry
+power). That would extend HB from the current wall through the torus window,
+about 0.35-0.40 dB on jc_jtwpa. Past chaos onset it does not help: one
+generator explains only 0.19 / 0.21 / 0.17, and a full `n <= 12, |m| <= 6`
+lattice (858 lines) still captures only 63.8% of in-band power on jc_jtwpa and
+90.8% on guarcello. **There is no finite tone set for the chaotic regime.**
+
 ### Figures
 
 `scripts/chaos/plot_nonlinear_diagnostics.py` -> `outputs/chaos/figures/`.
+Three devices: jc_jtwpa (31), ipm_2c_fixed (11), guarcello (87). Representative
+points are chosen by rule inside `DeviceSet.representatives` -- best-resolved
+floor point, D2 plateau closest to 1, smallest |K|, largest K -- never named per
+device, so adding a device changes no threshold.
 Every measured panel is paired with a synthetic reference whose answer is known
 in advance (periodic point, golden-mean rotation, Henon map):
 
@@ -921,3 +1113,469 @@ Listed so they are not re-derived.
   process table for the script name. The kill does not propagate to descendants,
   and relaunching gives two chains racing on one output directory.
 - No `R/Rn` value is a device property. Physical `R/Rn` at 15 mK is ~1e60.
+<!-- return-map section follows -->
+
+## 9. Return-map characterization suite (2026-08-17)
+
+Implemented in [return_map.py](/D:/Projects/Thesis/twpa_jax/scripts/chaos/return_map.py) and [plot_bifurcation.py](/D:/Projects/Thesis/twpa_jax/scripts/chaos/plot_bifurcation.py). The primary fixed coordinate is the within-period pair `(v(t_n), v(t_n + Delta))`; the strobe-to-strobe pair is retained as a secondary return map. The delay was selected with the existing `mutual_information_delay` helper on one median-control continuous trace per device, then frozen for that device.
+
+### Validation gate
+
+The gate passed before device analysis. The `validation` object in each [return-map JSON](/D:/Projects/Thesis/twpa_jax/outputs/chaos/return_map/) records:
+
+| Reference | Result |
+|---|---|
+| Fixed point | PASS; period-1, rotation gate OFF |
+| Exact period-2 | PASS; `q_min=2` |
+| Exact period-5 | PASS; `q_min=5` |
+| Golden-mean circle map | PASS; `rho=0.61803398`, torus |
+| Locked circle map `rho=2/5` | PASS; `q_min=5`, locked |
+| Henon map | PASS; no period, chaos |
+
+### Per-device descriptor tables
+
+The complete per-point tables, including every `mu`, are stored in the three JSON artifacts. The following table gives the measured ranges and representative transition points; `NOT_ESTABLISHED` is preserved in the JSON when the rotation gate is off.
+
+| Device | `mu` | `q_min` | `d_1` | `r_RMS` | `r_std/r_mean` | `rho` | `f_a` (Hz) | locking |
+|---|---:|---:|---:|---:|---:|---:|---:|---|
+| jc_jtwpa | -30.5 | 1 | 0.6364004 | 2.171984e-08 | 0.7970292 | 0.1148471 | 8.177113e+08 | UNLOCKED |
+| jc_jtwpa | -29.198117 | 8 | 0.7548811 | 1.214506e-05 | 0.2432436 | 0.8784777 | 6.254761e+09 | LOCKED |
+| jc_jtwpa | -27.4 | 27 | 1.177963 | 3.467150e-05 | 0.5258449 | 0.9869186 | 7.026861e+09 | LOCKED |
+| ipm_2c_fixed | 0.575 | 31 | 1.027151 | 9.663039e-09 | 0.5951743 | 0.9132009 | 7.214287e+09 | LOCKED |
+| ipm_2c_fixed | 0.6 | 11 | 0.4823064 | 2.091578e-05 | 0.4545475 | 0.9738007 | 7.693025e+09 | UNLOCKED |
+| ipm_2c_fixed | 0.625 | 1 | 0.4731940 | 3.329257e-05 | 0.4421118 | 0.9916038 | 7.833670e+09 | LOCKED |
+| guarcello | -70.0 | 2 | 0.0424614 | 5.111034e-09 | 0.6040251 | 0.0004774 | 3.341790e+06 | UNLOCKED |
+| guarcello | -53.8 | 31 | 1.796125 | 1.509994e-05 | 0.4105747 | 0.3554821 | 2.488375e+09 | UNLOCKED |
+| guarcello | -45.0 | 13 | 0.9362109 | 1.080090e-04 | 0.7538603 | 0.9842508 | 6.889755e+09 | LOCKED |
+
+The exact per-point table is the `points` array in [jc_jtwpa.json](/D:/Projects/Thesis/twpa_jax/outputs/chaos/return_map/jc_jtwpa.json), [ipm_2c_fixed.json](/D:/Projects/Thesis/twpa_jax/outputs/chaos/return_map/ipm_2c_fixed.json), and [guarcello.json](/D:/Projects/Thesis/twpa_jax/outputs/chaos/return_map/guarcello.json).
+
+### Geometric/spectral cross-check
+
+The comparison uses `second_generator.verdict = TORUS` from [lyapunov_kantz JSON](/D:/Projects/Thesis/twpa_jax/outputs/chaos/lyapunov_kantz/) and compares modulo `rho`, `1-rho`, and integer shifts. Per-point rows are in each return-map JSON.
+
+| Device | TORUS points | Best alias branch | Mean absolute difference | Maximum absolute difference |
+|---|---:|---|---:|---:|
+| jc_jtwpa | 19 | `1-rho` for all 19 | 0.0275881 | 0.0671108 |
+| ipm_2c_fixed | 9 | `1-rho` for all 9 | 0.0420643 | 0.0766902 |
+| guarcello | 19 | `rho` for 16; `1-rho` for 3 | 0.187758 | 0.496855 |
+
+The first two devices show branch-consistent agreement at some torus points but not uniformly. Guarcello has a substantial disagreement; it is not smoothed over.
+
+### Swept-figure conclusions
+
+The primary figures are [jc_jtwpa](/D:/Projects/Thesis/twpa_jax/outputs/chaos/figures_20260817/jc_jtwpa_sweep.png), [ipm_2c_fixed](/D:/Projects/Thesis/twpa_jax/outputs/chaos/figures_20260817/ipm_2c_fixed_sweep.png), and [guarcello](/D:/Projects/Thesis/twpa_jax/outputs/chaos/figures_20260817/guarcello_sweep.png). The scalar strobe shows continuous thickening near the `jc_jtwpa` and `ipm_2c_fixed` onsets. Guarcello shows a direct finite-band jump in the sampled power interval. These are figure-level classifications and do not establish the local normal form.
+
+Descriptor class counts from the final JSON are: `jc_jtwpa` = 4 torus, 36 chaos; `ipm_2c_fixed` = 16 chaos; `guarcello` = 77 chaos. No device point passed the empirically separated period-floor gate. The absence of period-1 and period-q labels is therefore a measured limitation of this scalar section, not an imputation from prior boundaries.
+
+### CORRECTION (2026-08-17, same day): two instrument defects invalidated
+### the section above; re-measured with `return-map-v3`
+
+The class counts and the "route not established" reading in the two paragraphs
+above are **withdrawn**. Both came from defects in the suite, not from the data.
+
+**Defect 1 -- the radius floor was set at machine epsilon.**
+`describe_section` used `radius_floor = eps * max|x|`, about `1e-20` here, while
+the strobe interpolation's actual floor is `~2e-4` *relative* to the section
+amplitude -- twelve orders of magnitude apart. Because `d_q` is normalised by
+the section's own spread, floor noise is indistinguishable from a chaotic
+scatter, so every quiescent point was classified `chaos`: **129 of 133 points
+across the three devices**, including `jc_jtwpa` at `-30.5` dBm, `ipm_2c_fixed`
+at `0.5750` and `guarcello` at `-70` dBm, all of which are period-1 to machine
+precision by `on_comb`, `K` and `D2`. The claim that "no device point passed the
+period-floor gate" was a property of the gate, not of the devices.
+
+Fixed with a relative floor, `STROBE_FLOOR_RELATIVE = 1.0e-3`, placed in a gap
+that is measured rather than assumed: the quiescent relative radius is
+`2.9e-4..7.0e-4` (`jc_jtwpa`), `2.2e-4..3.2e-4` (`ipm_2c_fixed`) and
+`1.8e-4..2.2e-4` (`guarcello`) -- a common floor across three physically
+different devices, as a numerical floor should be -- while the first point past
+each independently established onset jumps to `1.4e-3` and `1.9e-3`.
+
+The period-1 boundary then reproduces the onsets established by the independent
+instruments (0-1 test `K`, `D2`, spectral lattice coverage):
+
+| device | period-1 ends | first non-period-1 | established torus onset |
+| --- | ---: | ---: | ---: |
+| `jc_jtwpa` | -29.475 | **-29.450** | -29.444 |
+| `ipm_2c_fixed` | 0.5800 | **0.5850** | 0.5850 |
+| `guarcello` | -54.05 | **-54.000** | `<= -53.55` (a bound, not a value) |
+
+**Defect 2 -- the guarcello section coordinate was degenerate.** The AMI delay
+returned 7 samples on a trace oversampled at 622.5 samples per pump period, i.e.
+`Delta = 1.1%` of a period against `19.7%` and `28.1%` on the other two devices.
+`corr(z1, z2) = 0.99985` median, 45 of 77 points above `0.999` -- a line, not a
+plane. A degeneracy guard now rejects `|corr| > 0.99` and falls back to the
+quarter period.
+
+**The guard does not rescue guarcello, and that is itself the finding.** Scanned
+across delays from 5% to 50% of a period, `|corr|` never falls below `0.987`.
+Guarcello's stored `v_out` therefore admits **no** two-dimensional section at any
+delay: its stroboscopic variation is essentially pure amplitude modulation with
+no independent phase degree of freedom in this observable. Guarcello's `r_std /
+r_mean`, circle test and locking verdict are consequently not measurable from
+stored data, and the earlier "guarcello cross-check disagrees substantially"
+reading was an instrument reporting on a line.
+
+**The cross-check passes decisively, and the earlier aggregate hid it.** Averaging
+the geometric-versus-spectral difference over all points mixes the torus window
+with deep chaos, where `rho` is not defined. Taken at the points just past each
+onset, geometric `rho` from the return-map angle and the spectral generator ratio
+-- two fully independent routes -- agree to:
+
+| device | control | geometric `rho` | spectral `f_a/f_p` | difference |
+| --- | ---: | ---: | ---: | ---: |
+| `jc_jtwpa` | -29.1981 | 0.878478 | 0.121446 | **7.6e-05** |
+| `jc_jtwpa` | -29.0926 | 0.877935 | 0.121980 | 8.5e-05 |
+| `ipm_2c_fixed` | 0.5900 | 0.910782 | 0.092614 | 3.4e-03 |
+| `guarcello` | -53.9000 | 0.645786 | 0.354238 | **2.4e-05** |
+| `guarcello` | -54.0000 | 0.648864 | 0.351034 | 1.0e-04 |
+
+All match on the `1 - rho` branch, which is a sign and not an ambiguity: the
+return map winds backwards, so `rho_geo = 1 - f_a/f_p`. Five consecutive
+`jc_jtwpa` points hold `7.6e-5..2.4e-4` over a contiguous 0.14 dB band. Where the
+difference degrades to `2e-2..6e-2` the *spectral* estimator has jumped to an
+alias (`0.040289 ~= 0.121446 / 3`), not the geometry.
+
+**Closedness criterion replaced (`return-map-v4`).** The `torus` label used
+`r_std / r_mean <= 0.271`, calibrated on a round golden-mean circle map. A torus
+section reconstructed from a scalar delay pair is a closed *curve* -- generally
+an ellipse or Lissajous loop -- so a modest eccentricity failed a roundness test
+even on a perfectly good invariant circle. `jc_jtwpa`'s ratio moves smoothly
+`0.58 -> 1.16 -> 0.16` across its window; that is a shape changing, not a regime
+changing.
+
+`section_dimension` now tests closedness by D2 saturation on the strobe series
+(`nonlinear_diagnostics.correlation_dimension`, m = 2, 3, 4, delay 1, Theiler 2),
+which asks the right question: a fixed point gives 0, an invariant circle 1, a
+chaotic set more, and saturation across `m` separates a low-dimensional set from
+noise. Roundness is retained only as a fallback where D2 cannot be measured, so
+a torus is never claimed on the criterion known to be too strict.
+
+Thresholds set in measured gaps: golden-mean circle map gives `D2 = 1.032`,
+spread `0.0077`; Henon gives `D2 = 1.208`, spread `0.0993` (literature 1.22, so
+the estimator is sound). Saturation *spread* is the stronger discriminator -- a
+factor of 13 against 6 -- because an invariant circle has an exact integer
+dimension and must be `m`-independent, while a strange attractor's estimate
+drifts upward with `m`. Hence `D2_SATURATION_SPREAD = 0.05`,
+`D2_CIRCLE_TOLERANCE = 0.12`.
+
+Adding this test initially mislabelled Henon as a torus, and the validation
+harness passed anyway because the Henon case asserted only "no period found".
+The case now asserts the classification itself.
+
+A torus window is confirmed on two of three devices, in each case coinciding
+with the band where the independent `rho` cross-check agrees to `1e-4`:
+
+| device | torus points | D2 | matches `rho` band |
+| --- | --- | ---: | --- |
+| `jc_jtwpa` | -29.1981..-29.0926 | 1.113 | yes |
+| `guarcello` | -53.9500..-53.8000 | 1.051 | yes |
+| `ipm_2c_fixed` | none | `INSUFFICIENT_DATA` | not measurable |
+
+`guarcello` is included despite its degenerate 2-D section because D2 is
+computed on the scalar strobe series and does not need one. `ipm_2c_fixed`
+returns insufficient data rather than a negative: with ~1049 strobes the
+Eckmann-Ruelle bound `N > 10**D2` supports D2 only to about 3, and fewer than
+two of its three embedding dimensions yielded an estimate.
+
+**Net:** the period-1 -> torus route is corroborated, not refuted. The
+period-1 boundary is now reproduced independently on all three devices, and the
+auxiliary frequency is confirmed by two independent measurements to `1e-4`. What
+this suite does **not** establish is the local normal form, or the torus label
+itself on `ipm_2c_fixed` and `guarcello`.
+
+### Successive-maxima map, movie, and common-scale overlay (`return-map-v6`)
+
+Three additions, all from data already on disk.
+
+**Successive-maxima return map (`successive_maxima`).** `a_{n+1}` against `a_n`
+over local maxima of the continuous trace. This samples the trajectory wherever
+the output peaks instead of once per pump period, so it touches **none** of the
+strobe timebase -- and therefore none of the timebase defects that have bitten
+this campaign twice. It reproduces the route independently on `jc_jtwpa`:
+
+| regime | figure |
+| --- | --- |
+| period-1 (-30.5 dBm) | exactly 3 discrete points (the pump waveform has 3 local maxima per period, so a period-1 orbit is a 3-cycle in the maxima sequence) |
+| torus (-29.1981) | those 3 points opened into 6 clean arcs |
+| chaos (-29.0574) | the same arcs blurred into clouds with visible folds |
+
+**Its scalar statistic is not a discriminant, and should not be quoted.**
+`relative_spread` first normalised by the mean, which is near zero because these
+are maxima of an oscillating waveform that include negative peaks; that gave
+2.00 / 1.66 / 1.77 for period-1 / torus / chaos, i.e. a number dominated by how
+close the mean came to zero. Renormalised to half the peak-to-peak range it is
+at least bounded, but still reads 0.862 / 0.708 / 0.340 -- period-1 **above**
+chaos, because a period-1 orbit's three maxima span the whole waveform by
+construction. The figure discriminates; no single scalar tried here does.
+
+**Common-scale overlay (`*_return_maps_common_scale.png`).** The per-regime
+return-map panels each autoscale, which drew a floor-level point and a chaotic
+cloud at the same apparent size. The overlay puts all three representatives on
+one pair of linear axes plus a log-radius view. The regimes are separated by
+three to four orders of magnitude in radius:
+
+| device | period-1 | torus | chaos |
+| --- | ---: | ---: | ---: |
+| `jc_jtwpa` | ~1e-8 | ~1.3e-5 | ~1.7e-5 |
+| `guarcello` | ~1e-8 | ~1e-5 | ~1e-4 |
+
+The overlay also shows visually what `|corr| = 0.998` meant on `guarcello`: its
+torus is a closed curve collapsed to a thin sliver in this observable. D2 = 1.05
+still identified it correctly, because D2 is computed on the strobe series and
+does not need the two-dimensional section.
+
+**Section movie (`--animate`, `*_section_movie.gif`).** Frames sweep the control
+axis with the axis limits computed once over every point and then held, so motion
+is the attractor changing and never the view rescaling. Off by default: the 3-D
+parameterized figure carries the same information statically, and this exists for
+presentation.
+
+### Quantities not computable from stored data
+
+Each `trace.npz` contains only `t` and `v_out`. These were deliberately not estimated:
+
+- Global state-space PCA and effective linear dimension `N_99`: rerun FDTD while recording the full state once per pump period, then perform one global PCA.
+- Per-node sigma: the same full-state FDTD rerun is required.
+- Participation ratio: the same full-state FDTD rerun is required.
+- Tangent-space largest Lyapunov exponent: rerun with access to the integrator kernel and state, propagating the Jacobian tangent. The existing trace-based [lyapunov_kantz.py](/D:/Projects/Thesis/twpa_jax/scripts/chaos/lyapunov_kantz.py) remains the only lambda source used here.
+
+### 2c K=5 HB/torus scaling ladder and Inosuisse cross-check (2026-08-17)
+
+The guarded first-pass ladder is implemented in
+[benchmark_torus_scaling.py](/D:/Projects/Thesis/twpa_jax/scripts/benchmark_torus_scaling.py).
+Each method ran in a fresh child process with atomic artifacts and Windows
+working-set/CPU telemetry. The first pass used K=5, not the production K=10
+basis. The 2c case used `designs/ipm_2c_fixed`, 7.9 GHz, pump port 4,
+requested pump power -25 dBm, `legacy_traveling_wave`, and a null attenuation
+override, as required by
+[high_power_2c_single_column_context.md](/D:/Projects/Thesis/twpa_jax/docs/development/high_power_2c_single_column_context.md).
+
+For 2c, the original period-1 HB solve converged with coefficient residual
+`4.684906446280008e-12`, 12 Newton iterations, and 242 GMRES iterations. Its
+child wall time was `4.512435` s and peak working set was `0.153236` GiB.
+The K=5 torus solve through Schur/PARDISO converged in one iteration, but the
+`q != 0` norm fraction was `9.205732373031188e-19`; it therefore returned to
+period-1 and did not establish a torus. Its child wall time was `8.016950` s
+and peak working set was `0.983555` GiB. These values are from the atomic
+[2c ladder summary](/D:/tmp/torus_scaling_20260817_r2/ipm_2c_fixed_minus25dbm/summary.json).
+
+The closest retained Inosuisse map row at the same frequency region is
+`point_index=296`: pump power `-24.89655172413793` dBm and pump frequency
+`7.896551724136667` GHz. It is marked `PASS`, with pump current
+`6.203032333817978e-06` A, pump coefficient residual
+`1.7624281695016535e-13`, and maximum junction current
+`1.4112140525324067e-06` A. The row is in
+[map_points.csv](/D:/Projects/Thesis/twpa_jax/outputs/Inosuisse/2c_reg/map_points.csv);
+the map-wide A10/null-override policy is recorded in
+[map_summary.json](/D:/Projects/Thesis/twpa_jax/outputs/Inosuisse/2c_reg/map_summary.json).
+
+The benchmark waveform reconstruction gives maximum junction current
+`1.4013171511091051e-06` A at branch index 1255 and utilization
+`0.527560136906335`; the reconstruction used the benchmark
+[pump_solution.npz](/D:/tmp/torus_scaling_20260817_r2/ipm_2c_fixed_minus25dbm/pump/pump_solution.npz)
+and the circuit matrices under `designs/ipm_2c_fixed`. The two current values
+are close: the map row is only `0.7013` percent higher. This is a branch/current
+cross-check, not a basis-equivalence result: the retained map pump solution
+files are absent from the current checkout, so its harmonic-basis metadata
+cannot be independently verified from `map_points.csv`.
+
+The -25 dBm point is therefore a converged K=5 HB below-window
+performance/control point, not the next torus target. It is not independently
+TD-validated or gain-valid under the context document. Its junction-current
+profile is numerically consistent with the map's smooth low-utilization
+period-1 branch. No physical 2c torus has been established by this run.
+
+#### Prior next step (executed below)
+
+Run the production-basis 2c case at the documented mid-window control
+`I/I_bound=0.6050`, using the existing converged pump seed at
+`.hybrid_outputs/period1_recovery_7p9_2c_v1/point_-23.800000/pump`. Use K=10
+(`1,3,...,19`), Q=1, Schur, `real_coupled_fast`, float64, PARDISO, and one
+fresh process per point. Record the full residual, omitted-mode residual,
+maximum junction utilization with index, and RSS/CPU telemetry.
+
+Then run the torus solve at that mid-window point with seed amplitudes spanning
+at least three decades. Apply the documented below-window control
+`I/I_bound=0.5745` before accepting any positive off-comb result, followed by
+the near-onset point `I/I_bound=0.5912`. The required gate remains: converged
+production residual, positive generator frequency, and non-zero `q=+/-1`
+content. If the mid-window K=10 result again collapses to the numerical floor,
+the finding is `NOT_ESTABLISHED`, not evidence that the K=5 -25 dBm control
+failed physically. Only after a valid K=10 torus is obtained should continuation
+through the documented window begin.
+
+### K=10 five-point solver ladder (2026-08-17)
+
+The requested K=10 ladder was completed for five points, using one fresh child
+process for the original period-1 HB solve and one for the autonomous torus
+solve at each point. The complete atomic results, including wall time, CPU
+seconds, peak RSS, residual histories, and q-sector fractions, are in
+[ladder_summary.json](/D:/tmp/torus_scaling_20260817_k10/ladder_summary.json).
+The original benchmark HB used the existing mean-tangent Newton/Krylov path;
+the torus path used PARDISO, with Schur reduction for both 2c cases. The 2c
+cases left attenuation unset, so the default A10 model was used.
+
+| case | original HB wall / RSS | torus HB wall / RSS | torus residual | q=+/-1 fraction |
+| --- | ---: | ---: | ---: | ---: |
+| uniform 418 JJ | 2.009 s / 0.130 GiB | 2.009 s / 0.129 GiB | 2.41e-10 | 3.67e-6 |
+| uniform 4x418 JJ | 2.009 s / 0.145 GiB | 2.008 s / 0.163 GiB | 4.81e-10 | 3.67e-6 |
+| jc_jtwpa | 2.008 s / 0.161 GiB | 11.520 s / 2.526 GiB | 1.63e-12 | 1.66e-9 |
+| ipm_2c_fixed, -25 dBm | 6.013 s / 0.173 GiB | 16.530 s / 3.131 GiB | 5.62e-20 | 2.63e-20 |
+| ipm_2c_fixed, -23.8 dBm | 8.018 s / 0.180 GiB | 16.531 s / 3.132 GiB | 5.89e-20 | 1.12e-18 |
+
+The residuals are numerical convergence results only. The jc_jtwpa and both
+2c torus attempts collapsed to period-1, as shown by q=+/-1 fractions at the
+floor. The uniform-circuit fractions are the retained initial perturbation,
+not evidence of a nonlinear torus. The runner accepted the first numerical
+convergence and therefore did not complete the intended three-decade seed
+sweep. A physical torus is consequently **NOT_ESTABLISHED** by this ladder.
+
+#### Corrected next step
+
+Change the torus acceptance gate so that a small q=+/-1 fraction cannot be
+accepted as a torus merely because the residual is small. For the two 2c K=10
+points, force the full seed-amplitude sweep and record every attempt. Use the
+documented mid-window point (-23.8 dBm) first, then apply -25 dBm as the
+below-window control. The control must remain at the q-sector floor before any
+positive sideband result is treated as physical. If all amplitudes return to
+period-1, report **NOT_ESTABLISHED** and do not start continuation.
+
+### K=10 q-sector gate rerun (2026-08-17)
+
+The q-sector acceptance gate was implemented in
+[run_torus_branch.py](/D:/Projects/Thesis/twpa_jax/scripts/run_torus_branch.py).
+For the 2c cases, a torus is accepted only when Newton converges and the
+q=+/-1 norm fraction is at least `1e-8`. The threshold is an operational gate,
+chosen above the completed ladder's period-1 floors; it is not a claim about a
+minimum physical torus amplitude.
+
+The rerun used K=10, Q=1, Schur/PARDISO, default A10 attenuation, and recorded
+all three seed amplitudes at each point. Results are in the atomic
+[gate rerun summary](/D:/tmp/torus_scaling_20260817_gate_rerun/ladder_summary.json).
+
+| point | seed amplitude | Newton converged | q=+/-1 fraction | gate |
+| --- | ---: | ---: | ---: | --- |
+| -25 dBm | 1e-6 | yes | 2.63e-20 | rejected |
+| -25 dBm | 1e-5 | yes | 1.54e-17 | rejected |
+| -25 dBm | 1e-4 | yes | 1.26e-16 | rejected |
+| -23.8 dBm | 1e-6 | yes | 1.12e-18 | rejected |
+| -23.8 dBm | 1e-5 | yes | 9.31e-19 | rejected |
+| -23.8 dBm | 1e-4 | yes | 8.15e-18 | rejected |
+
+The final residuals were `6.72e-20` at -25 dBm and `5.87e-20` at -23.8 dBm,
+but both points had `physical_torus_gate_passed=false`. The torus is therefore
+**NOT_ESTABLISHED** at either requested power. The corresponding torus child
+peak RSS values were `3.25 GiB` and `3.25 GiB`; no memory guard fired.
+
+The gate mutation check used a synthetic converged zero-sideband state. With
+the `1e-8` threshold it rejected the state after all three attempts; with the
+deliberate threshold mutation to `0`, it accepted the first attempt. This
+demonstrates that the gate is active rather than merely reported.
+
+#### Next step after the gate rerun
+
+Do not continue the current K=10 branch: neither 2c point produced a physical
+torus. The next useful solver experiment is a different seed source, such as
+the measured/Floquet sideband direction, while retaining the same q-sector
+acceptance gate and the -25 dBm negative control. If that seed also collapses
+to period-1, the solver result remains **NOT_ESTABLISHED** rather than a basis
+or residual failure.
+
+Tracker status: the gate implementation, deliberate mutation check, complete
+2c rerun, and focused verification are finished. No continuation was launched,
+and no file under `src/twpa_solver/` was modified.
+
+
+### Torus amplitude campaign 2026-08-17
+
+The unattended amplitude-parameterized campaign was launched from `D:\Projects\Thesis\twpa_jax\outputs\chaos\torus_campaign_20260817`. Its atomic per-point results and preflight telemetry are the source of truth; incomplete stages remain `NOT_ESTABLISHED`.
+
+- Preflight summary: `D:\Projects\Thesis\twpa_jax\outputs\chaos\torus_campaign_20260817\preflight\summary.json`.
+- Campaign summary: `D:\Projects\Thesis\twpa_jax\outputs\chaos\torus_campaign_20260817\campaign_summary.json`.
+- Physical torus acceptance remains the non-zero q-sector and converged residual gate; numerical period-1 roots are not reported as torus branches.
+
+### Overnight torus campaign 2026-08-17: post-mortem, five faults, zero physics
+
+The campaign ran 8 minutes and produced **no usable measurement**. Recorded so
+none of these is repeated.
+
+**1. The Stage A abort gate was not honoured.** Both device smokes returned
+process code `2` (`smoke2.json`, `smoke3.json`: `converged: false`) and the
+campaign proceeded to run stages B through G anyway. The specification made
+Stage A a hard abort. Every later stage then failed in seconds, which is why 8
+hours collapsed into 8 minutes.
+
+**2. The amplitude ladder was 4 to 5 orders of magnitude too small.** The
+ladder swept `A_rel` over `1e-6 .. 1e-2`. The measured torus at the primary
+artifact (`I/I_bound = 0.6050`) has `relative_radius = 3.213e-1`
+(`outputs/chaos/return_map/ipm_2c_fixed.json`). At `A_rel = 1e-5` the absolute
+amplitude is `7.3e-19` against a pump of `~1e-13`, i.e. **below the residual
+noise floor**, so `dR/domega_a` was pure roundoff. Any future ladder must be
+sized from the measured `relative_radius` column, not guessed.
+
+**3. The `(X, omega_a, source_tau)` amplitude formulation is structurally
+ill-posed.** Measured at the 2c artifact, `A_rel = 0.15`:
+
+| quantity | value |
+| --- | ---: |
+| `\|\|dR/domega_a\|\|` | 5.932e-16 |
+| `\|\|dR/dtau\|\|` | 3.518e-06 |
+| 2x2 closure entries | `1e-27 .. 1e-31` |
+| `delta_tau` | 6.909e+15 |
+| `\|\|step\|\| / \|\|state\|\|` | 2.254e+16 |
+
+Two separate defects. The first is a **scaling** defect of exactly the kind
+`solve_arclength` already had: the unknowns span twenty-two orders of magnitude
+(node flux `~1e-13` Wb, `source_tau ~1`, `omega_a ~5e9` rad/s) and the closure
+mixed them unscaled. Fixed in `multitone/torus.py` by nondimensionalizing the
+2x2 (`omega_scale = omega_p`, `tau_scale`, `state_scale`) plus a trust region
+(`max_step_over_state`, default 2.0).
+
+The second defect survives that fix and is **structural**: `source_tau` has
+almost no leverage on the two constraint rows. Both the phase anchor and the
+amplitude normalization live in the `q != 0` sector, and the drive enters that
+sector only by modulating the Hill operator, which is second order in the
+perturbation -- measured, `tau`'s effect on the constraint rows is `~1e5`
+smaller than `omega_a`'s. The 2x2 is therefore near-singular at any scaling.
+**Do not pair the amplitude and anchor constraints with the drive.**
+
+**4. The Stage B spectrum scan computed nothing.** All 120 jtwpa rows returned
+`NotImplementedError: rmatvec is not defined` -- `scipy.sparse.linalg.svds` was
+called on a `LinearOperator` with no adjoint. `pump/singularity.py::
+jacobian_min_eigenvalue` already solves this problem with shift-invert Arnoldi
+around the factored preconditioner and needs no `rmatvec`. Reuse it.
+
+**5. Stage B crashed on all three 2c cases**: `could not broadcast (6136,)
+into (2518,)` -- the full-node pump state was promoted into a Schur-reduced
+basis without restricting to `partition.retained`.
+
+### What the corrected scan then showed
+
+Rerun through `jacobian_min_eigenvalue_with_estimator` (estimator
+`shift_invert`, no failures), jtwpa at `-29.40` dBm, `omega_a/omega_p` from
+0.06 to 0.16:
+
+```text
+0.06 -5.906e+04   0.09 -7.754e+04   0.12 -8.754e+04   0.15 -8.887e+04
+0.07 -2.181e+04   0.10 -1.501e+04   0.13 +8.710e+02   0.16 +2.607e+04
+0.08 +3.524e+04   0.11 +6.852e+04   0.14 +1.117e+05
+```
+
+Sign-flipping and unstructured, with **no dip at the measured 0.1217**. This is
+Arnoldi returning a different member of a dense eigenvalue cluster at each
+point, the same failure already recorded for the blind Hill scan on these
+circuits. **A blind sweep over `omega_a` does not locate the Neimark-Sacker
+condition.** The instrument needs branch tracking from a known-stable drive,
+which is what `stability/tracking.py` exists for and what the plan already
+specified for the Hill route; the campaign scan skipped it.
+
+### Standing conclusion
+
+The torus solver still has no device result. The credible remaining route is
+branch switching: track the critical eigenvalue from a known-stable drive,
+take its eigenvector at the crossing, seed `solve_newton` (fixed drive, phase
+anchor) with it at an amplitude taken from the measured `relative_radius`, and
+continue upward. The amplitude-parameterized closure is not a substitute for
+that, because its extra parameter has no leverage on its extra constraints.
