@@ -165,8 +165,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--max-newton", type=int, default=20)
     parser.add_argument("--residual-tol", type=float, default=1.0e-9)
     parser.add_argument("--branch-step", type=float, default=1.0e-2)
+    parser.add_argument("--gmres-rtol", type=float, default=1.0e-8)
     parser.add_argument("--gmres-maxiter", type=int, default=240)
     parser.add_argument("--gmres-restart", type=int, default=80)
+    parser.add_argument(
+        "--linear-debug",
+        action="store_true",
+        help="Record augmented JVP, border, and GMRES diagnostics.",
+    )
+    parser.add_argument("--linear-debug-fd-step", type=float, default=1.0e-6)
     parser.add_argument("--node-ref", type=int, default=0)
     return parser.parse_args(argv)
 
@@ -335,8 +342,11 @@ def _solve_branch(
                 step_size=args.branch_step,
                 max_newton=args.max_newton,
                 residual_tol=args.residual_tol,
+                gmres_rtol=args.gmres_rtol,
                 gmres_maxiter=args.gmres_maxiter,
                 gmres_restart=args.gmres_restart,
+                linear_debug=args.linear_debug,
+                linear_debug_fd_step=args.linear_debug_fd_step,
             )
         )
         route = "floquet_branch_switch"

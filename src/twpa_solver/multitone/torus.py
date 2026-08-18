@@ -25,6 +25,37 @@ from twpa_solver.pump.problem import pack_complex, unpack_complex
 from twpa_solver.pump.solver import bordered_solve_refined
 
 
+def apply_border_aware_preconditioner(
+    state_solve: Callable[[np.ndarray], np.ndarray],
+    state_rhs: np.ndarray,
+    border_rhs: np.ndarray,
+    border_columns: np.ndarray,
+    constraint_rows: np.ndarray,
+    border_matrix: np.ndarray,
+) -> np.ndarray:
+    """Apply an exact two-row bordered preconditioner.
+
+    ``state_solve`` may be an approximate solve.  The two scalar unknowns are
+    eliminated through the Schur complement of that approximate state block.
+    Keeping this operation separate makes the bordered algebra testable with a
+    dense state solve before it is used by matrix-free GMRES.
+    """
+    rhs = np.asarray(state_rhs, dtype=float)
+    border = np.asarray(border_rhs, dtype=float).reshape(2)
+    columns = np.asarray(border_columns, dtype=float)
+    rows = np.asarray(constraint_rows, dtype=float)
+    small = np.asarray(border_matrix, dtype=float).reshape(2, 2)
+    y = np.asarray(state_solve(rhs), dtype=float)
+    solved_columns = np.column_stack(
+        [np.asarray(state_solve(columns[:, index]), dtype=float)
+         for index in range(2)]
+    )
+    schur = small - rows @ solved_columns
+    scalars = np.linalg.solve(schur, border - rows @ y)
+    state = y - solved_columns @ scalars
+    return np.concatenate((state, scalars))
+
+
 @dataclass
 class TorusProblem:
     """Wrap a multitone problem with the unknown generator frequency.
@@ -797,6 +828,8 @@ class TorusProblem:
         gmres_rtol: float = 1.0e-8,
         gmres_maxiter: int = 80,
         gmres_restart: int = 60,
+        linear_debug: bool = False,
+        linear_debug_fd_step: float = 1.0e-6,
     ) -> tuple[np.ndarray, float, float, dict[str, Any], np.ndarray | None]:
         """Correct one torus point with a matrix-free PALC system.
 
@@ -813,6 +846,8 @@ class TorusProblem:
         """
         if step_size <= 0.0:
             raise ValueError("step_size must be positive")
+        if linear_debug_fd_step <= 0.0:
+            raise ValueError("linear_debug_fd_step must be positive")
         X = np.asarray(X0, dtype=np.complex128).copy()
         previous = np.asarray(previous_X, dtype=np.complex128)
         if X.shape != previous.shape:
@@ -849,6 +884,7 @@ class TorusProblem:
         history: list[float] = []
         gmres_history: list[float] = []
         factor_backends: list[str] = []
+        linear_debug_report: dict[str, Any] | None = None
 
         def evaluate(
             state: np.ndarray, frequency: float, source_tau: float
@@ -882,6 +918,14 @@ class TorusProblem:
                 arclength,
             )
 
+        def residual_from_evaluation(
+            data: tuple[Any, np.ndarray, float, np.ndarray, float, float],
+        ) -> np.ndarray:
+            return np.concatenate((
+                pack_complex(data[1]) / data[2],
+                np.asarray([data[4], data[5]]),
+            ))
+
         for iteration in range(max_newton + 1):
             (
                 current,
@@ -891,9 +935,13 @@ class TorusProblem:
                 phase_value,
                 arclength,
             ) = evaluate(X, omega, tau)
-            residual = np.concatenate((
-                pack_complex(coefficients) / residual_scale,
-                np.asarray([phase_value, arclength]),
+            residual = residual_from_evaluation((
+                current,
+                coefficients,
+                residual_scale,
+                phase_row,
+                phase_value,
+                arclength,
             ))
             norm = float(np.linalg.norm(residual) / np.sqrt(residual.size))
             history.append(norm)
@@ -917,6 +965,7 @@ class TorusProblem:
                     "source_tau": tau,
                     "arclength_step": step_size,
                     "phase_constraint": phase_value,
+                    "linear_debug": linear_debug_report,
                 }, new_tangent
             if iteration == max_newton:
                 break
@@ -936,23 +985,43 @@ class TorusProblem:
                 pack_complex(plus_problem.residual_coeffs(X, tau))
                 - pack_complex(minus_problem.residual_coeffs(X, tau))
             ) / (2.0 * omega_step)
-            b_tau = -pack_complex(
+            b_tau_raw = -pack_complex(
                 current.full_problem().source_delta_coeffs()
             )
+            tau_fd_step = current.omega_fd_relative_step * max(abs(tau), 1.0)
+            plus_tau_problem = replace(
+                current, source_tau=tau + tau_fd_step
+            ).full_problem()
+            minus_tau_problem = replace(
+                current, source_tau=tau - tau_fd_step
+            ).full_problem()
+            plus_source = pack_complex(
+                plus_tau_problem.source_coeffs(tau + tau_fd_step)
+            )
+            minus_source = pack_complex(
+                minus_tau_problem.source_coeffs(tau - tau_fd_step)
+            )
+            residual_scale_tau = (
+                float(np.linalg.norm(plus_source))
+                - float(np.linalg.norm(minus_source))
+            ) / (2.0 * tau_fd_step * max(np.sqrt(plus_source.size), 1.0))
+            coefficient_vector = pack_complex(coefficients)
+            b_tau = (
+                b_tau_raw * residual_scale
+                - coefficient_vector * residual_scale_tau
+            ) / residual_scale**2
 
             def augmented_matvec(vector: np.ndarray) -> np.ndarray:
                 delta_state = vector[:state_size]
                 delta_omega = vector[state_size]
                 delta_tau = vector[state_size + 1]
+                physical_delta_state = delta_state * state_scale
                 state_part = (
-                    matvec(delta_state)
+                    matvec(physical_delta_state)
                     + b_omega * omega_scale * delta_omega
-                    + b_tau * tau_scale * delta_tau
-                ) / residual_scale
-                phase_part = float(phase_row @ delta_state)
-                tangent_state = float(
-                    tangent_value[:state_size] @ (delta_state / state_scale)
-                )
+                ) / residual_scale + b_tau * tau_scale * delta_tau
+                phase_part = float(phase_row @ physical_delta_state)
+                tangent_state = float(tangent_value[:state_size] @ delta_state)
                 arclength_part = (
                     tangent_state
                     + tangent_value[state_size] * delta_omega
@@ -963,13 +1032,162 @@ class TorusProblem:
                     np.asarray([phase_part, arclength_part]),
                 ))
 
-            def augmented_preconditioner(vector: np.ndarray) -> np.ndarray:
-                result = np.zeros_like(vector)
-                result[:state_size] = residual_scale * preconditioner.solve(
-                    vector[:state_size]
+            border_columns = np.column_stack((
+                b_omega * omega_scale / residual_scale,
+                b_tau * tau_scale,
+            ))
+            constraint_rows = np.vstack((
+                phase_row * state_scale,
+                tangent_value[:state_size],
+            ))
+            border_matrix = np.array(
+                [
+                    [0.0, 0.0],
+                    [
+                        tangent_value[state_size],
+                        tangent_value[state_size + 1],
+                    ],
+                ],
+                dtype=float,
+            )
+
+            def state_preconditioner_solve(vector: np.ndarray) -> np.ndarray:
+                physical = residual_scale * np.asarray(
+                    preconditioner.solve(vector), dtype=float
                 )
-                result[state_size:] = vector[state_size:]
-                return result
+                return physical / state_scale
+
+            preconditioned_columns = np.column_stack(
+                [state_preconditioner_solve(border_columns[:, index])
+                 for index in range(2)]
+            )
+            border_schur = border_matrix - constraint_rows @ (
+                preconditioned_columns
+            )
+            border_schur_condition = float(np.linalg.cond(border_schur))
+
+            def augmented_preconditioner(vector: np.ndarray) -> np.ndarray:
+                state_result = state_preconditioner_solve(vector[:state_size])
+                scalar_rhs = (
+                    vector[state_size:] - constraint_rows @ state_result
+                )
+                scalars = np.linalg.solve(border_schur, scalar_rhs)
+                return np.concatenate((
+                    state_result - preconditioned_columns @ scalars,
+                    scalars,
+                ))
+
+            if linear_debug and linear_debug_report is None:
+                rng = np.random.default_rng(0)
+                critical = np.zeros_like(pack_complex(X))
+                if phase_reference is not None:
+                    critical = pack_complex(phase_reference)
+                phase_mode = np.zeros_like(X)
+                for index, tone in enumerate(self.basis.tones):
+                    if tone.q != 0:
+                        phase_mode[index] = 1j * tone.q * X[index]
+
+                def normalized_direction(
+                    state_direction: np.ndarray,
+                    omega_direction: float = 0.0,
+                    tau_direction: float = 0.0,
+                ) -> np.ndarray:
+                    direction = np.concatenate((
+                        pack_complex(state_direction) / state_scale,
+                        np.asarray([omega_direction, tau_direction]),
+                    ))
+                    return direction / max(float(np.linalg.norm(direction)), 1e-300)
+
+                random_state = unpack_complex(
+                    rng.normal(size=state_size), X.shape
+                )
+                directions = {
+                    "random": normalized_direction(random_state),
+                    "critical_mode": normalized_direction(
+                        unpack_complex(critical, X.shape)
+                    ),
+                    "phase_mode": normalized_direction(phase_mode),
+                    "pure_omega": normalized_direction(
+                        np.zeros_like(X), 1.0, 0.0
+                    ),
+                    "pure_tau": normalized_direction(
+                        np.zeros_like(X), 0.0, 1.0
+                    ),
+                }
+
+                def augmented_residual_at(
+                    state: np.ndarray,
+                    frequency: float,
+                    source_tau: float,
+                ) -> np.ndarray:
+                    return residual_from_evaluation(
+                        evaluate(state, frequency, source_tau)
+                    )
+
+                finite_difference_errors: dict[str, float] = {}
+                for name, direction in directions.items():
+                    state_delta = unpack_complex(
+                        direction[:state_size] * state_scale, X.shape
+                    )
+                    frequency_delta = direction[state_size] * omega_scale
+                    tau_delta = direction[state_size + 1] * tau_scale
+                    trial = augmented_residual_at(
+                        X + linear_debug_fd_step * state_delta,
+                        omega + linear_debug_fd_step * frequency_delta,
+                        tau + linear_debug_fd_step * tau_delta,
+                    )
+                    finite_difference = (trial - residual) / linear_debug_fd_step
+                    analytic = augmented_matvec(direction)
+                    finite_difference_errors[name] = float(
+                        np.linalg.norm(finite_difference - analytic)
+                        / max(np.linalg.norm(analytic), 1e-30)
+                    )
+
+                critical_norm = max(float(np.linalg.norm(critical)), 1e-300)
+                phase_packed = pack_complex(phase_mode)
+                phase_norm = max(float(np.linalg.norm(phase_packed)), 1e-300)
+                linear_debug_report = {
+                    "residual_coeff_norm": float(
+                        np.linalg.norm(pack_complex(coefficients))
+                    ),
+                    "residual_norm": norm,
+                    "omega_column_norm": float(
+                        np.linalg.norm(b_omega * omega_scale)
+                    ),
+                    "tau_column_norm": float(
+                        np.linalg.norm(b_tau * tau_scale)
+                    ),
+                    "phase_row_norm": float(np.linalg.norm(phase_row)),
+                    "tangent_state_row_norm": float(
+                        np.linalg.norm(tangent_value[:state_size])
+                    ),
+                    "j_critical_mode_norm": float(
+                        np.linalg.norm(matvec(critical)) / critical_norm
+                    ),
+                    "j_phase_mode_norm": float(
+                        np.linalg.norm(matvec(phase_packed)) / phase_norm
+                    ),
+                    "phase_on_critical": float(phase_row @ critical),
+                    "phase_on_phase_mode": float(phase_row @ phase_packed),
+                    "tangent_on_critical": float(
+                        tangent_value[:state_size] @ (critical / state_scale)
+                    ),
+                    "tangent_on_phase_mode": float(
+                        tangent_value[:state_size] @ (phase_packed / state_scale)
+                    ),
+                    "pure_omega_action_norm": float(
+                        np.linalg.norm(augmented_matvec(directions["pure_omega"]))
+                    ),
+                    "pure_tau_action_norm": float(
+                        np.linalg.norm(augmented_matvec(directions["pure_tau"]))
+                    ),
+                    "finite_difference_relative_errors": finite_difference_errors,
+                    "border_schur_matrix": border_schur.tolist(),
+                    "border_schur_condition": border_schur_condition,
+                    "state_scale": state_scale,
+                    "omega_scale": omega_scale,
+                    "tau_scale": tau_scale,
+                }
 
             operator = spla.LinearOperator(
                 shape=(state_size + 2, state_size + 2),
@@ -1013,15 +1231,20 @@ class TorusProblem:
                     "gmres_residual_history": gmres_history,
                     "gmres_info": int(gmres_info),
                     "factor_backend": factor_backends,
+                    "linear_debug": linear_debug_report,
+                    "border_schur_matrix": border_schur.tolist(),
+                    "border_schur_condition": border_schur_condition,
                     "failure_reason": "augmented GMRES failed",
                 }, None
 
             state_step = update[:state_size]
-            step_norm = float(np.linalg.norm(state_step))
+            step_norm = float(np.linalg.norm(state_step) * state_scale)
             max_step = self.max_step_over_state * state_scale
             if step_norm > max_step:
                 update = update * (max_step / step_norm)
-            delta_state = unpack_complex(update[:state_size], X.shape)
+            delta_state = unpack_complex(
+                update[:state_size] * state_scale, X.shape
+            )
             delta_omega = float(update[state_size] * omega_scale)
             delta_tau = float(update[state_size + 1] * tau_scale)
             alpha = 1.0
@@ -1054,6 +1277,9 @@ class TorusProblem:
                     "residual_history": history,
                     "gmres_residual_history": gmres_history,
                     "factor_backend": factor_backends,
+                    "linear_debug": linear_debug_report,
+                    "border_schur_matrix": border_schur.tolist(),
+                    "border_schur_condition": border_schur_condition,
                     "failure_reason": "line search failed",
                 }, None
 
@@ -1064,6 +1290,7 @@ class TorusProblem:
             "residual_history": history,
             "gmres_residual_history": gmres_history,
             "factor_backend": factor_backends,
+            "linear_debug": linear_debug_report,
             "failure_reason": "maximum Newton iterations reached",
         }, None
 

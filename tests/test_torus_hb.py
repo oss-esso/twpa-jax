@@ -11,7 +11,10 @@ from twpa_solver.multitone.basis import (
 from twpa_solver.multitone.problem import FullMultiToneProblem
 from twpa_solver.multitone.schur import build_multitone_schur_problem
 from twpa_solver.multitone.source import AffineSourcePath, MultiToneDrive
-from twpa_solver.multitone.torus import TorusProblem
+from twpa_solver.multitone.torus import (
+    TorusProblem,
+    apply_border_aware_preconditioner,
+)
 from twpa_solver.pump.solver import bordered_solve_refined
 from twpa_solver.signal.stability import audit_loss_convention
 
@@ -177,6 +180,49 @@ def test_torus_bordered_step_matches_dense_reference() -> None:
 
     assert result is not None
     actual = np.concatenate((result[0], np.asarray([result[1]])))
+    np.testing.assert_allclose(actual, expected, rtol=1.0e-10, atol=1.0e-10)
+
+
+def test_border_aware_preconditioner_matches_dense_solve() -> None:
+    state_matrix = np.array(
+        [
+            [3.0, 0.2, -0.1],
+            [0.4, 2.0, 0.3],
+            [0.0, -0.2, 1.5],
+        ]
+    )
+    border_columns = np.array(
+        [
+            [0.4, -0.2],
+            [-0.3, 0.5],
+            [0.2, 0.1],
+        ]
+    )
+    constraint_rows = np.array(
+        [
+            [0.1, -0.6, 0.5],
+            [0.2, 0.3, -0.4],
+        ]
+    )
+    border_matrix = np.array([[0.0, 0.0], [0.7, -0.1]])
+    rhs = np.array([0.8, -0.4, 0.2, 0.1, -0.3])
+    expected_matrix = np.block(
+        [
+            [state_matrix, border_columns],
+            [constraint_rows, border_matrix],
+        ]
+    )
+    expected = np.linalg.solve(expected_matrix, rhs)
+
+    actual = apply_border_aware_preconditioner(
+        lambda value: np.linalg.solve(state_matrix, value),
+        rhs[:3],
+        rhs[3:],
+        border_columns,
+        constraint_rows,
+        border_matrix,
+    )
+
     np.testing.assert_allclose(actual, expected, rtol=1.0e-10, atol=1.0e-10)
 
 

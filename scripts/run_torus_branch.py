@@ -89,6 +89,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--gmres-maxiter", type=int, default=240)
     parser.add_argument("--gmres-restart", type=int, default=80)
     parser.add_argument(
+        "--linear-debug",
+        action="store_true",
+        help="Record augmented JVP, border, and GMRES diagnostics.",
+    )
+    parser.add_argument("--linear-debug-fd-step", type=float, default=1.0e-6)
+    parser.add_argument(
         "--omitted-q-max",
         type=int,
         default=None,
@@ -219,6 +225,8 @@ def _solve_seed(
             gmres_rtol=args.gmres_rtol,
             gmres_maxiter=args.gmres_maxiter,
             gmres_restart=args.gmres_restart,
+            linear_debug=args.linear_debug,
+            linear_debug_fd_step=args.linear_debug_fd_step,
         )
         route = "floquet_branch_switch"
     else:
@@ -250,6 +258,8 @@ def _solve_seed(
             gmres_rtol=args.gmres_rtol,
             gmres_maxiter=args.gmres_maxiter,
             gmres_restart=args.gmres_restart,
+            linear_debug=args.linear_debug,
+            linear_debug_fd_step=args.linear_debug_fd_step,
         )
         route = "palc"
 

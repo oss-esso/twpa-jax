@@ -1957,6 +1957,73 @@ Artifacts:
 - `D:\tmp\ns_branch_switch_20260818\branch_switch_k5_ds0025_gmres240.json`
 - `D:\tmp\ns_branch_switch_20260818\integrated_k5_schur.json`
 
-Current status: Floquet confirmation and pump reproducibility pass; the first
-nonlinear branch-switch gate fails at augmented GMRES. No physical column was
-run after that failure.
+Status before the instrumentation below: Floquet confirmation and pump
+reproducibility passed; the first nonlinear branch-switch gate failed at
+augmented GMRES, and no physical column was run after that failure.
+
+### Augmented linear-solver instrumentation and fix (2026-08-18)
+
+The first diagnostic retry at K=5 and `Delta s = 0.01` exposed a state-coordinate
+scaling defect before the bordered preconditioner could be assessed. The PALC
+tangent and predictor use the packed state divided by `state_scale`, while the
+augmented JVP had treated the GMRES state component as an unscaled physical
+perturbation. The initial finite-difference errors were:
+
+```text
+random         = 2.615651587185491e-02
+critical_mode  = 4.169778113103043e+01
+phase_mode     = 4.171275618778140e+01
+pure_omega     = 2.302633304881025e-06
+pure_tau       = 3.576711204203705e-04
+```
+
+The augmented operator and Newton update now consistently map normalized GMRES
+state coordinates through `state_scale`. The bordered preconditioner uses the
+existing state factorization and a 2-by-2 Schur complement for the phase and
+arclength rows. The source-column derivative also includes the source-dependent
+residual normalization.
+
+The focused regression suite passed after both changes:
+
+```text
+37 passed in 5.83s
+```
+
+The final single-point physical retry used the full-node K=5 basis, PARDISO,
+`current_complex_c`, the saved Floquet seed, and `Delta s = 0.01`. It converged
+before the continuation column was started:
+
+```text
+converged              = True
+Newton iterations      = 3
+residual_norm          = 3.43514407700318e-11
+omega_a/omega_p        = 0.09228946690930089
+source_tau             = 1.0000106403207871
+off_comb_norm_fraction = 0.010110839525906136
+border_schur_condition = 236.44636985008572
+```
+
+The complete augmented-JVP finite-difference audit at the first linear solve
+was:
+
+```text
+random         = 1.33527822547307e-08
+critical_mode  = 1.34664392148553e-06
+phase_mode     = 1.34674044663072e-06
+pure_omega     = 2.30263330488103e-06
+pure_tau       = 1.00011734957538e-06
+```
+
+The true GMRES callback history was:
+
+```text
+5.833336891236922e-03, 4.5986799289438555e-03,
+2.02926838691913e-12, 3.17309298529586e-13,
+1.16914592717649e-13, 1.18523071995073e-13,
+6.70943606429084e-14, 2.38852307030383e-23
+```
+
+The K=5 branch-switch linear gate therefore passes. No PALC ladder, K=10
+solve, Q=2 solve, or production column was run in this step. The final JSON
+artifact is
+`D:\tmp\ns_branch_switch_20260818\branch_switch_k5_ds01_final_debug.json`.
