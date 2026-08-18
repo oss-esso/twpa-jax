@@ -16,7 +16,9 @@ from .cells import JJCellBuilders, RFSquidCellBuilders, TLCellBuilders
 from .compiler import CompiledCircuit, NodeNumbering, compile_graph
 from .architectures import IPMBuilders
 from .graph import CircuitGraph
+from .nodes import Node
 from .paths import Path
+from .ports import Port
 from .primitives import PrimitiveBuilders
 from .technology import Technology, load_technology, resolve_builder_parameter
 
@@ -83,6 +85,53 @@ class Circuit(
         self._paths[name] = path
         self.graph.path_nodes[name] = path._nodes
         return path
+
+    def join_path_ends(self, primary: Path, secondary: Path) -> Node:
+        """Join two path endpoints into one electrical node.
+
+        The primary endpoint is retained. Existing elements, ports, named
+        nodes, and path views that reference the secondary endpoint are
+        redirected to it.
+        """
+
+        for path in (primary, secondary):
+            if path.owner_id != self.graph.owner_id:
+                raise ValueError(f"{path.name}: path belongs to another Circuit")
+            if self._paths.get(path.name) is not path:
+                raise ValueError(f"{path.name}: path is not registered by this Circuit")
+        keep = primary.end
+        remove = secondary.end
+        if keep is remove:
+            return keep
+        if keep is self.graph.ground or remove is self.graph.ground:
+            raise ValueError("path endpoints cannot be joined to ground")
+
+        primary_base = self.graph.legacy_path_bases.get(primary.name)
+        if primary_base is not None:
+            primary_number = self.graph.legacy_node_numbers.get(
+                keep,
+                primary_base + len(primary.nodes) - 1,
+            )
+            self.graph.legacy_node_numbers[keep] = primary_number
+        self.graph.legacy_node_numbers.pop(remove, None)
+
+        for element in self.graph.elements:
+            if element.n1 is remove:
+                element.n1 = keep
+            if element.n2 is remove:
+                element.n2 = keep
+        for number, port in tuple(self.graph.ports.items()):
+            if port.node is remove:
+                self.graph.ports[number] = Port(number, keep, port.impedance)
+        for nodes in self.graph.path_nodes.values():
+            for index, node in enumerate(nodes):
+                if node is remove:
+                    nodes[index] = keep
+        for name, node in tuple(self.graph.named_nodes.items()):
+            if node is remove:
+                self.graph.named_nodes[name] = keep
+        self.graph.nodes.remove(remove)
+        return keep
 
     def set_legacy_path_bases(self, bases: Mapping[str, int]) -> None:
         """Register historical solver-number bases for compatibility mode."""

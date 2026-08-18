@@ -17,7 +17,11 @@ from twpa_solver.circuit.nodes import Node
 from twpa_solver.design.errors import (DesignCollisionError, DesignParameterError,
                                        DesignResolutionError, DesignSchemaError)
 from twpa_solver.design.model import CompiledDesign, PortRecord
-from twpa_solver.design.parameters import resolve_parameters
+from twpa_solver.design.normalize import normalize_design
+from twpa_solver.design.parameters import (
+    resolve_parameter_definitions,
+    resolve_parameters,
+)
 from twpa_solver.design.schema import validate_design
 
 
@@ -202,6 +206,28 @@ def _expand_composites(items: list[Any], params: Mapping[str, Any]) -> list[Any]
             continue
         kind = item.get("type")
         if kind == "input_ports":
+            if "cursor" in item:
+                cursor = str(item["cursor"])
+                resistance = item.get(
+                    "resistance",
+                    params.get("Rleft" if cursor == "signal" else "Rm", 50.0),
+                )
+                name = str(item["name"])
+                expanded.extend([
+                    {
+                        "type": "port",
+                        "name": f"{name}.port",
+                        "cursor": cursor,
+                        "port": item["port"],
+                    },
+                    {
+                        "type": "resistor",
+                        "name": f"{name}.termination",
+                        "cursor": cursor,
+                        "value": resistance,
+                    },
+                ])
+                continue
             expanded.extend([
                 {"type": "port", "name": "input_signal", "cursor": "signal", "port": 1},
                 {"type": "resistor", "name": "input_signal_resistor", "cursor": "signal",
@@ -218,6 +244,28 @@ def _expand_composites(items: list[Any], params: Mapping[str, Any]) -> list[Any]
             ])
             continue
         if kind == "output_ports":
+            if "cursor" in item:
+                cursor = str(item["cursor"])
+                resistance = item.get(
+                    "resistance",
+                    params.get("Rright" if cursor == "signal" else "Rm", 50.0),
+                )
+                name = str(item["name"])
+                expanded.extend([
+                    {
+                        "type": "resistor",
+                        "name": f"{name}.termination",
+                        "cursor": cursor,
+                        "value": resistance,
+                    },
+                    {
+                        "type": "port",
+                        "name": f"{name}.port",
+                        "cursor": cursor,
+                        "port": item["port"],
+                    },
+                ])
+                continue
             expanded.extend([
                 {"type": "transmission_line", "name": "output_signal_tl", "cursor": "signal",
                  "cells": params.get("len2", 50), "L": params.get("Ll", 0.0),
@@ -237,6 +285,33 @@ def _expand_composites(items: list[Any], params: Mapping[str, Any]) -> list[Any]
             expanded.append({"type": "port", "name": item["name"],
                              "cursor": "signal" if kind == "signal_port" else "pump",
                              "port": item["port"]})
+            continue
+        if kind == "jtl":
+            rows = int(item.get("rows", 1))
+            cells = int(item.get("cells", params.get("array_length", 0)))
+            if rows < 1:
+                raise DesignSchemaError(
+                    f"{item.get('name', kind)}.rows must be positive"
+                )
+            if cells < 1:
+                raise DesignSchemaError(
+                    f"{item.get('name', kind)}.cells must be positive"
+                )
+            name = str(item["name"])
+            cursor = str(item["cursor"])
+            for index in range(rows):
+                row = {
+                    "type": "jj_line",
+                    "name": f"{name}.row[{index}]",
+                    "cursor": cursor,
+                    "cells": cells,
+                    "Lj": item.get("Lj", params.get("Lj")),
+                    "Cj": item.get("Cj", params.get("Cj")),
+                    "Cg": item.get("Cg", params.get("Cg")),
+                }
+                if index == 0 and item.get("join_cursors"):
+                    row["join_cursors"] = item["join_cursors"]
+                expanded.append(row)
             continue
         if kind in {"ipm_line", "ipm_tail"} and ("rows" in item or kind == "ipm_tail"):
             count = int(item.get("rows", 0))
@@ -427,6 +502,44 @@ def _register_line(
         len(line.cells),
     )
     state.refresh_path(cursor)
+
+
+def _join_adapter_paths(
+    state: _AdapterState,
+    cursor_names: list[str],
+    path: str,
+) -> None:
+    """Join cursor endpoints and retain the first cursor as the shared path."""
+
+    if len(cursor_names) < 2:
+        raise DesignSchemaError(f"{path}.join_cursors: expected at least two cursors")
+    if len(set(cursor_names)) != len(cursor_names):
+        raise DesignSchemaError(f"{path}.join_cursors: cursor names must be unique")
+    if any(cursor not in state.paths for cursor in cursor_names):
+        raise DesignSchemaError(f"{path}.join_cursors: unknown cursor name")
+    primary = state.paths[cursor_names[0]]
+    for cursor in cursor_names[1:]:
+        secondary = state.paths[cursor]
+        if secondary is primary:
+            continue
+        removed = secondary.end
+        retained = state.circuit.join_path_ends(primary, secondary)
+        for name, node in tuple(state.named_nodes.items()):
+            if node is removed:
+                state.named_nodes[name] = retained
+        for number, node in tuple(state.legacy_nodes.items()):
+            if node is removed:
+                state.legacy_nodes[number] = retained
+        for block in state.blocks:
+            block.starts = {
+                name: retained if node is removed else node
+                for name, node in block.starts.items()
+            }
+            block.ends = {
+                name: retained if node is removed else node
+                for name, node in block.ends.items()
+            }
+        state.paths[cursor] = primary
 
 
 def _apply_plan_values(
@@ -669,6 +782,10 @@ def _emit_adapter_block(
         _register_line(state, path, cursor_name, line, kind)
         return
     if kind == "jj_line":
+        join_cursors = [str(value) for value in cfg.get("join_cursors", [])]
+        if join_cursors:
+            _join_adapter_paths(state, join_cursors, path)
+            path_obj = state.paths[cursor_name]
         start_index = state.cell_index
         line = state.circuit.add_jj_line(
             path_obj,
@@ -740,6 +857,7 @@ def compile_design(spec: Mapping[str, Any], *, coupler_mode: str | None = None,
     # and defaults injected by a technology preset.  Strict validation applies
     # only to the former; a preset is a shared parameter catalogue, not a
     # second set of declarations that every design must reference explicitly.
+    spec = normalize_design(spec)
     declared_parameters = set(spec.get("parameters", {}))
     spec = _technology(spec)
     validate_design(spec)
@@ -747,9 +865,15 @@ def compile_design(spec: Mapping[str, Any], *, coupler_mode: str | None = None,
     for key, value in list(raw_parameters.items()):
         if isinstance(value, Mapping) and "profile" in value:
             raw_parameters[key] = value.get("value", value["profile"].get("start"))
-    parameters = resolve_parameters(raw_parameters, raw_parameters, "parameters")
+    base_parameters = dict(spec.get("_technology_parameters", {}))
+    parameters = resolve_parameter_definitions(
+        raw_parameters,
+        base_parameters,
+        "parameters",
+    )
     topology = resolve_parameters(_expand_composites(spec["topology"], parameters),
-                                  parameters, "topology")
+                                  parameters, "topology",
+                                  base_parameters=base_parameters)
     if strict:
         from twpa_solver.design.parameters import parameter_references
         used = parameter_references(spec["topology"])
@@ -770,6 +894,8 @@ def compile_design(spec: Mapping[str, Any], *, coupler_mode: str | None = None,
             "ipm_line": {"array_length", "Lj", "Cj", "Cg", "Ll", "Cl",
                          "length_of_short_TL", "short_tl"},
             "ipm_tail": {"array_length", "Lj", "Cj", "Cg", "Ll", "Cl"},
+            "jtl": {"Lj", "Cj", "Cg"},
+            "transmission_line": {"Ll", "Cl"},
         }
         for item in spec["topology"]:
             if isinstance(item, Mapping):

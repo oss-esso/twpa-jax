@@ -82,6 +82,61 @@ The compiler rejects unknown top-level fields, missing required fields,
 unknown blocks, duplicate names, invalid references, and unsupported schema
 versions.
 
+### 2.1 Line-scoped topology
+
+For a circuit described naturally as ordered physical lines, each topology
+item may declare one line and its ordered blocks.  `line: 1` and `line: 2` are
+short forms for the `signal` and `pump` cursors.  Cursor names may be written
+directly for other lines.
+
+```yaml
+parameters:
+  config: ipm_default
+  Lj: $Lj$ / 2
+  Cg: 2 * $Cg$
+
+topology:
+  - line: signal
+    port_in: 1
+    port_out: 2
+    blocks:
+      - {type: input_ports, name: signal_input}
+      - {type: cpw, name: signal_cpw, cells: 200}
+      - type: directional_coupler
+        name: coupler_1
+        port_in_signal: 1
+        port_in_pump: 3
+        port_out_signal: 2
+        port_out_pump: 4
+      - {type: jtl, name: nonlinear_line, rows: 2, jj_number: 100}
+      - {type: output_ports, name: signal_output}
+
+  - line: pump
+    port_in: 3
+    port_out: 4
+    blocks:
+      - {type: input_ports, name: pump_input}
+      - {type: cpw, name: pump_cpw, cells: 500}
+      - {type: directional_coupler, name: coupler_1}
+      - {type: jtl, name: nonlinear_line}
+      - {type: output_ports, name: pump_output}
+```
+
+The first detailed occurrence of a shared name defines the block.  An
+occurrence containing only `type` and `name` is a reference.  References add
+ordering constraints but do not emit duplicate elements.  The compiler orders
+all lines together, so both CPWs above are assembled before `coupler_1`.
+
+`cpw` uses the existing `transmission_line` builder and inherits `Ll` and `Cl`.
+`jtl` expands `rows` copies of the existing `jj_line` builder, each containing
+`jj_number` cells.  `jj_number` and `jj number` are equivalent YAML spellings.
+
+Input port numbers must be unique.  Two lines may declare the same output port
+when they use the same final `output_ports` name and share a `jtl` block.  The
+first shared JTL joins their current endpoints; subsequent shared JTL names
+continue on the resulting common path.  A shared output without that explicit
+JTL join is rejected.
+
 ## 3. Technology presets
 
 Set a preset with:
@@ -119,6 +174,19 @@ technology: ipm_default
 parameters:
   coupling_dB: -16.0
   Cg: 70e-15
+```
+
+The line-scoped surface also accepts `parameters.config` as a compact
+technology selection.  `$name$` and `${base.name}` refer to the unmodified
+technology value, while `${name}` refers to the final design parameter.  Safe
+scalar expressions support numeric literals, parentheses, and `+`, `-`, `*`,
+and `/` only:
+
+```yaml
+parameters:
+  config: ipm_default
+  Lj: $Lj$ / 2
+  Cg: 2 * ${base.Cg}
 ```
 
 The resolved design records the final value used for every parameter.

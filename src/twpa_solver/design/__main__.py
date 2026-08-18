@@ -13,7 +13,6 @@ from twpa_solver.builders.ipm import (IPMParams, LossSpec, build_component_plan,
 from twpa_solver.builders.profiles import parse_profile_json, parse_profile_shorthand
 from twpa_solver.builders.scatter import ScatterSpec
 from twpa_solver.design import compile_design, load_design
-from twpa_solver.design.parameters import resolve_parameters
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -41,11 +40,11 @@ def main(argv: list[str] | None = None) -> None:
         raise SystemExit(f"output directory is not empty: {outdir}; use --overwrite")
     outdir.mkdir(parents=True, exist_ok=True)
     source = load_design(args.design)
-    parameters = dict(source.get("parameters", {}))
-    parameters = resolve_parameters(parameters, parameters, "parameters")
     plan = None
     if (args.profile_json or args.lj_profile or args.cg_profile or
             args.lj_scatter_sigma or args.cj_scatter_sigma or args.cg_scatter_sigma):
+        preview = compile_design(source, coupler_mode=args.coupler_mode)
+        parameters = dict(preview.metadata["parameters"])
         json_segments = (parse_profile_json(Path(args.profile_json))
                           if args.profile_json else {"Lj": [], "Cg": []})
         params = IPMParams(**{key: value for key, value in parameters.items()
