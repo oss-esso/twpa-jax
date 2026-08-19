@@ -9,7 +9,7 @@ import numpy as np
 import scipy.sparse as sp
 import scipy.sparse.linalg as spla
 
-from twpa_solver.core.circuit import load_circuit
+from twpa_solver.core.circuit import CircuitMatrices, load_circuit
 from twpa_solver.core.linear import dynamic_block, port_s_from_unit_current_response
 from twpa_solver.core.nonlinear import make_branch_law
 
@@ -28,6 +28,25 @@ def passive_s_matrix(
 ) -> np.ndarray:
     """Return ``S[frequency, output_port, source_port]`` with pump off."""
     circuit = load_circuit(circuit_dir)
+    return passive_s_matrix_from_circuit(
+        circuit,
+        freqs_hz,
+        ports=ports,
+        z0_ohm=z0_ohm,
+        dc_branch_flux=dc_branch_flux,
+    )
+
+
+def passive_s_matrix_from_circuit(
+    circuit: CircuitMatrices,
+    freqs_hz: np.ndarray,
+    *,
+    ports: tuple[int, ...] = (1, 2, 3, 4),
+    z0_ohm: float = 50.0,
+    dc_branch_flux: np.ndarray | None = None,
+) -> np.ndarray:
+    """Return pump-off S-parameters from an already assembled circuit."""
+
     for port in ports:
         if port not in circuit.port_to_index:
             raise ValueError(f"port {port} not in design ports {circuit.port_to_index}")

@@ -303,6 +303,7 @@ def solve_gain_one(
     linear_solver: str = "superlu",
     khat_big_base: sp.spmatrix | None = None,
     environment: object | None = None,
+    include_baselines: bool = True,
 ) -> GainResult:
     logger.debug(
         "gain_one_start signal_ghz=%s sidebands=%d signal_m=%d idler_m=%d "
@@ -360,32 +361,37 @@ def solve_gain_one(
     phi_out = extract_sideband_node(y, n, ms, signal_m, out_index)
     vout_on = voltage_from_flux(omega_s, phi_out)
 
-    _, vout_off, off_runtime = solve_single_block_transfer(
-        circuit=circuit,
-        D_extra=khat_off_0,
-        omega_s=omega_s,
-        source_index=source_index,
-        out_index=out_index,
-        source_current_a=source_current_a,
-        environment=environment,
-        environment_port_index=source_index,
-        loss_model=loss_model,
-    )
+    off_runtime = 0.0
+    pumpdiag_runtime = 0.0
+    vout_off = complex(1.0)
+    vout_pumpdiag = complex(1.0)
+    if include_baselines:
+        _, vout_off, off_runtime = solve_single_block_transfer(
+            circuit=circuit,
+            D_extra=khat_off_0,
+            omega_s=omega_s,
+            source_index=source_index,
+            out_index=out_index,
+            source_current_a=source_current_a,
+            environment=environment,
+            environment_port_index=source_index,
+            loss_model=loss_model,
+        )
 
-    # Pump-induced average stiffness only, no frequency-conversion sidebands.
-    _, vout_pumpdiag, pumpdiag_runtime = solve_single_block_transfer(
-        circuit=circuit,
-        D_extra=khat.get(0, khat_off_0),
-        omega_s=omega_s,
-        source_index=source_index,
-        out_index=out_index,
-        source_current_a=source_current_a,
-        environment=environment,
-        environment_port_index=source_index,
-    )
+        # Pump-induced average stiffness only, no frequency-conversion sidebands.
+        _, vout_pumpdiag, pumpdiag_runtime = solve_single_block_transfer(
+            circuit=circuit,
+            D_extra=khat.get(0, khat_off_0),
+            omega_s=omega_s,
+            source_index=source_index,
+            out_index=out_index,
+            source_current_a=source_current_a,
+            environment=environment,
+            environment_port_index=source_index,
+        )
 
-    gain_vs_off = float(abs(vout_on / vout_off) ** 2)
-    gain_vs_pumpdiag = float(abs(vout_on / vout_pumpdiag) ** 2)
+    gain_vs_off = float(abs(vout_on / vout_off) ** 2) if include_baselines else float("nan")
+    gain_vs_pumpdiag = float(abs(vout_on / vout_pumpdiag) ** 2) if include_baselines else float("nan")
 
     vout_idler = None
     idler_rel = None
@@ -395,11 +401,18 @@ def solve_gain_one(
         omega_i_signed = omega_s + idler_m * omega_p
         phi_i = extract_sideband_node(y, n, ms, idler_m, out_index)
         vout_idler = voltage_from_flux(omega_i_signed, phi_i)
-        idler_rel = float(abs(vout_idler / vout_off) ** 2)
-        idler_rel_db = db10(idler_rel)
+        if include_baselines:
+            idler_rel = float(abs(vout_idler / vout_off) ** 2)
+            idler_rel_db = db10(idler_rel)
 
+    s_param = port_s_from_unit_current_response(
+        vout_on / source_current_a,
+        source_port=source_port,
+        out_port=out_port,
+        z0_ohm=z0_ohm,
+    )
     status = "VALID_SOLVED"
-    if not np.isfinite(gain_vs_off) or linear_rel_residual > 1e-7:
+    if not np.isfinite(abs(s_param)) or linear_rel_residual > 1e-7:
         status = "CHECK"
 
     result = GainResult(
@@ -421,8 +434,8 @@ def solve_gain_one(
         vout_pumpdiag=vout_pumpdiag,
         vout_idler=vout_idler,
         gain_vs_off=gain_vs_off,
-        s_param_abs=abs(port_s_from_unit_current_response(vout_on / source_current_a, source_port=source_port, out_port=out_port, z0_ohm=z0_ohm)),
-        gain_db=gain_db_from_s(port_s_from_unit_current_response(vout_on / source_current_a, source_port=source_port, out_port=out_port, z0_ohm=z0_ohm)),
+        s_param_abs=abs(s_param),
+        gain_db=gain_db_from_s(s_param),
         gain_vs_off_db=db10(gain_vs_off),
         gain_vs_pumpdiag=gain_vs_pumpdiag,
         gain_vs_pumpdiag_db=db10(gain_vs_pumpdiag),

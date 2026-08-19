@@ -5,8 +5,6 @@ from __future__ import annotations
 import argparse
 import csv
 import json
-import subprocess
-import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -36,9 +34,9 @@ from twpa_solver.plotting.spectrum import (
     plot_candidate_spectrum,
 )
 from twpa_solver.plotting.style import apply_thesis_style
+from twpa_solver.signal import run_gain_sweep
 
 ROOT = Path(__file__).resolve().parents[1]
-EXP09 = ROOT / "experiments" / "exp09_full_ipm_gain_from_pump.py"
 
 
 @dataclass
@@ -78,8 +76,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--sweep-stop-ghz", type=float, default=None,
                         help="Absolute S21 sweep stop (GHz); overrides the "
                              "fp-centred window when given with --sweep-start-ghz.")
-    parser.add_argument("--sweep-points", type=int, default=501,
-                        help="Sweep points (default 1251 over +-3 GHz ~ 5 MHz).")
+    parser.add_argument("--sweep-points", type=int, default=51,
+                        help="Sweep points for top-k candidate S21 sweeps (default 51).")
     parser.add_argument("--sweep-smooth-frac", type=float, default=0.35,
                         help="Savitzky-Golay window as a fraction of the sweep "
                              "length for the -3 dB band/GBP fit; large by default "
@@ -143,9 +141,12 @@ def _gain_candidates(points: pd.DataFrame, *, top_k: int, min_gain_db: float) ->
 def _run_candidate_sweep(
     row: pd.Series, args: argparse.Namespace, sweep_dir: Path, *, center_ghz: float,
 ) -> Path | None:
-    """Run an S21 sweep centered on ``center_ghz`` (fp) via exp09; return its CSV."""
+    """Run an S21 sweep with the production solver; return its CSV."""
     fp = float(row["pump_freq_ghz"])
-    pump_dir = Path(str(row["pump_dir"]))
+    def rooted(path: Path) -> Path:
+        return path if path.is_absolute() else ROOT / path
+
+    pump_dir = rooted(Path(str(row["pump_dir"])))
     if not (pump_dir / "pump_solution.npz").exists():
         print(f"  skip point {int(row['point_index'])}: missing pump solution {pump_dir}")
         return None
@@ -158,24 +159,26 @@ def _run_candidate_sweep(
     else:
         half = float(args.sweep_half_span_ghz)
         start_ghz, stop_ghz = center_ghz - half, center_ghz + half
-    cmd = [
-        sys.executable, str(EXP09),
-        "--ipm-dir", str(args.ipm_dir),
-        "--pump-dir", str(pump_dir),
-        "--fallback-pump-freq-ghz", f"{fp:.12g}",
-        "--sweep",
-        "--signal-start-ghz", f"{start_ghz:.12g}",
-        "--signal-stop-ghz", f"{stop_ghz:.12g}",
-        "--points", str(args.sweep_points),
-        "--sidebands", str(args.sidebands),
-        "--gamma-nt", str(args.gamma_nt),
-        "--source-port", str(args.source_port),
-        "--out-port", str(args.out_port),
-        "--outdir", str(sweep_dir),
-    ]
-    proc = subprocess.run(cmd, cwd=str(ROOT), check=False)
-    if proc.returncode != 0 or not csv_out.exists():
-        print(f"  sweep failed for point {int(row['point_index'])} (rc={proc.returncode})")
+    try:
+        run_gain_sweep(
+            circuit_dir=rooted(args.ipm_dir),
+            pump_dir=pump_dir,
+            outdir=sweep_dir,
+            signal_start_ghz=start_ghz,
+            signal_stop_ghz=stop_ghz,
+            points=args.sweep_points,
+            fallback_pump_freq_ghz=fp,
+            sidebands=args.sidebands,
+            gamma_nt=args.gamma_nt,
+            source_port=args.source_port,
+            out_port=args.out_port,
+            include_baselines=False,
+        )
+    except Exception as exc:
+        print(f"  sweep failed for point {int(row['point_index'])}: {exc}")
+        return None
+    if not csv_out.exists():
+        print(f"  sweep failed for point {int(row['point_index'])}: no CSV output")
         return None
     return csv_out
 
@@ -214,7 +217,7 @@ def fit_gain_candidates(
     else:
         window = f"fp +-{args.sweep_half_span_ghz:g} GHz"
     print(f"auto-picked {len(top)} candidate(s); S21 sweep {args.sweep_points} pts "
-          f"over {window} via exp09")
+          f"over {window} via production signal solver")
     save_kwargs = {"save_pdf": args.save_pdf, "save_svg": args.save_svg}
     sweeps_root = outdir / "candidate_sweeps"
     rows_out: list[dict] = []

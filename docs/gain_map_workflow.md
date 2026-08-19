@@ -20,11 +20,23 @@ python workflows/run_gain_map_and_plots.py --slow `
   --frequency-workers 4 --outdir outputs/gain_maps/slow_2c
 ```
 
+Multiple compiled design directories can be supplied to `--design`. The
+workflow processes them sequentially and writes each result below the output
+root using the input directory name:
+
+```powershell
+python workflows/run_gain_map_and_plots.py --fast `
+  --design outputs/passive_batch/ipm_2c outputs/passive_batch/ipm_3c `
+  --outdir outputs/gain_maps/batch
+```
+
 All generated files belong below the selected output root. Compact summaries use
 the same raw and physically eligible coverage accounting in both modes. Physical
 boundary, transient numerical failure, and unresolved statuses remain distinct.
 Frequency workers are isolated processes; power points remain sequential within a
-column. Completed column subtrees are reusable on restart.
+column. Completed column subtrees are reusable on restart. In fast mode, per-point
+pump solutions are retained while the map and all candidate plots are generated,
+then removed after plotting completes.
 
 For a bounded high-power 2c column diagnostic, use the explicit recovery ladder
 on the baseline-identical circuit and leave pump attenuation unspecified:

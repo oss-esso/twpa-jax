@@ -5,12 +5,14 @@ from twpa_solver.signal.gain import (
     db20,
     gain_db_from_s,
 )
+from twpa_solver.signal.passive import passive_s_matrix, passive_s_matrix_from_circuit
 from twpa_solver.signal.io import (
     PumpSolution,
     infer_circuit_dir_from_pump_report,
     load_pump,
     write_outputs,
 )
+from twpa_solver.signal.sweep import run_gain_sweep
 from twpa_solver.signal.gamma import (
     build_khat,
     compute_gamma_hat,
@@ -52,10 +54,13 @@ __all__ = [
     "db10",
     "db20",
     "gain_db_from_s",
+    "passive_s_matrix",
+    "passive_s_matrix_from_circuit",
     "PumpSolution",
     "infer_circuit_dir_from_pump_report",
     "load_pump",
     "write_outputs",
+    "run_gain_sweep",
     "build_khat",
     "compute_gamma_hat",
     "load_dc_branch_flux",
