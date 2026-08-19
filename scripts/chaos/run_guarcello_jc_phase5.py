@@ -19,6 +19,7 @@ import argparse
 import csv
 import hashlib
 import json
+import logging
 import math
 import re
 import sys
@@ -35,7 +36,9 @@ import scipy.sparse.linalg as spla
 from scipy.linalg import solve_banded
 from scipy.sparse.csgraph import reverse_cuthill_mckee
 from scipy.sparse.linalg import eigsh
-from numba import njit
+from numba import njit, prange
+
+LOGGER = logging.getLogger(__name__)
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
@@ -700,6 +703,7 @@ def _integrate_jc_banded_numba_stage_a(
     q_difference = np.empty(n, dtype=np.float64)
     derivative = np.empty(n, dtype=np.float64)
     phase = np.empty(n_branches, dtype=np.float64)
+    sin_phase = np.empty(n_branches, dtype=np.float64)
     current = np.empty(n_branches, dtype=np.float64)
     rec = 0
     times[rec] = 0.0
@@ -708,6 +712,8 @@ def _integrate_jc_banded_numba_stage_a(
     rec += 1
     pump_omega = 2.0 * math.pi * pump_hz
     signal_omega = 2.0 * math.pi * signal_hz
+    inv_dt_sq = 1.0 / (dt_s * dt_s)
+    inv_two_dt = 1.0 / (2.0 * dt_s)
     for step in range(1, n_steps + 1):
         t = step * dt_s
         for j in range(n_branches):
@@ -716,7 +722,8 @@ def _integrate_jc_banded_numba_stage_a(
             phase[j] -= q_cur[node_minus[j]]
         for j in range(n_branches):
             phase[j] /= phi0
-            current[j] = ic[j] * math.sin(phase[j] + phi_dc_rad)
+            sin_phase[j] = math.sin(phase[j] + phi_dc_rad)
+            current[j] = ic[j] * sin_phase[j]
         rhs[:] = 0.0
         rhs[pump_node] = pump_current_a * math.cos(pump_omega * t)
         if signal_node == pump_node:
@@ -734,9 +741,9 @@ def _integrate_jc_banded_numba_stage_a(
         rhs -= work
         q_difference[:] = 2.0 * q_cur - q_prev
         _csr_matvec_into(c_indptr, c_indices, c_data, q_difference, work)
-        rhs += work / (dt_s * dt_s)
+        rhs += work * inv_dt_sq
         _csr_matvec_into(g_indptr, g_indices, g_data, q_prev, work)
-        rhs += work / (2.0 * dt_s)
+        rhs += work * inv_two_dt
         _solve_banded_lu_dispatch(
             lower_factor, factor_kind, factor_diagonal,
             lower1, lower2, lower3, lower4, lower5,
@@ -749,13 +756,112 @@ def _integrate_jc_banded_numba_stage_a(
             voltage[rec] = derivative[output_node]
             maximum = 0.0
             for j in range(n_branches):
-                value = abs(math.sin(phase[j] + phi_dc_rad))
+                value = abs(sin_phase[j])
                 if value > maximum:
                     maximum = value
             branch_r[rec] = maximum
             rec += 1
         q_prev, q_cur, q_next = q_cur, q_next, q_prev
     return times[:rec], voltage[:rec], branch_r[:rec], q_cur
+
+
+@njit(cache=True, fastmath=True, nogil=True, parallel=True)
+def _integrate_jc_banded_numba_batch(
+    c_indptr, c_indices, c_data,
+    g_indptr, g_indices, g_data,
+    k_indptr, k_indices, k_data,
+    node_plus, node_minus, row_indptr, row_indices, row_signs, n_branches,
+    ic, lower_factor, factor_kind, factor_diagonal,
+    lower1, lower2, lower3, lower4, lower5,
+    upper1, upper2, upper3, upper4, upper5,
+    phi0, pump_currents_a, phi_dc_rad, pump_hz,
+    signal_current_a, signal_hz, dt_s, n_steps, record_stride,
+    pump_node, signal_node, output_node, implicit_linear_stiffness,
+    q_previous_initial, q_current_initial,
+):
+    """Parallel Stage-A loop with one independent lane per pump drive."""
+    batch_size = pump_currents_a.size
+    n = c_indptr.size - 1
+    out_count = n_steps // record_stride + 1
+    times = np.empty((batch_size, out_count), dtype=np.float64)
+    voltage = np.empty((batch_size, out_count), dtype=np.float64)
+    branch_r = np.empty((batch_size, out_count), dtype=np.float64)
+    final_q = np.empty((batch_size, n), dtype=np.float64)
+    pump_omega = 2.0 * math.pi * pump_hz
+    signal_omega = 2.0 * math.pi * signal_hz
+    inv_dt_sq = 1.0 / (dt_s * dt_s)
+    inv_two_dt = 1.0 / (2.0 * dt_s)
+
+    for lane in prange(batch_size):
+        q_prev = np.zeros(n, dtype=np.float64)
+        q_cur = np.zeros(n, dtype=np.float64)
+        q_next = np.empty(n, dtype=np.float64)
+        if q_previous_initial.shape[1] == n:
+            q_prev[:] = q_previous_initial[lane]
+        if q_current_initial.shape[1] == n:
+            q_cur[:] = q_current_initial[lane]
+        rhs = np.empty(n, dtype=np.float64)
+        work = np.empty(n, dtype=np.float64)
+        q_difference = np.empty(n, dtype=np.float64)
+        derivative = np.empty(n, dtype=np.float64)
+        phase = np.empty(n_branches, dtype=np.float64)
+        sin_phase = np.empty(n_branches, dtype=np.float64)
+        current = np.empty(n_branches, dtype=np.float64)
+        rec = 0
+        times[lane, rec] = 0.0
+        voltage[lane, rec] = 0.0
+        branch_r[lane, rec] = 0.0
+        rec += 1
+        for step in range(1, n_steps + 1):
+            t = step * dt_s
+            for j in range(n_branches):
+                phase[j] = 0.0
+                phase[j] += q_cur[node_plus[j]]
+                phase[j] -= q_cur[node_minus[j]]
+            for j in range(n_branches):
+                phase[j] /= phi0
+                sin_phase[j] = math.sin(phase[j] + phi_dc_rad)
+                current[j] = ic[j] * sin_phase[j]
+            rhs[:] = 0.0
+            rhs[pump_node] = pump_currents_a[lane] * math.cos(pump_omega * t)
+            if signal_node == pump_node:
+                rhs[pump_node] += signal_current_a * math.cos(signal_omega * t)
+            else:
+                rhs[signal_node] = signal_current_a * math.cos(signal_omega * t)
+            if not implicit_linear_stiffness:
+                _csr_matvec_into(k_indptr, k_indices, k_data, q_cur, work)
+                rhs -= work
+            for row in range(n):
+                total = 0.0
+                for pos in range(row_indptr[row], row_indptr[row + 1]):
+                    total += row_signs[pos] * current[row_indices[pos]]
+                work[row] = total
+            rhs -= work
+            q_difference[:] = 2.0 * q_cur - q_prev
+            _csr_matvec_into(c_indptr, c_indices, c_data, q_difference, work)
+            rhs += work * inv_dt_sq
+            _csr_matvec_into(g_indptr, g_indices, g_data, q_prev, work)
+            rhs += work * inv_two_dt
+            _solve_banded_lu_dispatch(
+                lower_factor, factor_kind, factor_diagonal,
+                lower1, lower2, lower3, lower4, lower5,
+                upper1, upper2, upper3, upper4, upper5,
+                rhs, q_next,
+            )
+            if step % record_stride == 0:
+                derivative[:] = (q_next - q_prev) / (2.0 * dt_s)
+                times[lane, rec] = t
+                voltage[lane, rec] = derivative[output_node]
+                maximum = 0.0
+                for j in range(n_branches):
+                    value = abs(sin_phase[j])
+                    if value > maximum:
+                        maximum = value
+                branch_r[lane, rec] = maximum
+                rec += 1
+            q_prev, q_cur, q_next = q_cur, q_next, q_prev
+        final_q[lane, :] = q_cur
+    return times, voltage, branch_r, final_q
 
 
 @njit(cache=True, fastmath=True, nogil=True)
@@ -1175,6 +1281,414 @@ def integrate_jc_banded(
             rec += 1
         q_prev, q_cur = q_cur, q_next
     return times[:rec], voltage[:rec], branch_r[:rec], time.perf_counter() - t0, q_cur
+
+
+def _batch_initial_state(
+    value: np.ndarray | None,
+    *,
+    batch_size: int,
+    n_nodes: int,
+    name: str,
+) -> np.ndarray:
+    """Normalise an optional batch state without broadcasting mutable data."""
+    if value is None:
+        return np.empty((batch_size, 0), dtype=np.float64)
+    state = np.asarray(value, dtype=np.float64)
+    if state.ndim == 1:
+        if state.size != n_nodes:
+            raise ValueError(f"{name} must have shape (batch, nodes)")
+        state = np.broadcast_to(state.reshape(1, -1), (batch_size, n_nodes))
+    if state.shape != (batch_size, n_nodes):
+        raise ValueError(
+            f"{name} must have shape {(batch_size, n_nodes)}, got {state.shape}"
+        )
+    return np.array(state, copy=True)
+
+
+JAX_DEVICE_PREFERENCES = ("auto", "gpu", "cpu")
+
+
+def resolve_jax_device(preference: str = "auto") -> tuple[Any, str]:
+    """Select the JAX device for the batched backend.
+
+    ``auto`` prefers an accelerator and falls back to the CPU so the same code
+    runs on a workstation without one.  ``gpu`` is a hard requirement and raises
+    when no accelerator is present, so a timed campaign cannot silently degrade
+    to the CPU; this mirrors the ``TWPA_REQUIRE_PARDISO`` convention.  ``cpu``
+    pins the CPU even where an accelerator exists, which is what the
+    cross-machine bit-identity comparison needs.
+
+    Returns the device and a short human-readable note naming what was chosen
+    and why, so a campaign can record it alongside its results.
+    """
+    if preference not in JAX_DEVICE_PREFERENCES:
+        raise ValueError(
+            f"jax_device must be one of {JAX_DEVICE_PREFERENCES}, got {preference!r}"
+        )
+    try:
+        import jax
+    except ImportError as exc:  # pragma: no cover - depends on optional install
+        raise RuntimeError("backend='jax' requires the jax package") from exc
+    accelerators = [
+        device for device in jax.devices()
+        if device.platform not in {"cpu", "interpreter"}
+    ]
+    cpus = jax.devices("cpu")
+    if preference == "cpu":
+        return cpus[0], "cpu requested"
+    if accelerators:
+        return accelerators[0], f"{accelerators[0].platform} selected"
+    if preference == "gpu":
+        raise RuntimeError(
+            "jax_device='gpu' requested but jax reports no accelerator; "
+            f"visible devices: {jax.devices()}"
+        )
+    return cpus[0], "no accelerator visible, fell back to cpu"
+
+
+JAX_SOLVE_KINDS = ("sequential", "scan")
+
+
+def _jax_banded_solve(
+    rhs: Any,
+    diagonal: Any,
+    lower: tuple[Any, ...],
+    upper: tuple[Any, ...],
+    bandwidth: int,
+    solve_kind: str,
+) -> Any:
+    """Solve an LU-banded system with a sequential or associative scan pass.
+
+    The scan represents each order-``bandwidth`` recurrence as an affine
+    transfer.  Its homogeneous transfer matrices are padded to ``2b x 2b``:
+    the first ``b`` coordinates hold the recurrence history, one coordinate
+    holds the affine constant, and the remaining coordinates are inert.  A
+    forward scan solves ``L y = rhs``; a reversed scan then solves
+    ``U x = y``.  The production default remains the sequential path.
+    """
+    import jax
+    import jax.numpy as jnp
+
+    if solve_kind not in JAX_SOLVE_KINDS:
+        raise ValueError(
+            f"solve_kind must be one of {JAX_SOLVE_KINDS}, got {solve_kind!r}"
+        )
+    if bandwidth < 1 or bandwidth > len(lower) or bandwidth > len(upper):
+        raise ValueError(f"unsupported banded solve bandwidth {bandwidth}")
+    n = rhs.shape[0]
+    if solve_kind == "sequential":
+        solution = jnp.zeros_like(rhs)
+
+        def forward(index: int, values: Any) -> Any:
+            value = rhs[index]
+            for offset, diagonal_values in enumerate(lower[:bandwidth], start=1):
+                source = jnp.maximum(index - offset, 0)
+                value -= jnp.where(
+                    index >= offset,
+                    diagonal_values[source] * values[source],
+                    0.0,
+                )
+            return values.at[index].set(value)
+
+        values = jax.lax.fori_loop(0, n, forward, solution)
+
+        def backward(index: int, current: Any) -> Any:
+            row = n - 1 - index
+            value = current[row]
+            for offset, diagonal_values in enumerate(upper[:bandwidth], start=1):
+                source = jnp.minimum(row + offset, n - 1)
+                value -= jnp.where(
+                    row + offset < n,
+                    diagonal_values[source] * current[source],
+                    0.0,
+                )
+            return current.at[row].set(value / diagonal[row])
+
+        return jax.lax.fori_loop(0, n, backward, values)
+
+    transfer_dim = 2 * bandwidth
+    homogeneous_index = bandwidth
+
+    def scan_recurrence(
+        recurrence_rhs: Any,
+        coefficients: tuple[Any, ...],
+        divisor: Any,
+    ) -> Any:
+        indices = jnp.arange(n)
+        transfers = jnp.zeros(
+            (n, transfer_dim, transfer_dim), dtype=recurrence_rhs.dtype,
+        )
+        for offset, diagonal_values in enumerate(coefficients, start=1):
+            source = jnp.maximum(indices - offset, 0)
+            coefficient = jnp.where(
+                indices >= offset,
+                diagonal_values[source],
+                0.0,
+            )
+            transfers = transfers.at[:, 0, offset - 1].set(
+                -coefficient / divisor,
+            )
+        for history_index in range(1, bandwidth):
+            transfers = transfers.at[:, history_index, history_index - 1].set(1.0)
+        transfers = transfers.at[:, homogeneous_index, homogeneous_index].set(1.0)
+        for padding_index in range(bandwidth + 1, transfer_dim):
+            transfers = transfers.at[:, padding_index, padding_index].set(1.0)
+        transfers = transfers.at[:, 0, homogeneous_index].set(
+            recurrence_rhs / divisor,
+        )
+        prefix = jax.lax.associative_scan(
+            lambda left, right: right @ left,
+            transfers,
+            axis=0,
+        )
+        initial = jnp.zeros(transfer_dim, dtype=recurrence_rhs.dtype)
+        initial = initial.at[homogeneous_index].set(1.0)
+        states = prefix @ initial
+        return states[:, 0]
+
+    forward_values = scan_recurrence(
+        rhs,
+        tuple(lower[:bandwidth]),
+        jnp.ones_like(rhs),
+    )
+    backward_values = scan_recurrence(
+        forward_values[::-1],
+        tuple(values[::-1] for values in upper[:bandwidth]),
+        diagonal[::-1],
+    )
+    return backward_values[::-1]
+
+
+def _integrate_jc_banded_jax_batch(
+    device: JcDevice,
+    *,
+    jax_device: str = "auto",
+    pump_currents_a: np.ndarray,
+    pump_hz: float,
+    signal_current_a: float,
+    signal_hz: float,
+    dt_s: float,
+    n_steps: int,
+    record_stride: int,
+    implicit_linear_stiffness: bool,
+    phi_dc_rad: float,
+    factor: np.ndarray,
+    factor_kind: int,
+    factor_arrays: tuple[np.ndarray, ...],
+    initial_q_previous: np.ndarray,
+    initial_q_current: np.ndarray,
+    solve_kind: str,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Run the experimental JAX ``vmap``/``lax.scan`` backend."""
+    try:
+        import jax
+        import jax.numpy as jnp
+        from jax.experimental.sparse import BCOO
+    except ImportError as exc:  # pragma: no cover - depends on optional install
+        raise RuntimeError("backend='jax' requires the jax package") from exc
+
+    jax.config.update("jax_enable_x64", True)
+    target, note = resolve_jax_device(jax_device)
+    LOGGER.info("jax batch backend on %s (%s)", target, note)
+    del factor_kind
+    if solve_kind not in JAX_SOLVE_KINDS:
+        raise ValueError(
+            f"solve_kind must be one of {JAX_SOLVE_KINDS}, got {solve_kind!r}"
+        )
+    diagonal, lower1, lower2, lower3, lower4, lower5, upper1, upper2, upper3, upper4, upper5 = factor_arrays
+    lower = tuple(jnp.asarray(value) for value in (lower1, lower2, lower3, lower4, lower5))
+    upper = tuple(jnp.asarray(value) for value in (upper1, upper2, upper3, upper4, upper5))
+    diagonal_jax = jnp.asarray(diagonal)
+    selected_bandwidth = int(device.selected_bandwidth)
+    sparse_c = BCOO.from_scipy_sparse(device.C.tocoo())
+    sparse_g = BCOO.from_scipy_sparse(device.G.tocoo())
+    sparse_k = BCOO.from_scipy_sparse(device.K.tocoo())
+    sparse_b = BCOO.from_scipy_sparse(device.Bphi.tocoo())
+    ic = jnp.asarray(device.Ic)
+    n = device.n_nodes
+    batch_size = pump_currents_a.size
+    if initial_q_previous.shape[1] != n:
+        initial_q_previous = np.zeros((batch_size, n), dtype=np.float64)
+    if initial_q_current.shape[1] != n:
+        initial_q_current = np.zeros((batch_size, n), dtype=np.float64)
+    inv_dt_sq = 1.0 / (dt_s * dt_s)
+    inv_two_dt = 1.0 / (2.0 * dt_s)
+    pump_omega = 2.0 * math.pi * pump_hz
+    signal_omega = 2.0 * math.pi * signal_hz
+
+    def solve_factor(rhs: Any) -> Any:
+        return _jax_banded_solve(
+            rhs,
+            diagonal_jax,
+            lower,
+            upper,
+            selected_bandwidth,
+            solve_kind,
+        )
+
+    def run_lane(
+        pump_current: Any,
+        q_previous_initial: Any,
+        q_current_initial: Any,
+    ) -> tuple[Any, Any, Any, Any]:
+        def step(carry: tuple[Any, Any], step_index: Any) -> tuple[tuple[Any, Any], tuple[Any, Any]]:
+            q_previous, q_current = carry
+            t = step_index * dt_s
+            phase = (sparse_b.T @ q_current) / PHI0_REDUCED
+            sin_phase = jnp.sin(phase + phi_dc_rad)
+            source = jnp.zeros(n, dtype=jnp.float64)
+            source = source.at[device.pump_node].set(
+                pump_current * jnp.cos(pump_omega * t)
+            )
+            signal = signal_current_a * jnp.cos(signal_omega * t)
+            if device.signal_node == device.pump_node:
+                source = source.at[device.pump_node].add(signal)
+            else:
+                source = source.at[device.signal_node].set(signal)
+            rhs = source - sparse_b @ (ic * sin_phase)
+            if not implicit_linear_stiffness:
+                rhs = rhs - sparse_k @ q_current
+            rhs = rhs + sparse_c @ (2.0 * q_current - q_previous) * inv_dt_sq
+            rhs = rhs + sparse_g @ q_previous * inv_two_dt
+            q_next = solve_factor(rhs)
+            derivative = (q_next - q_previous) / (2.0 * dt_s)
+            return (q_current, q_next), (
+                derivative[device.output_node],
+                jnp.max(jnp.abs(sin_phase)),
+            )
+
+        steps = jnp.arange(1, n_steps + 1, dtype=jnp.float64)
+        (_, q_final), outputs = jax.lax.scan(
+            step, (q_previous_initial, q_current_initial), steps,
+        )
+        voltage_all, branch_all = outputs
+        selected = jnp.arange(record_stride - 1, n_steps, record_stride)
+        times = jnp.concatenate((jnp.zeros(1), selected * dt_s))
+        voltage = jnp.concatenate((jnp.zeros(1), voltage_all[selected]))
+        branch_r = jnp.concatenate((jnp.zeros(1), branch_all[selected]))
+        return times, voltage, branch_r, q_final
+
+    def run_all(
+        currents: Any,
+        previous: Any,
+        current: Any,
+    ) -> tuple[Any, Any, Any, Any]:
+        return jax.vmap(run_lane)(currents, previous, current)
+
+    compiled = jax.jit(run_all, device=target)
+    with jax.default_device(target):
+        result = compiled(
+            jnp.asarray(pump_currents_a),
+            jnp.asarray(initial_q_previous),
+            jnp.asarray(initial_q_current),
+        )
+    result = jax.tree_util.tree_map(lambda value: value.block_until_ready(), result)
+    return tuple(np.asarray(value) for value in result)  # type: ignore[return-value]
+
+
+def integrate_jc_banded_batch(
+    device: JcDevice,
+    *,
+    pump_currents_a: np.ndarray,
+    pump_hz: float,
+    signal_current_a: float,
+    signal_hz: float,
+    dt_s: float,
+    n_steps: int,
+    record_stride: int = 20,
+    initial_q: np.ndarray | None = None,
+    initial_q_previous: np.ndarray | None = None,
+    implicit_linear_stiffness: bool | None = None,
+    phi_dc_rad: float = 0.0,
+    backend: str = "numba",
+    jax_device: str = "auto",
+    solve_kind: str = "sequential",
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, float, np.ndarray]:
+    """Integrate independent pump drives with one shared banded factor.
+
+    The first three return values and the final state are stacked with leading
+    dimension ``batch``.  The runtime is the wall time for the complete batch.
+    ``numba`` is the measured CPU-oriented default; ``jax`` is retained as an
+    experimental ``vmap``/``lax.scan`` backend for machines with an accelerator.
+    The JAX solve is sequential by default; ``solve_kind='scan'`` replaces its
+    per-row triangular chains with associative recurrence scans.
+
+    ``jax_device`` selects where the ``jax`` backend runs: ``auto`` prefers an
+    accelerator and falls back to the CPU, ``gpu`` refuses to run without one,
+    and ``cpu`` pins the CPU.  It is ignored by the ``numba`` backend.
+    """
+    drives = np.asarray(pump_currents_a, dtype=np.float64).reshape(-1)
+    if drives.size == 0:
+        raise ValueError("pump_currents_a must contain at least one drive")
+    if not np.all(np.isfinite(drives)):
+        raise ValueError("pump_currents_a must be finite")
+    if backend not in {"numba", "jax"}:
+        raise ValueError("backend must be 'numba' or 'jax'")
+    if solve_kind not in JAX_SOLVE_KINDS:
+        raise ValueError(
+            f"solve_kind must be one of {JAX_SOLVE_KINDS}, got {solve_kind!r}"
+        )
+    if jax_device not in JAX_DEVICE_PREFERENCES:
+        raise ValueError(f"jax_device must be one of {JAX_DEVICE_PREFERENCES}")
+    if dt_s <= 0.0 or n_steps < 0 or record_stride <= 0:
+        raise ValueError("dt_s must be positive, n_steps non-negative, and record_stride positive")
+    batch_size = drives.size
+    previous = _batch_initial_state(
+        initial_q_previous, batch_size=batch_size, n_nodes=device.n_nodes,
+        name="initial_q_previous",
+    )
+    current = _batch_initial_state(
+        initial_q, batch_size=batch_size, n_nodes=device.n_nodes, name="initial_q",
+    )
+    use_implicit_linear_stiffness = (
+        device.implicit_linear_stiffness
+        if implicit_linear_stiffness is None else bool(implicit_linear_stiffness)
+    )
+    branch_phase_offset = float(phi_dc_rad)
+    constant = device.C / dt_s**2 + device.G / (2.0 * dt_s)
+    if use_implicit_linear_stiffness:
+        constant = constant + device.K
+    lower = _factor_banded_lu(constant, device.selected_bandwidth)
+    factor_kind, factor_arrays = _unpack_banded_factor(
+        lower, device.selected_bandwidth,
+    )
+    parts = [_csr_parts(matrix) for matrix in (device.C, device.G, device.K)]
+    node_plus, node_minus = _incidence_endpoints(device.Bphi)
+    row_indptr, row_indices, row_signs = _incidence_row_parts(
+        node_plus, node_minus, device.n_nodes,
+    )
+    started = time.perf_counter()
+    if backend == "jax":
+        result = _integrate_jc_banded_jax_batch(
+            device,
+            jax_device=jax_device,
+            pump_currents_a=drives,
+            pump_hz=pump_hz,
+            signal_current_a=signal_current_a,
+            signal_hz=signal_hz,
+            dt_s=dt_s,
+            n_steps=n_steps,
+            record_stride=record_stride,
+            implicit_linear_stiffness=use_implicit_linear_stiffness,
+            phi_dc_rad=branch_phase_offset,
+            factor=lower,
+            factor_kind=factor_kind,
+            factor_arrays=factor_arrays,
+            initial_q_previous=previous,
+            initial_q_current=current,
+            solve_kind=solve_kind,
+        )
+    else:
+        result = _integrate_jc_banded_numba_batch(
+            *parts[0], *parts[1], *parts[2], node_plus, node_minus,
+            row_indptr, row_indices, row_signs, device.Ic.size,
+            device.Ic, lower, factor_kind, *factor_arrays, PHI0_REDUCED,
+            drives, branch_phase_offset, pump_hz, signal_current_a, signal_hz,
+            dt_s, n_steps, record_stride, device.pump_node, device.signal_node,
+            device.output_node, use_implicit_linear_stiffness,
+            previous, current,
+        )
+    return (*result[:3], time.perf_counter() - started, result[3])
 
 
 @dataclass(frozen=True)
