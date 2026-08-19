@@ -30,12 +30,12 @@ def require_design() -> None:
 def test_stored_params_reproduce_the_stored_netlist() -> None:
     params, mode = assert_source_topology(DESIGN)
     assert isinstance(params, IPMParams)
-    assert mode == "cached"
+    assert mode == "auto"
 
 
 def test_an_ideal_coupler_design_is_detected_not_rejected() -> None:
     # The coupler mode is not stored in the summary, so a design built with
-    # --coupler-mode ideal must not be rejected for failing the cached rebuild.
+    # --coupler-mode ideal must still be detected by topology matching.
     ideal = DESIGN.parent / "ipm_7c_ideal_m25db_8ghz"
     if not ideal.exists():
         pytest.skip("ideal-coupler reference design is not present")
@@ -79,7 +79,7 @@ def test_a_profiled_and_scattered_variant_builds(tmp_path: Path) -> None:
         lj_scatter=ScatterSpec(0.01), cj_scatter=ScatterSpec(0.005),
         cg_scatter=ScatterSpec(0.02), seed=7, overwrite=True,
     )
-    assert summary["total_elements"] == 16312
+    assert summary["total_elements"] == 16192
 
     arrays = np.load(outdir / "ipm_arrays.npz")
     assert arrays["Lj_nominal"][0] == pytest.approx(150e-12)

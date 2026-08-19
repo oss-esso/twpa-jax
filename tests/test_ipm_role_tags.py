@@ -30,12 +30,13 @@ CSV_FIELDS = ("name", "node1", "node2", "kind")
 def design_params() -> IPMParams:
     if not DESIGN.exists():
         pytest.skip(f"reference design {DESIGN} is not present")
-    return IPMParams(**json.loads((DESIGN / "ipm_summary.json").read_text())["params"])
+    params = json.loads((DESIGN / "ipm_summary.json").read_text())["params"]
+    return IPMParams(**params)
 
 
 @pytest.fixture(scope="module")
 def nominal_circuit(design_params: IPMParams) -> list:
-    coupler = make_coupler_discrete(design_params, "cached")
+    coupler = make_coupler_discrete(design_params, "auto")
     circuit, _ = make_ipm(design_params, coupler)
     return circuit
 

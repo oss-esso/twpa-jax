@@ -36,7 +36,7 @@ def build_variant(source: Path, outdir: Path, tan_delta: float) -> dict[str, Any
         outdir,
         loss=LossSpec(default=tan_delta),
         overwrite=False,
-        coupler_mode="cached",
+        coupler_mode="auto",
     )
     return {
         "circuit_dir": str(outdir),

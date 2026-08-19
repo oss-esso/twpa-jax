@@ -29,7 +29,7 @@ def _technology(
         architecture=architecture or {},
         cursors={"signal": 1},
         ground=0,
-        coupler_mode="cached",
+        coupler_mode="auto",
     )
 
 
@@ -45,11 +45,11 @@ def test_loader_accepts_new_sections_and_legacy_flat_parameters(tmp_path: Path) 
     """Both technology file layouts produce the same public data model."""
 
     (tmp_path / "new.yaml").write_text(
-        """name: new\ncomponents:\n  Ll: 1.0\narchitecture:\n  cells: 2\ncursors:\n  signal: 7\nground: 0\ncoupler_mode: cached\n""",
+        """name: new\ncomponents:\n  Ll: 1.0\narchitecture:\n  cells: 2\ncursors:\n  signal: 7\nground: 0\ncoupler_mode: auto\n""",
         encoding="utf-8",
     )
     (tmp_path / "flat.yaml").write_text(
-        """name: flat\nparameters:\n  Ll: 1.0\ncursors:\n  signal: 7\nground: 0\ncoupler_mode: cached\n""",
+        """name: flat\nparameters:\n  Ll: 1.0\ncursors:\n  signal: 7\nground: 0\ncoupler_mode: auto\n""",
         encoding="utf-8",
     )
 
@@ -60,6 +60,15 @@ def test_loader_accepts_new_sections_and_legacy_flat_parameters(tmp_path: Path) 
     assert new.architecture == {"cells": 2}
     assert flat.components == {"Ll": 1.0}
     assert flat.architecture == {}
+
+
+def test_loader_rejects_removed_cached_coupler_mode(tmp_path: Path) -> None:
+    (tmp_path / "cached.yaml").write_text(
+        "name: cached\ncoupler_mode: cached\n", encoding="utf-8"
+    )
+
+    with pytest.raises(ValueError, match="unsupported coupler_mode"):
+        load_technology("cached", [tmp_path])
 
 
 def test_builder_resolution_order_has_one_gate_per_level() -> None:
@@ -130,15 +139,15 @@ def test_default_ipm_digest_contract() -> None:
     spec.loader.exec_module(module)
 
     expected = {
-        "legacy": "3fc820131e190f4c",
-        "creation": "2b9bd27e892743d5",
+        "legacy": "efc579029f6a64e0",
+        "creation": "39a3bc72da352ab2",
     }
     for policy, digest in expected.items():
         elements = module.build_ipm_2c().compile(policy).elements
         payload = json.dumps(
             [element.__dict__ for element in elements], sort_keys=True
         ).encode()
-        assert len(elements) == 16312
+        assert len(elements) == 16192
         assert hashlib.sha256(payload).hexdigest()[:16] == digest
 
 

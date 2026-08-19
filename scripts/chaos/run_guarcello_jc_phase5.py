@@ -341,7 +341,7 @@ def _build_yaml_design(source_path: Path) -> Path:
             np.savez(output / "ipm_arrays.npz", **arrays)
         return output
     output.mkdir(parents=True, exist_ok=True)
-    design = compile_design(load_design(source_path), coupler_mode="cached", strict=True)
+    design = compile_design(load_design(source_path), coupler_mode="auto", strict=True)
     matrices = build_matrices(design.elements, LossSpec(0.0))
     for name in ("C", "G", "K", "Bphi"):
         sp.save_npz(output / f"{name}.npz", matrices[name].tocsr())

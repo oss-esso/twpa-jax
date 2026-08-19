@@ -66,7 +66,7 @@ def build_one(variant: Variant, source: Path, outroot: Path, *, overwrite: bool)
         cj_scatter=cj_scatter,
         seed=SCATTER_SEED,
         overwrite=overwrite,
-        coupler_mode="cached",
+        coupler_mode="auto",
         loss=LossSpec(default=variant.tan_delta),
     )
     return {

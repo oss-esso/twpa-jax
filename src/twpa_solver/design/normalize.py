@@ -159,7 +159,11 @@ def _normalize_block(
             "port": port,
         }
     result = dict(block)
-    result.setdefault("cursor", line.cursor)
+    if kind in {
+        "port", "resistor", "transmission_line", "jj_line", "jtl",
+        "rf_squid_line", "ipm_line", "ipm_row", "ipm_tail",
+    }:
+        result.setdefault("cursor", line.cursor)
     return result
 
 

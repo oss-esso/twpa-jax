@@ -60,14 +60,14 @@ EXP09 = "experiments/exp09_full_ipm_gain_from_pump.py"
 # blows up far above this.
 FLUX_MAX = 1.0e3
 
-# The IPM variants. ``2c`` reuses the cached coupler geometry baked into exp07;
+# The IPM variants. ``2c`` optimizes the coupler for the requested target;
 # ``3c`` re-optimises the coupler for -20 dB at 10 GHz and places one every two
 # arrays; ``7c`` is the longer 3c-family design with one coupler after each
 # array, for seven couplers total including the input coupler.
 DESIGNS: dict[str, dict[str, Any]] = {
     "2c": {
         "overrides": {},
-        "coupler_mode": "cached",
+        "coupler_mode": "optimize",
     },
     "2c_lj79_cg33": {
         "overrides": {

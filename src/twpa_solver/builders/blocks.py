@@ -220,7 +220,7 @@ def build_ipm_topology(params: Any, coupler: CouplerDiscrete,
     """Build the legacy IPM topology through the generic block dispatchers."""
     if mod_array is not None and plan is not None:
         raise ValueError("make_ipm accepts either mod_array or plan, not both")
-    values = np.ones(params.num_rows * params.array_length, dtype=float) if mod_array is None else mod_array
+    values = np.ones(params.jtl_row_count * params.jtl_cells_per_array, dtype=float) if mod_array is None else mod_array
     ctx = BuildContext([], {"signal": params.start_node_top, "pump": params.start_node_bot},
                        0, params.ground, coupler=coupler, mod_array=values, plan=plan)
 
@@ -235,32 +235,32 @@ def build_ipm_topology(params: Any, coupler: CouplerDiscrete,
     p = params
     emit("port", {"cursor": "signal", "port": 1}, "input_signal")
     emit("resistor", {"cursor": "signal", "value": p.Rleft}, "input_signal_resistor")
-    emit("transmission_line", {"cursor": "signal", "cells": p.len1,
+    emit("transmission_line", {"cursor": "signal", "cells": p.signal_input_cpw_cells,
                                 "L": p.Ll, "C": p.Cl}, "input_signal_tl")
     emit("port", {"cursor": "pump", "port": 3}, "input_pump")
     emit("resistor", {"cursor": "pump", "value": p.Rm}, "input_pump_resistor")
-    emit("transmission_line", {"cursor": "pump", "cells": p.len3,
+    emit("transmission_line", {"cursor": "pump", "cells": p.pump_input_cpw_cells,
                                 "L": p.Ll, "C": p.Cl}, "input_pump_tl")
     emit("directional_coupler", {"cursors": ["signal", "pump"]}, "input_coupler")
-    for row in range(1, p.num_rows):
-        emit("jj_line", {"cursor": "signal", "cells": p.array_length,
+    for row in range(1, p.jtl_row_count):
+        emit("jj_line", {"cursor": "signal", "cells": p.jtl_cells_per_array,
                           "Lj": p.Lj, "Cj": p.Cj, "Cg": p.Cg}, f"row[{row}]")
-        if row % p.arrays_per_dc == 0:
-            emit("transmission_line", {"cursor": "signal", "cells": p.length_of_long_TL,
+        if row % p.jtl_rows_per_coupler == 0:
+            emit("transmission_line", {"cursor": "signal", "cells": p.signal_inter_coupler_cpw_cells,
                                         "L": p.Ll, "C": p.Cl}, f"row[{row}].long")
-            emit("transmission_line", {"cursor": "pump", "cells": p.coupler_section_length,
+            emit("transmission_line", {"cursor": "pump", "cells": p.pump_inter_coupler_cpw_cells,
                                         "L": p.Ll, "C": p.Cl}, f"row[{row}].section")
             emit("directional_coupler", {"cursors": ["signal", "pump"]}, f"row[{row}].coupler")
         else:
-            emit("transmission_line", {"cursor": "signal", "cells": p.length_of_short_TL,
+            emit("transmission_line", {"cursor": "signal", "cells": p.inter_array_cpw_cells,
                                         "L": p.Ll, "C": p.Cl}, f"row[{row}].short")
-    emit("jj_line", {"cursor": "signal", "cells": p.array_length,
+    emit("jj_line", {"cursor": "signal", "cells": p.jtl_cells_per_array,
                       "Lj": p.Lj, "Cj": p.Cj, "Cg": p.Cg}, "final_array")
-    emit("transmission_line", {"cursor": "signal", "cells": p.len2,
+    emit("transmission_line", {"cursor": "signal", "cells": p.signal_output_cpw_cells,
                                 "L": p.Ll, "C": p.Cl}, "output_signal_tl")
     emit("resistor", {"cursor": "signal", "value": p.Rright}, "output_signal_resistor")
     emit("port", {"cursor": "signal", "port": 2}, "output_signal")
-    emit("transmission_line", {"cursor": "pump", "cells": p.len4,
+    emit("transmission_line", {"cursor": "pump", "cells": p.pump_output_cpw_cells,
                                 "L": p.Ll, "C": p.Cl}, "output_pump_tl")
     emit("resistor", {"cursor": "pump", "value": p.Rm}, "output_pump_resistor")
     emit("port", {"cursor": "pump", "port": 4}, "output_pump")

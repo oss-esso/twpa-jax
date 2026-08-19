@@ -29,12 +29,13 @@ DESIGN = Path(__file__).resolve().parents[1] / "designs" / "ipm_2c_fixed"
 def params() -> IPMParams:
     if not DESIGN.exists():
         pytest.skip(f"reference design {DESIGN} is not present")
-    return IPMParams(**json.loads((DESIGN / "ipm_summary.json").read_text())["params"])
+    values = json.loads((DESIGN / "ipm_summary.json").read_text())["params"]
+    return IPMParams(**values)
 
 
 @pytest.fixture(scope="module")
 def coupler(params: IPMParams):
-    return make_coupler_discrete(params, "cached")
+    return make_coupler_discrete(params, "auto")
 
 
 def cells(params: IPMParams) -> int:

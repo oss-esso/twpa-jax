@@ -43,7 +43,7 @@ Run:
     python experiments/exp07_python_ipm_design_builder.py --write-matrices --draw
 
 Fast default:
-    --coupler-mode cached
+    --coupler-mode optimize
 
 More literal CPW reverse optimization:
     --coupler-mode optimize
@@ -137,13 +137,6 @@ class IPMParams:
     Rm: float = 50.0
 
     cell_length_um: float = 10.0
-
-    # Cached geometry close to the previous optimized design printout.
-    # Use --coupler-mode optimize to recompute with scipy L-BFGS-B.
-    cached_coupler_width_um: float = 39.897
-    cached_coupler_gap_um: float = 44.762
-    cached_coupler_gap_to_ground_um: float = 10.5973385055
-    cached_coupler_length_um: float = 3787.7
 
 
 # =============================================================================
@@ -641,15 +634,6 @@ def add_edge_coupled_directional_coupler(
 
 
 def make_coupler_discrete(params: IPMParams, mode: str) -> CouplerDiscrete:
-    if mode == "cached":
-        return calculate_discrete_params(
-            params.cached_coupler_width_um,
-            params.cached_coupler_gap_to_ground_um,
-            params.cached_coupler_gap_um,
-            params.cached_coupler_length_um,
-            params.cell_length_um,
-        )
-
     if mode in ("optimize", "optimize_exact", "optimize_matched"):
         geom = optimize_coupler_geometry(
             coupling_dB=params.coupling_dB,
@@ -1218,7 +1202,11 @@ def draw_schematics(outdir: str) -> None:
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(conflict_handler="resolve")
     p.add_argument("--outdir", default=os.path.join("outputs", "ipm_python_design"))
-    p.add_argument("--coupler-mode", choices=["cached", "optimize"], default="cached")
+    p.add_argument(
+        "--coupler-mode",
+        choices=["optimize", "optimize_exact", "optimize_matched"],
+        default="optimize",
+    )
     p.add_argument(
         "--lj-ph",
         type=float,
