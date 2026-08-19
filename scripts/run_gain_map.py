@@ -4879,6 +4879,11 @@ def run_frequency_chunks(
 def main(argv: list[str] | None = None) -> int:
     raw_argv = sys.argv[1:] if argv is None else list(argv)
     args = parse_args(raw_argv)
+    frequency_chunk_size_explicit = any(
+        token == "--frequency-chunk-size"
+        or token.startswith("--frequency-chunk-size=")
+        for token in raw_argv
+    )
     # Resolve roles and mixing order before building points or spawning chunk
     # workers.  InProcessEngine repeats this defensively for direct callers.
     runtime_circuit = load_circuit(args.circuit_dir)
@@ -4899,7 +4904,11 @@ def main(argv: list[str] | None = None) -> int:
     )
     if args.frequency_workers < 1:
         raise ValueError("--frequency-workers must be >= 1")
-    if args.frequency_workers > 1 and args.frequency_chunk_size > 0:
+    if (
+        args.frequency_workers > 1
+        and args.frequency_chunk_size > 0
+        and not frequency_chunk_size_explicit
+    ):
         args.frequency_chunk_size = max(
             1, int(np.ceil(args.n_frequency / args.frequency_workers))
         )

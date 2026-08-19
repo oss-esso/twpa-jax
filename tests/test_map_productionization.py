@@ -35,11 +35,127 @@ def test_workflow_modes_are_mutually_exclusive() -> None:
         ])
 
 
+def test_fast_workflow_defers_pump_cleanup_until_after_plots(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_dir = tmp_path / "run"
+    pump_solution = run_dir / "points" / "point_0000" / "pump_solution.npz"
+    pump_solution.parent.mkdir(parents=True)
+    pump_solution.write_bytes(b"pump")
+    events: list[tuple[str, bool]] = []
+
+    def fake_run_gain_map(run_args: list[str]) -> int:
+        events.append(("run", pump_solution.exists()))
+        assert "--no-compact-output" in run_args
+        assert "--compact-output" not in run_args
+        (run_dir / "map_spectrum.npz").write_bytes(b"spectrum")
+        return 0
+
+    def fake_plot_gain_map(plot_args: list[str]) -> int:
+        events.append(("map", pump_solution.exists()))
+        return 0
+
+    def fake_pump_frequency(*_args: object) -> None:
+        events.append(("frequency", pump_solution.exists()))
+
+    def fake_pump_power(*_args: object) -> None:
+        events.append(("power", pump_solution.exists()))
+
+    monkeypatch.setattr(run_gain_map_and_plots.run_gain_map, "main", fake_run_gain_map)
+    monkeypatch.setattr(run_gain_map_and_plots.plot_gain_map, "main", fake_plot_gain_map)
+    monkeypatch.setattr(run_gain_map_and_plots, "plot_pump_frequency", fake_pump_frequency)
+    monkeypatch.setattr(run_gain_map_and_plots, "plot_pump_power", fake_pump_power)
+
+    result = run_gain_map_and_plots.main([
+        "--design", "designs/ipm_2c_fixed", "--fast", "--run-dir", str(run_dir),
+    ])
+
+    assert result == 0
+    assert events == [
+        ("run", True),
+        ("map", True),
+        ("frequency", True),
+        ("power", True),
+    ]
+    assert not pump_solution.exists()
+
+
+def test_gain_map_workflow_sequences_multiple_design_directories(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    design_a = tmp_path / "design_a"
+    design_b = tmp_path / "design_b"
+    design_a.mkdir()
+    design_b.mkdir()
+    run_root = tmp_path / "maps"
+    events: list[tuple[str, str, str]] = []
+
+    def fake_run_gain_map(run_args: list[str]) -> int:
+        design = run_args[run_args.index("--circuit-dir") + 1]
+        run_dir = Path(run_args[run_args.index("--outdir") + 1])
+        events.append(("run", design, str(run_dir)))
+        run_dir.mkdir(parents=True, exist_ok=True)
+        (run_dir / "map_spectrum.npz").write_bytes(b"spectrum")
+        return 0
+
+    def fake_plot_gain_map(plot_args: list[str]) -> int:
+        design = plot_args[plot_args.index("--ipm-dir") + 1]
+        run_dir = plot_args[plot_args.index("--run-dir") + 1]
+        events.append(("plot", design, run_dir))
+        return 0
+
+    monkeypatch.setattr(run_gain_map_and_plots.run_gain_map, "main", fake_run_gain_map)
+    monkeypatch.setattr(run_gain_map_and_plots.plot_gain_map, "main", fake_plot_gain_map)
+    monkeypatch.setattr(run_gain_map_and_plots, "plot_pump_frequency", lambda *args: None)
+    monkeypatch.setattr(run_gain_map_and_plots, "plot_pump_power", lambda *args: None)
+
+    result = run_gain_map_and_plots.main([
+        "--design", str(design_a), str(design_b), "--fast",
+        "--run-dir", str(run_root),
+    ])
+
+    assert result == 0
+    assert events == [
+        ("run", str(design_a), str(run_root / "design_a")),
+        ("plot", str(design_a), str(run_root / "design_a")),
+        ("run", str(design_b), str(run_root / "design_b")),
+        ("plot", str(design_b), str(run_root / "design_b")),
+    ]
+
+
 def test_slow_workflow_translates_shared_axis_flags() -> None:
     translated = run_gain_map_and_plots._translate_slow_flags([
         "--pump-power-min-dbm", "-20", "--pump-freq-max-ghz", "7.9",
     ])
     assert translated == ["--power-min-dbm", "-20", "--freq-max-ghz", "7.9"]
+
+
+def test_fast_worker_defaults_use_half_ram_and_match_chunk_size(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(run_gain_map_and_plots, "available_memory_gb", lambda: 20.0)
+    monkeypatch.setattr(run_gain_map_and_plots, "_fast_worker_memory_gb", lambda _design: 2.0)
+    monkeypatch.setattr(run_gain_map_and_plots.os, "cpu_count", lambda: 64)
+
+    args = run_gain_map_and_plots._fast_parallel_defaults(
+        ["--n-frequency", "50"], tmp_path / "design"
+    )
+
+    assert args[:2] == ["--n-frequency", "50"]
+    assert args[args.index("--frequency-workers") + 1] == "5"
+    assert "--frequency-chunk-size" in args
+    assert args[args.index("--frequency-chunk-size") + 1] == "5"
+
+
+def test_fast_parallel_defaults_preserve_explicit_worker_and_chunk_values(
+    tmp_path: Path,
+) -> None:
+    args = run_gain_map_and_plots._fast_parallel_defaults(
+        ["--frequency-workers", "3", "--frequency-chunk-size", "7"],
+        tmp_path / "design",
+    )
+
+    assert args == ["--frequency-workers", "3", "--frequency-chunk-size", "7"]
 
 
 def test_frequency_worker_flags_are_available() -> None:
