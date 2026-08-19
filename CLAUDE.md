@@ -1084,7 +1084,234 @@ Three instrument defects behind this:
 - `scripts/floquet_stability_sweep.py` now prints the phase as ASCII `angle=`
   and writes its JSON before the summary block.
 
-### `|lambda|` is not a decidable discriminant on this circuit
+### `|lambda|` IS decidable on this circuit — NS crossing measured 2026-08-19
+
+**This supersedes the "not a decidable discriminant" entry below**, which is
+retained only because its individual measurements are still true. Its
+*conclusion* is refuted: a `|lambda| = 1` crossing was found on
+`designs/ipm_2c_fixed` at `f_p = 7.9 GHz` with `current_complex_c` and **no
+added dissipation**, and it cross-validates against the torus branch.
+
+What the old entry got wrong was not the numbers but the **search**. A dense
+scan reports `max |lambda|` over all roots, which has no branch identity, so it
+returns whichever internal mode happens to be highest. The unstable pair sits in
+the **negative-imaginary half-plane** and a real-seeded shift-invert search never
+reaches it. Search both half-planes.
+
+Procedure that worked (`scripts/chaos/enumerate_hill_candidates.py` then
+`scripts/chaos/track_critical_root.py`, S=5, `gamma_nt=4096`, `--pump-port 4`,
+`current_complex_c`, period-1 pumps from `scripts/recover_period1_branch.py`):
+exhaustive half-zone scan `[0, 3.95] GHz` at 700 points with
+`--both-imaginary-half-planes --imag-seed-ghz 0.01` returned 126 converged roots
+of which **exactly one** grows -- `f = 0.737003 - 0.003845i GHz`,
+`|lambda| = 1.003062`, growth `+2.4156e7 s^-1` at `-24.05 dBm`. Reseeding the
+tracker there and marching `-24.60 -> -23.60 dBm` in `0.05 dB` steps gives a
+monotone `|lambda|` `0.994357 -> 1.013449`, mode overlap `>= 0.998979`
+throughout, zero discontinuities.
+
+| source | onset power [dBm] | onset `f_a/f_p` |
+| --- | ---: | ---: |
+| Hill crossing (linearized about period-1) | **-24.2334894** | 0.0922889 |
+| torus normal-form fit `r^2 = 0.9202*(P + 24.2435)` | **-24.2435** | 0.0918712 |
+| difference | 0.0100 dB | 0.45% (3.26 MHz) |
+
+Two operators sharing no basis agree on **both** the onset power and the onset
+frequency. Neither can fake the other; this is the validation, not the 0.010 dB
+alone.
+
+**The Hill and torus frequency slopes have opposite signs, and that is
+predicted, not a contradiction.** The NS normal form is
+`omega_torus(P) = omega_c + a*(P - P_c) + b*r^2(P)`. Hill below onset measures
+`a` alone; the torus above onset measures `a + b*(dr^2/dP)`:
+
+```text
+a  (Hill, near crossing)   = +0.0404  GHz/dB
+   (torus)                 = -0.01513 GHz/dB
+b * 0.9202                 = -0.05553  ->  b = -0.0604 GHz per unit r^2
+```
+
+Negative twist of the same order as `a`: amplitude pulls the frequency down,
+power pulls it up. Do not re-derive this; do not read the sign flip as a
+tracking failure.
+
+**Two caveats that must travel with the number.**
+
+`|lambda|` moves `0.019 per dB` along this branch, so the crossing location is
+`2e-4` in `|lambda|` per `0.01 dB`. Defending `-24.2334894` to 0.010 dB
+therefore demands `|lambda|` accurate to `2e-4`, and the measurement was made at
+**S=5** while production 2c is S=10. The sideband axis has never been tested on
+this quantity. **Quote the crossing as `-24.23 dBm` until the S=6/8/10 control
+is run**; the two-operator agreement is robust, its last two digits are not.
+
+Both HB routes sit **0.178-0.288 dB below** the FDTD onset bracket
+`[-24.055, -23.945] dBm` (converted from `I/I_bound` in `[0.5875, 0.5950]` on
+the anchor `6.83555e-6 A` at `-24.05 dBm`, `I_bound = 1.1628e-05 A`). The offset
+is single-signed: HB births the torus earlier than FDTD detects it.
+
+**The detection-floor explanation was tested and REFUTED (2026-08-19.)** The
+hypothesis was that FDTD detects onset late by construction, off-lattice power
+growing as `r^2 ~ (P - P_c)` from zero so that any detection floor maps to a
+finite offset. Fitting the stored `phaseB_2c_gap` spectra
+(`measure_ansatz_validity.py --include-pump-only`) linearly in drive over
+`I/I_bound` = `0.5950/0.5975/0.6000/0.6025` and extrapolating to zero gives
+
+```text
+m = 0.931146    P_0 = -23.96318 dBm    R^2 = 0.9654
+```
+
+`P_0` lands **inside** the FDTD bracket, near its upper edge -- extrapolating to
+zero does not move FDTD toward HB. The `~0.27 dB` offset is real. Held-out check
+at `0.5875` (`-24.0552 dBm`, below `P_0`): observed `1.08e-5`, i.e. zero, which
+is what the clipped law `max(0, m*(P-P_0))` predicts -- **that point confirms the
+fit and must not be scored against the unclipped line's negative value.**
+Caveats to carry: four points for two parameters, residuals arched `-,+,+,-`
+(curvature), and the point nearest onset is over-predicted by 36% of its own
+value, which biases `P_0` late. Not enough to close `0.27 dB`.
+
+#### Four-axis attribution of the HB-vs-FDTD offset (2026-08-19)
+
+Three of four candidate owners are eliminated; the residual is **~0.18 dB** and
+is accepted as open. Do not attribute it to any of the closed axes.
+
+| axis | measured effect | status |
+| --- | ---: | --- |
+| fit form / denominator | `<= 0.011 dB` over five variants | eliminated |
+| loss convention | exactly `0` | **axis does not exist here** |
+| pump basis `K=5 -> K=7` | `2.6e-10 dB` | eliminated |
+| FDTD timestep `0.01 -> 0.005` | `-0.056 dB`, order unknown | live, cannot close it |
+| **unexplained residual** | **`~0.18 dB`** | **open, accepted** |
+
+The loss-convention row is `0` because `current_complex_c` and
+`conductance_abs_omega` assemble a **bit-identical** matrix on a device with
+`has_loss = False` (`difference_nnz = 0`, `max_abs_difference = 0.0`). Record it
+as "the axis does not exist on 2c", never as "measured and found small" -- the
+result does not carry to a lossy device.
+
+**The timestep number must be quoted from a like-for-like 3-point fit.** The
+off-lattice extrapolation is only valid on points still rising; at `dt=0.005`
+the turnover arrives one control point earlier than at `dt=0.01` (`0.10246 ->
+0.09627` at `0.6025`), so the naive 4-point comparison fits a bent curve on one
+side only. Refit both on the three rising points:
+
+| | slope | `P_0` [dBm] | `R^2` | gap to torus `P_c` |
+| --- | ---: | ---: | ---: | ---: |
+| `dt=0.010`, 3pt | 1.14477 | -23.955276 | 0.99918 | +0.2882 dB |
+| `dt=0.005`, 3pt | 0.75420 | -24.010870 | 0.98403 | +0.2326 dB |
+
+**A `-0.105 dB` timestep shift from a 4-point `dt=0.005` fit (`R^2 = 0.776`) is
+an artifact of including the turned-over point -- do not quote it.** The true
+shift is `-0.056 dB`, i.e. the timestep closes 19% of the gap, not 40%. The
+fitted slope has not converged either (`1.145 -> 0.754`), so no order is
+established and Richardson is not licensed: a generous first-order
+extrapolation still leaves `0.177 dB`, second-order `0.214 dB`.
+
+**One control is outstanding before any `dt=0.0025` rung.** The stored
+`dt=0.01` spectra record `natural_bandwidth = 4578` -- the legacy 6136-node
+build -- while the `dt=0.005` run used the live 6096 build (`4558`). That build
+delta is worth `~0.038 dB` on this quantity ([[two-2c-builds-same-device]]),
+comparable to the `0.056 dB` being attributed to the timestep. Rerun control
+`0.5975` at `dt=0.01` on the live build and compare against the stored
+`0.05205121`; only then is the timestep number clean.
+
+**The `Cj`/`Cg` fallback added in `53a4ee3` is NOT a confound.** It fills
+2508 branches from the `design_resolved.json` scalars when `arrays.npz` carries
+no per-branch arrays (the pre-commit code raised instead, so 2c FDTD could not
+run at all on the live build). Measured against `elements.csv`: `jj_cj` is
+2508 elements all at exactly `1.45e-13`, so the `Cj` fill is exact; `jtl_cg` is
+2514 elements, `2502 x 6.6e-14` plus **12** boundary-halved `3.3e-14` at cell
+indices `0, 417/418, 835/836, 1253/1254, 1671/1672, 2089/2090, 2507`, and the
+uniform 2508-entry fill totals `1.65528e-10 F` -- **identical to the true
+circuit**. Total ground capacitance is conserved exactly; only 12 of 2514
+elements are redistributed. The kernel takes 2508 per-branch values against
+2514 ground caps, so no run ever used the literal element list.
+
+Offset-free corroboration worth keeping: FDTD's own fitted generator frequency
+is `0.7290175 GHz` against HB's `0.7206-0.7229 GHz`, a `6.1-8.4 MHz` difference
+against an FFT bin spacing of `9.7 MHz` (`0.7387193 - 0.7290175`, `0.3700526 -
+0.3603509`). **The two methods agree on the torus frequency to inside one
+bin** -- they disagree only on onset power, which favours a calibration-style
+offset over a physics disagreement.
+
+**Sideband truncation is converged, at S=6 (2026-08-19).** Measured on the two
+bracketing drives:
+
+```text
+S=5 -> S=6   6.2e-4 in |lambda|   <- NOT truncation: circuit change, see below
+S=6 -> S=8   8.3e-9
+S=8 -> S=10  1.0e-10
+```
+
+Production S=10 was never required for this quantity. **The `S=5 -> S=6` step is
+confounded and must not be quoted as a truncation shift.** Per-tone dimension
+gives it away: `67056/11 = 6096` at S=5 against `79768/13 = 104312/17 =
+128856/21 = 6136` at S=6/8/10, i.e. two different builds of `ipm_2c_fixed`, so
+its `+0.0379 dB` apparent shift is a circuit change. The S=6/8/10 rungs also fed
+pumps solved on the 6096-node build into a Hill operator assembled on the
+6136-node one; that inconsistency is real but small (see below), so treat their
+absolute crossings as carrying a `~0.04 dB` circuit offset rather than as
+invalid. Only the rung-to-rung convergence above is quoted.
+
+### The two `ipm_2c_fixed` builds are the same device (measured 2026-08-19)
+
+`designs/ipm_2c_fixed/` is **gitignored** (`.gitignore:17`), so the circuit every
+recent result runs on is an untracked local artifact. A tracked 6136-node build
+existed until `665bca8` and is recoverable with
+`git archive 665bca8^ designs/ipm_2c_fixed`.
+
+| | tracked 6136 | live 6096 |
+| --- | ---: | ---: |
+| nodes / elements | 6136 / 16312 | 6096 / 16192 |
+| coupler sections | 760 | 740 |
+| josephson_inductor | 2508 | 2508 |
+| generator | old builder `coupler_mode="cached"` | current builder `"auto"` |
+
+The whole difference is a **20-cell-shorter directional coupler** (20 cells x 2
+conductors = 40 nodes, each with one `L` and one `C`, plus 20 `Cc` and 20 `K`).
+The JJ array, ports and drive topology are identical. `cached` no longer exists
+in `src/` (`make_coupler_discrete` raises on it; `COUPLER_MODES = ("auto",
+"ideal", "optimize")`), so **the 6136 build cannot be regenerated with today's
+code** and the 6096 build is the reproducible one. The
+component-profiles section's "passes at 16312/16312 with `--coupler-mode cached`"
+describes the removed builder and is stale.
+
+Pump-off S-parameters at `7.9 GHz`, both builds unitary
+(`sum |S_k1|^2 = 1.000000`):
+
+```text
+term    live dB   legacy dB     d dB    d power
+S21     -0.5289    -0.5754    +0.0466   +9.4e-3
+S34     -0.3735    -0.4018    +0.0283   +6.0e-3
+S11    -15.1248   -15.2092    +0.0844   +5.9e-4
+S31    -10.8577   -10.7654    -0.0923   -1.8e-3
+S24    -10.9442   -11.1067    +0.1625   +3.0e-3
+S41    -27.3258   -19.9487    -7.3771   -8.3e-3   <- isolation null
+S44    -39.8779   -31.2276    -8.6503   -6.5e-4   <- isolation null
+```
+
+**No term differs by more than ~1% of input power.** Broadband 4-12 GHz, `S21`
+rms `0.0226 dB` and `S34` rms `0.0221 dB`. The large dB residuals (`S11` rms
+4.86, `S41` rms 12.74) sit entirely on near-nulls at -20 to -65 dB and carry no
+power; the resonance comb does shift (`S11` null by 70 MHz, `S31` null by
+250 MHz) but those nulls are -41 to -65 dB deep.
+
+Consequence: the two builds are the **same device to ~1%**, and the `0.038 dB`
+NS-crossing shift between them is the proportionate response of a threshold to a
+1% linear perturbation, not evidence of a defect. Choosing between them is a
+reproducibility question, not a physics one -- prefer the 6096 build because the
+current code can rebuild it, and un-ignore and commit it so the tracked circuit
+is the one actually run. `tests/data/ipm_2c_reference/*` regenerated to 6096 is
+consistent with that choice, not a covered-up drift.
+
+Consequence for `Q`: the torus `P_c` is no longer single-sourced, so the `Q=2`
+truncation control is **confirmatory rather than gating**. A `Q=1` bias would
+have to be coincidentally matched, in both power and frequency, by an unrelated
+S=5 Hill bias.
+
+Also resolved: the near-unit roots at `2.67`/`3.47`/`3.91 GHz` that the old
+entry called power-independent internal modes now read `|lambda| ~ 0.9556`
+(4.4% damped) under this procedure and no longer confuse the search.
+
+### Superseded: `|lambda|` is not a decidable discriminant on this circuit
 
 `designs/ipm_2c_fixed` resolves to `has_loss = False`: four 50-ohm port
 resistors are the only dissipation in a 6136-node / 16312-element network, so
@@ -1109,6 +1336,13 @@ monodromy scan, not to the Hill sweep.
 
 **Consequence: do not report a `|lambda|` crossing on a lossless circuit.**
 Making stability decidable requires physical dissipation first.
+
+**REFUTED 2026-08-19.** See the entry above. The blocker was the search (dense
+`max |lambda|` has no branch identity, and the unstable pair is in the
+negative-imaginary half-plane), not the absence of dissipation. The RCSJ
+regularization campaign in `outputs/chaos/2c_rcsj_stability_column` failed for
+the same reason -- its G3 gate read `max |lambda|` off a filtered dense scan --
+and its `INCONCLUSIVE` branch-repair verdict is likewise explained.
 
 ### The time-domain monodromy route fails on 2c and should not be retried as-is
 
