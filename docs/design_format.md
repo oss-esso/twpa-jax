@@ -76,7 +76,7 @@ the detailed circuit representation.
 | `topology` | yes | Ordered list of physical blocks and local changes. |
 | `profiles` | no | Deterministic cell-to-cell parameter changes. |
 | `patches` | no | Optional separate list of local edits. |
-| `coupler_mode` | no | Override the technology coupler mode with `auto`, `cached`, `ideal`, or `optimize`. |
+| `coupler_mode` | no | Override the technology coupler mode with `auto`, `ideal`, or `optimize`. |
 
 The compiler rejects unknown top-level fields, missing required fields,
 unknown blocks, duplicate names, invalid references, and unsupported schema
@@ -155,14 +155,17 @@ values normally shared by a fabrication platform:
 | `coupling_dB` | dB | Coupler target coupling. |
 | `Z0` | ohm | Nominal line and port impedance. |
 | `coupler_freq_hz` | Hz | Frequency used for coupler design. |
-| `length_of_short_TL` | cells | Short signal-line section length. |
-| `length_of_long_TL` | cells | Long signal-line section length. |
-| `coupler_section_length` | cells | Pump-line section length through a coupler. |
-| `len1`, `len2`, `len3`, `len4` | cells | Input/output line lengths. |
+| `jtl_cells_per_array` | cells | Josephson cells in each JTL array. |
+| `jtl_row_count` | count | Total number of JTL rows. |
+| `jtl_rows_per_coupler` | count | JTL rows before each intermediate coupler. |
+| `inter_array_cpw_cells` | cells | CPW cells between adjacent JTL arrays. |
+| `signal_inter_coupler_cpw_cells` | cells | Signal CPW cells before the next coupler. |
+| `pump_inter_coupler_cpw_cells` | cells | Pump CPW cells between couplers. |
+| `signal_input_cpw_cells`, `signal_output_cpw_cells` | cells | Signal input/output CPW lengths. |
+| `pump_input_cpw_cells`, `pump_output_cpw_cells` | cells | Pump input/output CPW lengths. |
 | `Rleft`, `Rright`, `Rm` | ohm | Signal and pump termination resistances. |
-| `num_rows` | count | Default number of IPM rows. |
-| `arrays_per_dc` | count | Rows between couplers. |
-| `cached_coupler_*` | um | Cached coupler geometry values. |
+| `jtl_row_count` | count | Default number of IPM rows. |
+| `jtl_rows_per_coupler` | count | Rows before an intermediate coupler. |
 | `cursors.signal` | node | Starting signal cursor. |
 | `cursors.pump` | node | Starting pump cursor. |
 | `ground` | node | Ground node number. |
@@ -200,7 +203,7 @@ Use SI units in YAML. The most common values are:
 | `Lj` | H | Nominal Josephson inductance. `123.9e-12` is 123.9 pH. |
 | `Cj` | F | Junction capacitance. `145e-15` is 145 fF. |
 | `Cg` | F | Ground capacitance per nonlinear cell. |
-| `array_length` | count | Number of cells in one JJ line. |
+| `jtl_cells_per_array` | count | Number of cells in one JJ line. |
 | `L` | H | Linear inductor value. |
 | `C` | F | Capacitor or transmission-line capacitance. |
 | `Ic` | A | Critical current for an RF-SQUID line. |
@@ -222,8 +225,8 @@ Use a block name once only.
 | `input_ports` | `name` | none | Standard signal and pump input ports, terminations, and input lines. |
 | `output_ports` | `name` | none | Standard signal and pump output ports, terminations, and output lines. |
 | `directional_coupler` | `name` | none | Coupler between the signal and pump cursors. |
-| `ipm_line` | `name`, `cursor`, one of `rows`/`arrays` | `cells`, `Lj`, `Cj`, `Cg`, `between`, `end_coupler` | One or more nonlinear IPM rows. |
-| `ipm_tail` | `name`, `rows` | `cursor`, `cells`, `Lj`, `Cj`, `Cg`, `final_array` | Final nonlinear section. Set `final_array: true`. |
+| `ipm_line` | `name`, `cursor`, one of `rows`/`arrays` | `cells`, `Lj`, `Cj`, `Cg`, `between`, `trailing_signal_cpw_cells`, `trailing_pump_cpw_cells`, `end_coupler` | Nonlinear rows followed by the signal and pump routing to the next coupler. |
+| `ipm_tail` | `name`, `rows` | `cursor`, `cells`, `Lj`, `Cj`, `Cg`, `between`, `final_array` | Final nonlinear rows without a trailing coupler section. Set `final_array: true`. |
 | `ipm_row` | `name`, `cursor`, `cells`, `Lj`, `Cj`, `Cg` | none | One explicit nonlinear row. |
 
 Example:
@@ -250,6 +253,40 @@ topology:
 
 `rows` and `arrays` are accepted aliases for the number of IPM rows. Use
 `rows` in new files.
+
+`ipm_line` and `ipm_tail` are composite blocks. They hide the following
+operations:
+
+1. Each requested row becomes one `jj_line` with `cells` Josephson cells.
+2. `between` inserts a CPW transmission line between consecutive rows.
+3. `ipm_line` then appends `trailing_signal_cpw_cells` on the signal path and
+   `trailing_pump_cpw_cells` on the pump path. These are the routing sections
+   that lead to the next directional coupler.
+4. `ipm_tail` stops after the final JTL row. It does not add a long signal CPW,
+   a pump CPW section, or a coupler.
+
+For `ipm_2c_line_scoped`, the resulting paths are:
+
+```text
+Signal:
+Port 1 -> termination -> coupler_in
+  -> JTL row 0 (418 cells) -> CPW (90 cells)
+  -> JTL row 1 (418 cells) -> CPW (90 cells)
+  -> JTL row 2 (418 cells)
+  -> signal inter-coupler CPW (900 cells) -> coupler_1
+  -> JTL row 3 (418 cells) -> CPW (90 cells)
+  -> JTL row 4 (418 cells) -> CPW (90 cells)
+  -> JTL row 5 (418 cells)
+  -> signal output CPW (50 cells) -> Port 2
+
+Pump:
+Port 3 -> termination -> coupler_in
+  -> pump inter-coupler CPW (800 cells) -> coupler_1 -> Port 4
+```
+
+With `cell_length_um: 10`, these values correspond to 4.18 mm per JTL row,
+0.90 mm per inter-array CPW, 9.00 mm of signal routing, 8.00 mm of pump
+routing, and 0.50 mm at the signal output.
 
 ### 5.2 Reusable line and RF-SQUID blocks
 
@@ -401,7 +438,7 @@ Inheritance is one-level-per-file and deterministic:
 
 ```yaml
 # ipm_2c_linear.yaml
-extends: ipm_2c.yaml
+extends: ipm_2c_line_scoped.yaml
 name: ipm_2c_linear
 
 profiles:
@@ -422,7 +459,7 @@ Compile a YAML design into a generated circuit directory:
 
 ```powershell
 python -m twpa_solver.design `
-  --design designs/ipm_2c.yaml `
+  --design designs/ipm_2c_line_scoped.yaml `
   --outdir outputs/ipm_2c_compiled `
   --write-matrices `
   --strict
@@ -435,7 +472,7 @@ Compiler flags:
 | `--design PATH` | Source YAML file. Required. |
 | `--outdir PATH` | Generated circuit directory. Required. |
 | `--write-matrices` | Write `C.npz`, `G.npz`, `K.npz`, `Bphi.npz`, and arrays. Use this for workflows. |
-| `--coupler-mode auto\|cached\|ideal\|optimize` | Override the YAML/technology coupler mode. |
+| `--coupler-mode auto\|ideal\|optimize` | Override the YAML/technology coupler mode. |
 | `--overwrite` | Allow writing into a non-empty output directory. |
 | `--strict` | Enable strict compiler validation. |
 | `--profile-json PATH` | Legacy profile input. Prefer YAML `profiles`. |
@@ -458,13 +495,13 @@ The most useful checked-in examples are:
 
 | File | Use |
 | --- | --- |
-| `designs/ipm_2c.yaml` | Compact two-coupler IPM source. |
+| `designs/ipm_2c_line_scoped.yaml` | Compact two-coupler IPM source. |
 | `designs/ipm_3c.yaml` | Compact three-coupler IPM source. |
 | `designs/ipm_7c_ideal_node205.yaml` | Seven-coupler IPM example with a local node-205 capacitor. |
 | `designs/ipm_2c_linear.yaml` | IPM 2c with a YAML linear profile. |
-| `designs/ipm_2c_half_sine.yaml` | IPM 2c with a YAML half-sine profile. |
-| `designs/jtwpa_418jj.yaml` | Simple 418-junction line. |
 | `designs/rf_squid_2393_3wm.yaml` | RF-SQUID 3WM validation design. |
+| `designs/generic_blocks_showcase.yaml` | Line-scoped generic builder showcase. |
+| `designs/three_port_cpw_jtl_example.yaml` | Three-port CPW/JTL example. |
 
 Use the exact file names present in the checkout. Generated passive and gain
 outputs should be written below `outputs/`, not beside the source YAML.

@@ -1,6 +1,10 @@
 schema_version: 1
 name: ipm_7c_ideal_node205
 ground: 0
+cursors:
+  signal: 1
+  pump: 100000
+
 parameters:
   Lj: 1.239e-10
   Cj: 1.45e-13
@@ -10,27 +14,169 @@ parameters:
   array_length: 418
   long_tl: 900
   coupler_section: 800
-cursors:
-  signal: 1
-  pump: 100000
+
 topology:
-  - {type: port, name: in_signal, cursor: signal, port: 1}
-  - {type: resistor, name: r_in, cursor: signal, value: 50.0}
-  - {type: port, name: in_pump, cursor: pump, port: 3}
-  - {type: resistor, name: rm_in, cursor: pump, value: 50.0}
-  - {type: directional_coupler, name: coupler_in, cursors: [signal, pump]}
-  - {type: raw_element, name: capacitor_at_node_205, nodes: [205, 0], value: ${Cg}, kind: capacitor}
-  - repeat:
-      count: 6
-      name: period
-      topology:
-        - {type: jj_line, name: array, cursor: signal, cells: ${array_length}, Lj: ${Lj}, Cj: ${Cj}, Cg: ${Cg}}
-        - {type: transmission_line, name: long, cursor: signal, cells: ${long_tl}, L: ${Ll}, C: ${Cl}}
-        - {type: transmission_line, name: section, cursor: pump, cells: ${coupler_section}, L: ${Ll}, C: ${Cl}}
-        - {type: directional_coupler, name: coupler, cursors: [signal, pump]}
-  - {type: jj_line, name: final_array, cursor: signal, cells: ${array_length}, Lj: ${Lj}, Cj: ${Cj}, Cg: ${Cg}}
-  - {type: transmission_line, name: out_signal_tl, cursor: signal, cells: 50, L: ${Ll}, C: ${Cl}}
-  - {type: resistor, name: r_out, cursor: signal, value: 50.0}
-  - {type: port, name: out_signal, cursor: signal, port: 2}
-  - {type: resistor, name: rm_out, cursor: pump, value: 50.0}
-  - {type: port, name: out_pump, cursor: pump, port: 4}
+  - line: signal
+    port in: 1
+    port out: 2
+    blocks:
+      - type: input_ports
+        name: in_signal
+      - type: directional_coupler
+        name: coupler_in
+        cursors: [signal, pump]
+      - type: raw_element
+        name: capacitor_at_node_205
+        nodes: [205, 0]
+        value: ${Cg}
+        kind: capacitor
+      - type: jj_line
+        name: period_0_array
+        cells: ${array_length}
+        Lj: ${Lj}
+        Cj: ${Cj}
+        Cg: ${Cg}
+      - type: transmission_line
+        name: period_0_long
+        cells: ${long_tl}
+        L: ${Ll}
+        C: ${Cl}
+      - type: directional_coupler
+        name: period_0_coupler
+        cursors: [signal, pump]
+      - type: jj_line
+        name: period_1_array
+        cells: ${array_length}
+        Lj: ${Lj}
+        Cj: ${Cj}
+        Cg: ${Cg}
+      - type: transmission_line
+        name: period_1_long
+        cells: ${long_tl}
+        L: ${Ll}
+        C: ${Cl}
+      - type: directional_coupler
+        name: period_1_coupler
+        cursors: [signal, pump]
+      - type: jj_line
+        name: period_2_array
+        cells: ${array_length}
+        Lj: ${Lj}
+        Cj: ${Cj}
+        Cg: ${Cg}
+      - type: transmission_line
+        name: period_2_long
+        cells: ${long_tl}
+        L: ${Ll}
+        C: ${Cl}
+      - type: directional_coupler
+        name: period_2_coupler
+        cursors: [signal, pump]
+      - type: jj_line
+        name: period_3_array
+        cells: ${array_length}
+        Lj: ${Lj}
+        Cj: ${Cj}
+        Cg: ${Cg}
+      - type: transmission_line
+        name: period_3_long
+        cells: ${long_tl}
+        L: ${Ll}
+        C: ${Cl}
+      - type: directional_coupler
+        name: period_3_coupler
+        cursors: [signal, pump]
+      - type: jj_line
+        name: period_4_array
+        cells: ${array_length}
+        Lj: ${Lj}
+        Cj: ${Cj}
+        Cg: ${Cg}
+      - type: transmission_line
+        name: period_4_long
+        cells: ${long_tl}
+        L: ${Ll}
+        C: ${Cl}
+      - type: directional_coupler
+        name: period_4_coupler
+        cursors: [signal, pump]
+      - type: jj_line
+        name: period_5_array
+        cells: ${array_length}
+        Lj: ${Lj}
+        Cj: ${Cj}
+        Cg: ${Cg}
+      - type: transmission_line
+        name: period_5_long
+        cells: ${long_tl}
+        L: ${Ll}
+        C: ${Cl}
+      - type: directional_coupler
+        name: period_5_coupler
+        cursors: [signal, pump]
+      - type: jj_line
+        name: final_array
+        cells: ${array_length}
+        Lj: ${Lj}
+        Cj: ${Cj}
+        Cg: ${Cg}
+      - type: transmission_line
+        name: out_signal_tl
+        cells: 50
+        L: ${Ll}
+        C: ${Cl}
+      - type: output_ports
+        name: out_signal
+
+  - line: pump
+    port in: 3
+    port out: 4
+    blocks:
+      - type: input_ports
+        name: in_pump
+      - type: directional_coupler
+        name: coupler_in
+      - type: transmission_line
+        name: period_0_section
+        cells: ${coupler_section}
+        L: ${Ll}
+        C: ${Cl}
+      - type: directional_coupler
+        name: period_0_coupler
+      - type: transmission_line
+        name: period_1_section
+        cells: ${coupler_section}
+        L: ${Ll}
+        C: ${Cl}
+      - type: directional_coupler
+        name: period_1_coupler
+      - type: transmission_line
+        name: period_2_section
+        cells: ${coupler_section}
+        L: ${Ll}
+        C: ${Cl}
+      - type: directional_coupler
+        name: period_2_coupler
+      - type: transmission_line
+        name: period_3_section
+        cells: ${coupler_section}
+        L: ${Ll}
+        C: ${Cl}
+      - type: directional_coupler
+        name: period_3_coupler
+      - type: transmission_line
+        name: period_4_section
+        cells: ${coupler_section}
+        L: ${Ll}
+        C: ${Cl}
+      - type: directional_coupler
+        name: period_4_coupler
+      - type: transmission_line
+        name: period_5_section
+        cells: ${coupler_section}
+        L: ${Ll}
+        C: ${Cl}
+      - type: directional_coupler
+        name: period_5_coupler
+      - type: output_ports
+        name: out_pump

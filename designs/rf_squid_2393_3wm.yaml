@@ -1,6 +1,8 @@
 schema_version: 1
 name: rf_squid_2393_3wm
-coupler_mode: cached
+ground: 0
+cursors:
+  signal: 1
 
 parameters:
   cells: 2393
@@ -14,30 +16,21 @@ parameters:
   C3: 50.4e-15
 
 topology:
-  - type: port
-    name: input
-    cursor: signal
-    port: 1
-  - type: resistor
-    name: input_termination
-    cursor: signal
-    value: 50.0
-  - type: rf_squid_line
-    name: rf_squid_line
-    cursor: signal
-    cells: ${cells}
-    Ic: ${Ic}
-    Lm: ${Lm}
-    Lw: ${Lw}
-    Lpar: ${Lpar}
-    Cj: ${Cj}
-    Cg_pattern: [${C1}, ${C2}, ${C1}, ${C3}]
-    Cg_pattern_counts: [6, 6, 6, 6]
-  - type: resistor
-    name: output_termination
-    cursor: signal
-    value: 50.0
-  - type: port
-    name: output
-    cursor: signal
-    port: 2
+  - line: signal
+    port in: 1
+    port out: 2
+    blocks:
+      - type: input_ports
+        name: input
+      - type: rf_squid_line
+        name: rf_squid_line
+        cells: ${cells}
+        Ic: ${Ic}
+        Lm: ${Lm}
+        Lw: ${Lw}
+        Lpar: ${Lpar}
+        Cj: ${Cj}
+        Cg_pattern: [${C1}, ${C2}, ${C1}, ${C3}]
+        Cg_pattern_counts: [6, 6, 6, 6]
+      - type: output_ports
+        name: output

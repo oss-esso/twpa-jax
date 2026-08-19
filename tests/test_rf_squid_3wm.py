@@ -15,7 +15,7 @@ def _design(cells: int = 25) -> dict[str, object]:
         "ground": 0,
         "cursors": {"signal": 1, "pump": 1000},
         "parameters": {},
-        "coupler_mode": "cached",
+        "coupler_mode": "auto",
         "topology": [
             {"type": "port", "name": "input", "cursor": "signal", "port": 1},
             {"type": "rf_squid_line", "name": "line", "cursor": "signal",

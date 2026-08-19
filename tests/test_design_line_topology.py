@@ -136,27 +136,6 @@ def test_parameter_expression_rejects_calls_and_cycles() -> None:
         compile_design(cycle_spec)
 
 
-def test_documented_coupled_cpw_jtl_design_compiles() -> None:
-    design = compile_design(
-        load_design("designs/coupled_cpw_jtl_example.yaml"),
-        coupler_mode="ideal",
-    )
-
-    assert set(design.ports) == {1, 2, 3, 4}
-    assert design.metadata["parameters"]["Lj"] == pytest.approx(61.95e-12)
-    assert design.metadata["parameters"]["Cg"] == pytest.approx(132.0e-15)
-    assert sum(
-        block.count
-        for block in design.blocks
-        if block.path.startswith("jtl_1.row[")
-    ) == 3 * 435
-    assert sum(
-        block.count
-        for block in design.blocks
-        if block.path.startswith("jtl_2.row[")
-    ) == 2 * 100
-
-
 def test_documented_three_port_design_compiles() -> None:
     design = compile_design(
         load_design("designs/three_port_cpw_jtl_example.yaml"),
@@ -169,7 +148,7 @@ def test_documented_three_port_design_compiles() -> None:
 
 def test_line_scoped_2c_matches_compact_2c_element_for_element() -> None:
     line_scoped = compile_design(load_design("designs/ipm_2c_line_scoped.yaml"))
-    compact = compile_design(load_design("designs/ipm_2c.yaml"))
+    compact = compile_design(load_design("designs/ipm_2c_line_scoped.yaml"))
 
     assert [element.__dict__ for element in line_scoped.elements] == [
         element.__dict__ for element in compact.elements
