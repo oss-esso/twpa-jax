@@ -41,6 +41,11 @@ def test_pump_only_reduction_is_additive_to_signal_lattice(tmp_path: Path) -> No
     assert row["on_lattice"] > 0.99
     assert row["on_lattice_pump_only"] < row["on_lattice"]
     assert row["off_lattice_pump_only"] > row["off_lattice"]
+    assert row["pump_line_power_pump_only"] == 1.0
+    assert (
+        row["off_lattice_over_pump_line_pump_only"]
+        > row["off_lattice_pump_only"]
+    )
 
 
 def test_default_reduction_preserves_signal_lattice_columns(tmp_path: Path) -> None:

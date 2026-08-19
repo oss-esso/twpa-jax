@@ -106,6 +106,8 @@ def _reduce_lattice(
     on_lattice = float(power[integer_mask].sum() / total)
     off_power = power[~integer_mask]
     off_total = float(off_power.sum())
+    pump_index = int(np.argmin(np.abs(freq - pump_hz)))
+    pump_line_power = float(power[pump_index])
     top20 = (
         float(np.sort(off_power)[::-1][:20].sum() / off_total)
         if off_total > 0.0
@@ -122,6 +124,12 @@ def _reduce_lattice(
     return {
         "on_lattice": on_lattice,
         "off_lattice": 1.0 - on_lattice,
+        "pump_line_power": pump_line_power,
+        "off_lattice_over_pump_line": (
+            off_total / pump_line_power
+            if pump_line_power > 0.0
+            else float("nan")
+        ),
         "top20_of_off_lattice": top20,
         "generator_share": generator_share,
         "generator_over_pump": generator_ratio,
@@ -272,7 +280,7 @@ def main() -> int:
                   f"{'top20':>7} {'gen':>7} {'fa/fp':>7}")
             if args.include_pump_only:
                 print("pump-only columns: on_lattice off_lattice top20 "
-                      "generator_share fa/fp")
+                      "off_over_pump generator_share fa/fp")
         print(
             f"{row['control_value']:>10.3f} "
             f"{_fmt(row['gain_vs_off_db']):>8} {_fmt(row['branch_current_max_over_ic'], 4):>7} "
@@ -286,6 +294,7 @@ def main() -> int:
                 f"{'':>10} {'pump-only':>8} "
                 f"{row['on_lattice_pump_only']:>8.4f} "
                 f"{row['off_lattice_pump_only']:>8.4f} "
+                f"{row['off_lattice_over_pump_line_pump_only']:>8.4f} "
                 f"{row['top20_of_off_lattice_pump_only']:>7.3f} "
                 f"{row['generator_share_pump_only']:>7.3f} "
                 f"{row['generator_over_pump_pump_only']:>7.4f}"
