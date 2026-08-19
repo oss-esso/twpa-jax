@@ -47,8 +47,17 @@ For a declarative YAML design:
 
 ```powershell
 python workflows/build_design_and_passive.py `
-  --design designs/ipm_2c.yaml `
+  --design designs/ipm_2c_line_scoped.yaml `
   --design-dir outputs/ipm_2c_passive
+```
+
+Build several YAML designs sequentially by using one output root. Each design
+is written to a subdirectory named after its YAML file:
+
+```powershell
+python workflows/build_design_and_passive.py `
+  --design designs/ipm_2c_line_scoped.yaml designs/ipm_3c.yaml `
+  --design-dir outputs/passive_batch
 ```
 
 For an already generated circuit directory, omit `--design`:
@@ -68,7 +77,7 @@ indices must remain stable.
 
 | Option | Default | Meaning |
 | --- | ---: | --- |
-| `--design PATH` | none | Declarative YAML source. Use together with `--design-dir`. |
+| `--design PATH [PATH ...]` | none | One or more declarative YAML sources. Use together with `--design-dir`; with multiple inputs, that path is the output root. |
 | `--design-dir PATH` | none | Output directory, or an existing generated circuit directory. Required. |
 | `--passive-start-ghz VALUE` | `4.0` | First passive-response frequency. |
 | `--passive-stop-ghz VALUE` | `11.0` | Last passive-response frequency. |
@@ -87,7 +96,6 @@ override. Put them after the workflow options.
 | --- | --- |
 | `--write-matrices` | Enabled by this workflow. Writes solver matrices. |
 | `--coupler-mode auto` | Select the coupler model automatically. Recommended. |
-| `--coupler-mode cached` | Use stored coupler geometry. |
 | `--coupler-mode ideal` | Use the ideal coupler model. |
 | `--coupler-mode optimize` | Recalculate coupler geometry. |
 | `--draw` | Write the optional builder geometry drawing. |
@@ -95,15 +103,13 @@ override. Put them after the workflow options.
 | `--strict` | Enable strict design validation. Recommended. |
 | `--start-node-top INT`, `--start-node-bot INT` | Legacy starting node numbers. |
 | `--ground INT` | Legacy ground node number. YAML `ground` is preferred. |
-| `--array-length INT`, `--num-rows INT`, `--arrays-per-dc INT` | Legacy cell, row, and coupler spacing values. |
-| `--length-of-long-tl INT`, `--length-of-short-tl INT`, `--coupler-section-length INT` | Legacy line lengths in cells. |
-| `--len1 INT`, `--len2 INT`, `--len3 INT`, `--len4 INT` | Legacy input and output section lengths. |
+| `--jtl-cells-per-array INT`, `--jtl-row-count INT`, `--jtl-rows-per-coupler INT` | JTL cell, row, and coupler spacing values. The old flags remain accepted as aliases. |
+| `--inter-array-cpw-cells INT`, `--signal-inter-coupler-cpw-cells INT`, `--pump-inter-coupler-cpw-cells INT` | CPW routing lengths in cells. |
+| `--signal-input-cpw-cells INT`, `--signal-output-cpw-cells INT`, `--pump-input-cpw-cells INT`, `--pump-output-cpw-cells INT` | Signal and pump input/output CPW lengths. The old `--len1`–`--len4` flags remain accepted as aliases. |
 | `--coupling-db VALUE`, `--z0-ohm VALUE`, `--coupler-freq-ghz VALUE` | Legacy coupler target, impedance, and design frequency. |
 | `--lj-ph VALUE`, `--cj-ff VALUE`, `--cg-ff VALUE` | Legacy junction and ground values. |
 | `--cl-per-um-ff VALUE`, `--ll-per-um-ph VALUE`, `--cell-length-um VALUE` | Legacy transmission-line constants. |
 | `--rleft-ohm VALUE`, `--rright-ohm VALUE`, `--rm-ohm VALUE` | Legacy termination resistances. |
-| `--cached-coupler-width-um VALUE`, `--cached-coupler-gap-um VALUE` | Cached coupler width and gap overrides. |
-| `--cached-coupler-gap-to-ground-um VALUE`, `--cached-coupler-length-um VALUE` | Cached ground gap and length overrides. |
 | `--profile-json PATH` | Legacy profile file. Prefer YAML `profiles`. |
 | `--lj-profile TEXT` | Legacy Lj profile override; repeatable. |
 | `--cg-profile TEXT` | Legacy Cg profile override; repeatable. |
@@ -136,6 +142,8 @@ The output directory contains, depending on the available ports:
 - `passive_sparameters.npz`: passive traces;
 - `passive_s21_s24.*`: preferred signal/pump response plots;
 - `passive_s11_s21_s31_s41.*`: response from the standard input ports.
+- `coupler_passive_sparameters.npz`: isolated four-port coupler traces;
+- `coupler_passive_s11_s21_s31_s41.*`: isolated coupler response from port 1.
 
 The S-parameter array convention is:
 
@@ -163,6 +171,17 @@ python workflows/run_gain_map_and_plots.py `
   --pump-power-max-dbm -23 `
   --pump-freq-min-ghz 7.5 `
   --pump-freq-max-ghz 8.5
+```
+
+Run several already-built design directories sequentially by using one run
+root. Each map and its plots are written to a subdirectory named after the
+input directory:
+
+```powershell
+python workflows/run_gain_map_and_plots.py `
+  --fast `
+  --design outputs/passive_batch/ipm_2c outputs/passive_batch/ipm_3c `
+  --run-dir outputs/gain_batch
 ```
 
 The wrapper supplies the normal fast settings. The supplied flags are
@@ -209,7 +228,7 @@ For an unbiased 4WM design, the normal basis is:
 
 | Option | Default | Meaning |
 | --- | ---: | --- |
-| `--design PATH` | required | Generated circuit directory. |
+| `--design PATH [PATH ...]` | required | One or more generated circuit directories. With multiple inputs, `--run-dir` is the output root. |
 | `--run-dir PATH` | `outputs/gain_map_workflow` | Output directory. |
 | `--fast` | off | Run the standard fast map. This is the default if `--slow` is absent. |
 | `--slow` | off | Use the HB-to-transient boundary workflow instead. |
@@ -268,8 +287,8 @@ For an unbiased 4WM design, the normal basis is:
 | `--executor inprocess\|subprocess` | Execution mode. `inprocess` is the normal fast path. |
 | `--loss-model VALUE` | Loss interpretation. `auto` is recommended. |
 | `--mode cold\|warmstart\|both` | Start every point cold, warm-start from neighbouring points, or run both. |
-| `--frequency-chunk-size INT` | Number of frequency columns per worker chunk. `0` disables chunking. |
-| `--frequency-workers INT` | Number of frequency chunks run in parallel. |
+| `--frequency-chunk-size INT` | Number of frequency columns per worker chunk. In fast mode, the default equals the automatically selected worker count; `0` disables chunking. |
+| `--frequency-workers INT` | Number of frequency chunks run in parallel. In fast mode, the default assigns at most half of currently free physical RAM to workers using the measured resource footprint. |
 | `--local-traversal-chunks` | Allow independent chunks for non-column traversals. |
 | `--resume-chunks` / `--no-resume-chunks` | Reuse complete chunk outputs or recalculate them. |
 | `--compact-output` | Remove ordinary per-point pump arrays after the map is complete. |
