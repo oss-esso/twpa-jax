@@ -40,6 +40,17 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--scan-max-ghz", type=float, required=True)
     parser.add_argument("--scan-points", type=int, default=61)
     parser.add_argument("--max-candidates", type=int, default=6)
+    parser.add_argument(
+        "--both-imaginary-half-planes",
+        action="store_true",
+        help="Refine every minimum from positive and negative imaginary seeds.",
+    )
+    parser.add_argument(
+        "--imag-seed-ghz",
+        type=float,
+        default=0.01,
+        help="Absolute imaginary seed in GHz for the two half-plane search.",
+    )
     parser.add_argument("--gamma-nt", type=int, default=4096)
     parser.add_argument("--out-json", required=True)
     return parser.parse_args(argv)
@@ -47,6 +58,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def run(args: argparse.Namespace) -> dict[str, object]:
     """Solve the pump once, scan Tier 1, and refine ranked minima."""
+    if args.imag_seed_ghz <= 0.0 or not np.isfinite(args.imag_seed_ghz):
+        raise ValueError("--imag-seed-ghz must be positive and finite")
     output_json = Path(args.out_json)
     output_json.parent.mkdir(parents=True, exist_ok=True)
     circuit = tracker.load_circuit(args.circuit_dir)
@@ -82,7 +95,15 @@ def run(args: argparse.Namespace) -> dict[str, object]:
         ]
     )
     continuation = tracker.PumpContinuation(driver_args, circuit, pump)
-    pump_step = continuation.solve(args.drive_dbm, pump.X)
+    saved_drive_dbm = float(
+        pump.metadata.get("pump_power_dbm_requested", args.drive_dbm)
+    )
+    warm_state = (
+        pump.X
+        if abs(args.drive_dbm - saved_drive_dbm) <= 1.0e-12
+        else None
+    )
+    pump_step = continuation.solve(args.drive_dbm, warm_state)
     if not pump_step.converged or pump_step.pump is None:
         raise RuntimeError("the candidate-drive pump did not converge")
     modes = sideband_list(args.sidebands)
@@ -103,47 +124,52 @@ def run(args: argparse.Namespace) -> dict[str, object]:
     )
     sigma = [float(item.sigma_min) for item in estimates]
     minima = local_minima(sigma, k=args.max_candidates)
+    imaginary_seeds = [0.0]
+    if args.both_imaginary_half_planes:
+        imaginary_seeds = [-args.imag_seed_ghz, args.imag_seed_ghz]
     candidates: list[dict[str, object]] = []
     for index in minima:
-        resonance = refine_complex_resonance(
-            circuit=circuit,
-            khat=khat,
-            khat_base=khat_base,
-            omega_p=pump_step.pump.omega_p,
-            ms=modes,
-            signal_ghz_guess=float(grid[index]),
-            loss_model=args.loss_model,
-        )
-        classification = classify_floquet_resonance(
-            resonance, pump_step.pump.omega_p
-        )
-        seed_path: Path | None = None
-        if resonance.mode_vector is not None:
-            seed_path = output_json.with_name(
-                f"{output_json.stem}.candidate_{len(candidates):02d}.npz"
+        for imaginary_seed in imaginary_seeds:
+            resonance = refine_complex_resonance(
+                circuit=circuit,
+                khat=khat,
+                khat_base=khat_base,
+                omega_p=pump_step.pump.omega_p,
+                ms=modes,
+                signal_ghz_guess=complex(float(grid[index]), imaginary_seed),
+                loss_model=args.loss_model,
             )
-            np.savez(
-                seed_path,
-                vector=np.asarray(resonance.mode_vector, dtype=np.complex128),
-                sidebands=np.asarray(modes, dtype=np.int64),
+            classification = classify_floquet_resonance(
+                resonance, pump_step.pump.omega_p
             )
-        candidates.append(
-            {
-                "grid_index": int(index),
-                "tier1_signal_ghz": float(grid[index]),
-                "sigma_min": sigma[index],
-                "signal_real_ghz": float(resonance.signal_ghz.real),
-                "signal_imag_ghz": float(resonance.signal_ghz.imag),
-                "growth_rate_per_s": resonance.growth_rate_per_s,
-                "multiplier_magnitude": classification.magnitude,
-                "multiplier_phase_rad": classification.phase_rad,
-                "floquet_kind": classification.kind,
-                "converged": resonance.converged,
-                "iterations": resonance.iterations,
-                "residual": resonance.residual,
-                "floquet_seed_npz": str(seed_path) if seed_path else None,
-            }
-        )
+            seed_path: Path | None = None
+            if resonance.mode_vector is not None:
+                seed_path = output_json.with_name(
+                    f"{output_json.stem}.candidate_{len(candidates):04d}.npz"
+                )
+                np.savez(
+                    seed_path,
+                    vector=np.asarray(resonance.mode_vector, dtype=np.complex128),
+                    sidebands=np.asarray(modes, dtype=np.int64),
+                    imaginary_seed_ghz=np.asarray(imaginary_seed, dtype=float),
+                )
+            candidates.append(
+                {
+                    "grid_index": int(index),
+                    "tier1_signal_ghz": float(grid[index]),
+                    "imaginary_seed_ghz": float(imaginary_seed),
+                    "signal_real_ghz": float(resonance.signal_ghz.real),
+                    "signal_imag_ghz": float(resonance.signal_ghz.imag),
+                    "growth_rate_per_s": resonance.growth_rate_per_s,
+                    "multiplier_magnitude": classification.magnitude,
+                    "multiplier_phase_rad": classification.phase_rad,
+                    "floquet_kind": classification.kind,
+                    "converged": resonance.converged,
+                    "iterations": resonance.iterations,
+                    "residual": resonance.residual,
+                    "floquet_seed_npz": str(seed_path) if seed_path else None,
+                }
+            )
     result: dict[str, object] = {
         "drive_dbm": args.drive_dbm,
         "pump_frequency_ghz": pump_step.pump.pump_freq_ghz,
@@ -151,6 +177,8 @@ def run(args: argparse.Namespace) -> dict[str, object]:
         "scan_points": int(args.scan_points),
         "scan_min_ghz": args.scan_min_ghz,
         "scan_max_ghz": args.scan_max_ghz,
+        "both_imaginary_half_planes": bool(args.both_imaginary_half_planes),
+        "imag_seed_ghz": float(args.imag_seed_ghz),
         "candidates": candidates,
     }
     output_json.write_text(json.dumps(result, indent=2), encoding="utf-8")
