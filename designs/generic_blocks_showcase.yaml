@@ -1,5 +1,9 @@
 schema_version: 1
 name: generic_blocks_showcase
+ground: 0
+cursors:
+  signal: 1
+  pump: 1000
 
 parameters:
   Lj: 123.9e-12
@@ -8,65 +12,65 @@ parameters:
   Ll: 4.24e-12
   Cl: 1.695e-15
 
-ground: 0
-cursors:
-  signal: 1
-  pump: 1000
-
-# This file is deliberately small. It exposes the generic line, port,
-# resistor, exact component, and raw-element builder interfaces in one
-# compilable topology.
+# Compact line-scoped example covering generic line, port, resistor, exact
+# component, and raw-element builder interfaces.
 topology:
-  - type: signal_port
-    name: input
-    port: 1
-  - type: resistor
-    name: input_termination
-    cursor: signal
-    value: 50.0
-  - type: jj_line
-    name: nonlinear_line
-    cursor: signal
-    cells: 12
-    Lj: ${Lj}
-    Cj: ${Cj}
-    Cg: ${Cg}
-  - type: transmission_line
-    name: output_link
-    cursor: signal
-    cells: 4
-    L: ${Ll}
-    C: ${Cl}
-  - type: capacitor
-    name: local_capacitor
-    nodes: ["nonlinear_line.cell[3].right", ground]
-    C: 82e-15
-  - type: inductor
-    name: local_inductor
-    nodes: ["nonlinear_line.cell[4].left", "nonlinear_line.cell[6].left"]
-    L: 3.2e-12
-  - type: raw_element
-    name: coupling_capacitor
-    nodes: ["nonlinear_line.cell[7].left", "nonlinear_line.cell[8].left"]
-    value: 12e-15
-    kind: coupling_capacitor
-  - type: raw_element
-    name: extra_josephson_branch
-    nodes: ["nonlinear_line.cell[9].left", "nonlinear_line.cell[9].right"]
-    value: ${Lj}
-    kind: josephson_inductor
-  - type: signal_port
-    name: output
-    port: 2
-  - type: pump_port
-    name: pump_input
-    port: 3
-  - type: resistor
-    name: pump_termination
-    cursor: pump
-    value: 50.0
-  - type: raw_element
-    name: pump_shunt
-    nodes: [1000, ground]
-    value: 50.0
-    kind: resistor
+  - line: signal
+    port in: 1
+    port out: 2
+    blocks:
+      - type: input_ports
+        name: input
+      - type: jj_line
+        name: nonlinear_line
+        cells: 12
+        Lj: ${Lj}
+        Cj: ${Cj}
+        Cg: ${Cg}
+      - type: transmission_line
+        name: output_link
+        cells: 4
+        L: ${Ll}
+        C: ${Cl}
+      - type: capacitor
+        name: local_capacitor
+        nodes: ["nonlinear_line.cell[3].right", ground]
+        C: 82e-15
+      - type: inductor
+        name: local_inductor
+        nodes: ["nonlinear_line.cell[4].left", "nonlinear_line.cell[6].left"]
+        L: 3.2e-12
+      - type: raw_element
+        name: coupling_capacitor
+        nodes: ["nonlinear_line.cell[7].left", "nonlinear_line.cell[8].left"]
+        value: 12e-15
+        kind: coupling_capacitor
+      - type: raw_element
+        name: extra_josephson_branch
+        nodes: ["nonlinear_line.cell[9].left", "nonlinear_line.cell[9].right"]
+        value: ${Lj}
+        kind: josephson_inductor
+      - type: output_ports
+        name: output
+
+  - line: pump
+    port in: 3
+    port out: 4
+    blocks:
+      - type: input_ports
+        name: pump_input
+      - type: resistor
+        name: pump_termination
+        value: 50.0
+      - type: raw_element
+        name: pump_shunt
+        nodes: [1000, ground]
+        value: 50.0
+        kind: resistor
+      - type: transmission_line
+        name: pump_link
+        cells: 1
+        L: ${Ll}
+        C: ${Cl}
+      - type: output_ports
+        name: pump_output

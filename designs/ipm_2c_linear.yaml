@@ -1,5 +1,5 @@
 schema_version: 1
-extends: ipm_2c.yaml
+extends: ipm_2c_line_scoped.yaml
 name: ipm_2c_linear
 profiles:
   Lj:
