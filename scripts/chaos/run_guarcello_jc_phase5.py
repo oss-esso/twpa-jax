@@ -197,6 +197,25 @@ def _profile_from_source(
             "jc_jtwpa": (55.0e-15, 45.0e-15),
             "jc_fqjtwpa": (40.0e-15, 76.6e-15),
         }
+        if name == "ipm_2c_fixed":
+            metadata_path = ROOT / "designs" / name / "design_resolved.json"
+            try:
+                metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+                parameters = metadata.get("parameters", {})
+                cj_value = float(parameters["Cj"])
+                cg_value = float(parameters["Cg"])
+            except (
+                OSError,
+                KeyError,
+                TypeError,
+                ValueError,
+                json.JSONDecodeError,
+            ) as error:
+                raise ValueError(
+                    "ipm_2c_fixed requires Cj/Cg arrays or scalar values in "
+                    "design_resolved.json"
+                ) from error
+            return np.full(n_branches, cj_value), np.full(n_branches, cg_value)
         if name not in defaults:
             raise ValueError(f"missing per-cell Cj/Cg arrays for {name}")
         cj_value, cg_value = defaults[name]
