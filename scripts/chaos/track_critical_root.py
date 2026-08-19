@@ -31,7 +31,9 @@ from twpa_solver.signal import (  # noqa: E402
     sideband_list,
 )
 from twpa_solver.signal.branch_tracking import (  # noqa: E402
+    FloquetBranch,
     FloquetBranchPoint,
+    serialize_branch,
     track_floquet_point,
 )
 from twpa_solver.pump.backends.schur_partition import restrict  # noqa: E402
@@ -79,16 +81,31 @@ class PumpStep:
 
 
 def parse_float_list(value: str, *, name: str) -> list[float]:
-    """Parse a strictly increasing finite list of real values."""
+    """Parse a strictly monotonic finite list of real values."""
     try:
         values = [float(token.strip()) for token in value.split(",")]
     except ValueError as exc:
         raise ValueError(f"{name} must be comma-separated numbers") from exc
     if not values or any(not math.isfinite(item) for item in values):
         raise ValueError(f"{name} must contain finite values")
-    if any(right <= left for left, right in zip(values, values[1:])):
-        raise ValueError(f"{name} must be strictly increasing")
+    differences = [right - left for left, right in zip(values, values[1:])]
+    if any(delta == 0.0 for delta in differences) or (
+        any(delta > 0.0 for delta in differences)
+        and any(delta < 0.0 for delta in differences)
+    ):
+        raise ValueError(f"{name} must be strictly monotonic")
     return values
+
+
+def parse_signal_seed(value: str) -> complex:
+    """Parse a finite complex signal seed in GHz."""
+    try:
+        seed = complex(value.replace("i", "j"))
+    except ValueError as exc:
+        raise ValueError("signal seed must be a finite complex GHz value") from exc
+    if not math.isfinite(seed.real) or not math.isfinite(seed.imag):
+        raise ValueError("signal seed must be a finite complex GHz value")
+    return seed
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -99,9 +116,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--drive-dbms", default=None)
     parser.add_argument("--drive-amplitudes", default=None)
     parser.add_argument("--sidebands", type=int, required=True)
-    parser.add_argument("--initial-signal-ghz", type=float, required=True)
+    parser.add_argument("--initial-signal-ghz", type=parse_signal_seed, required=True)
     parser.add_argument("--loss-model", required=True)
     parser.add_argument("--out-csv", required=True)
+    parser.add_argument(
+        "--out-branch-json",
+        default=None,
+        help="Optional JSON path in the serialize_branch schema.",
+    )
     parser.add_argument("--pump-port", type=int, default=None)
     parser.add_argument("--gamma-nt", type=int, default=4096)
     parser.add_argument("--max-iters", type=int, default=30)
@@ -252,7 +274,15 @@ class PumpContinuation:
         self.engine_args.inproc_min_alpha = float(args.pump_min_alpha)
         self.engine = run_gain_map.InProcessEngine(self.engine_args)
         self.circuit = circuit
-        self._last_source_current_a: float | None = None
+        self._saved_pump = saved_pump
+        self._saved_drive_dbm = float(
+            metadata.get("pump_power_dbm_requested", float("nan"))
+        )
+        self._last_source_current_a: float | None = (
+            self.source_current_for_drive(self._saved_drive_dbm)
+            if math.isfinite(self._saved_drive_dbm)
+            else None
+        )
 
     def source_current_for_drive(self, drive_dbm: float) -> float:
         """Convert requested source power to the production port current."""
@@ -273,6 +303,37 @@ class PumpContinuation:
         """Solve one source drive and return no state when it fails."""
         run_gain_map = self.run_gain_map
         source_current = self.source_current_for_drive(drive_dbm)
+        if (
+            math.isfinite(self._saved_drive_dbm)
+            and abs(drive_dbm - self._saved_drive_dbm) <= 1.0e-12
+        ):
+            metadata = self._saved_pump.metadata
+            coeff_rel = float(
+                metadata.get("production_hb_full_residual_rel", float("nan"))
+            )
+            return PumpStep(
+                drive_dbm=float(drive_dbm),
+                source_current_a=float(source_current),
+                achieved_current_a=float(
+                    metadata.get("pump_current_a", source_current)
+                ),
+                converged=True,
+                iterations=0,
+                coeff_rel=coeff_rel,
+                time_rel=None,
+                failure_reason="",
+                pump=self._saved_pump,
+                full_state=np.asarray(self._saved_pump.X),
+            )
+        if (
+            self._last_source_current_a is not None
+            and source_current < self._last_source_current_a
+        ):
+            # The adaptive source path is defined for lambda in [0, 1].
+            # Descending a physical drive therefore starts a fresh path from
+            # zero rather than passing an invalid lambda_start greater than 1.
+            self._last_source_current_a = None
+            warm_full = None
         attenuation = run_gain_map.attenuation_db_for(
             self.frequency_ghz, self.engine_args
         )
@@ -421,8 +482,8 @@ def _crossing(
     points: list[tuple[float, FloquetBranchPoint]],
     pump_freq_ghz: float,
 ) -> dict[str, float] | None:
-    """Linearly interpolate the first growth-rate zero crossing."""
-    for (left_amp, left), (right_amp, right) in zip(points, points[1:]):
+    """Linearly interpolate the first growth-rate zero crossing in dBm."""
+    for (left_drive, left), (right_drive, right) in zip(points, points[1:]):
         left_growth = left.resonance.growth_rate_per_s
         right_growth = right.resonance.growth_rate_per_s
         if left_growth == 0.0:
@@ -431,16 +492,43 @@ def _crossing(
             fraction = -left_growth / (right_growth - left_growth)
         else:
             continue
-        amplitude = left_amp + fraction * (right_amp - left_amp)
+        drive_dbm = left_drive + fraction * (right_drive - left_drive)
         left_signal = complex(left.resonance.signal_ghz)
         right_signal = complex(right.resonance.signal_ghz)
-        generator = left_signal.imag + fraction * (right_signal.imag - left_signal.imag)
+        generator = left_signal.real + fraction * (
+            right_signal.real - left_signal.real
+        )
         return {
-            "drive_amplitude": amplitude,
+            "drive_dbm": drive_dbm,
             "generator_frequency_ghz": generator,
             "omega_a_over_omega_p": generator / pump_freq_ghz,
         }
     return None
+
+
+def _write_branch_json(
+    path: Path | None,
+    points: list[FloquetBranchPoint],
+    seed_signal_ghz: complex,
+    discontinuity_threshold: float,
+    mode_overlap_threshold: float,
+) -> None:
+    """Write the gate-consumer branch schema after each accepted point."""
+    if path is None:
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    branch = FloquetBranch(
+        points=tuple(points),
+        seed_signal_ghz=complex(seed_signal_ghz),
+        discontinuity_threshold=float(discontinuity_threshold),
+        mode_overlap_threshold=float(mode_overlap_threshold),
+    )
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(
+        json.dumps(serialize_branch(branch), indent=2),
+        encoding="utf-8",
+    )
+    temporary.replace(path)
 
 
 def _drive_dbms(args: argparse.Namespace, saved_pump: PumpSolution) -> list[float]:
@@ -481,6 +569,12 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         saved_pump.metadata.get("pump_power_dbm_requested", drives[0])
     )
     points: list[tuple[float, FloquetBranchPoint]] = []
+    branch_points: list[FloquetBranchPoint] = []
+    branch_path = (
+        None
+        if args.out_branch_json is None
+        else Path(args.out_branch_json)
+    )
     seed = complex(args.initial_signal_ghz)
     previous_mode: np.ndarray | None = None
     previous_multiplier: complex | None = None
@@ -489,6 +583,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     )
     current_drive_dbm: float | None = None
     drive_step_dbm = 0.0
+    drive_direction = 1.0 if drives[-1] > drives[0] else -1.0
     with output_path.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=CSV_FIELDS)
         writer.writeheader()
@@ -497,16 +592,16 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             if current_drive_dbm is None:
                 candidate_drives = [target_drive_dbm]
             else:
-                drive_step_dbm = max(
-                    drive_step_dbm,
-                    target_drive_dbm - current_drive_dbm,
-                )
                 candidate_drives = []
-                while current_drive_dbm < target_drive_dbm - 1.0e-12:
+                remaining = drive_direction * (
+                    target_drive_dbm - current_drive_dbm
+                )
+                drive_step_dbm = max(drive_step_dbm, remaining)
+                if remaining > 1.0e-12:
                     candidate_drives.append(
-                        min(target_drive_dbm, current_drive_dbm + drive_step_dbm)
+                        current_drive_dbm
+                        + drive_direction * min(drive_step_dbm, remaining)
                     )
-                    break
             for drive_dbm in candidate_drives:
                 previous_drive_dbm = current_drive_dbm
                 previous_warm_state = warm_state
@@ -517,6 +612,13 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 if not pump_step.converged or pump_step.pump is None:
                     _write_point(writer, None, drive_dbm, pump_step, base_current)
                     handle.flush()
+                    _write_branch_json(
+                        branch_path,
+                        branch_points,
+                        complex(args.initial_signal_ghz),
+                        args.discontinuity_threshold,
+                        args.overlap_threshold,
+                    )
                     print(
                         "pump_step drive_dbm=%.6f current_a=%.12e converged=False "
                         "coeff_rel=%.6e time_rel=%s iterations=%d reason=%s"
@@ -545,7 +647,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                     circuit=circuit,
                     khat=khat,
                     khat_base=khat_base,
-                    parameter=current,
+                    parameter=drive_dbm,
                     omega_p=pump_step.pump.omega_p,
                     ms=ms,
                     seed_signal_ghz=seed,
@@ -594,6 +696,14 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                     )
                 )
                 points.append((current, point))
+                branch_points.append(point)
+                _write_branch_json(
+                    branch_path,
+                    branch_points,
+                    complex(args.initial_signal_ghz),
+                    args.discontinuity_threshold,
+                    args.overlap_threshold,
+                )
                 current_drive_dbm = drive_dbm
                 seed = complex(point.resonance.signal_ghz)
                 previous_mode = point.resonance.mode_vector
@@ -604,7 +714,10 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                         args.drive_min_step_dbm,
                         drive_step_dbm * 1.5,
                     )
-    crossing = _crossing(points, saved_pump.pump_freq_ghz)
+    crossing = _crossing(
+        [(point.parameter, point) for point in branch_points],
+        saved_pump.pump_freq_ghz,
+    )
     return {
         "pump_frequency_ghz": saved_pump.pump_freq_ghz,
         "loss_model": args.loss_model,
@@ -613,6 +726,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "crossing": crossing,
         "accepted_steps": len(points),
         "csv": str(output_path),
+        "branch_json": None if branch_path is None else str(branch_path),
     }
 
 
