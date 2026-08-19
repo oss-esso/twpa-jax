@@ -2677,3 +2677,63 @@ stability convention remains explicit: `current_complex_c` is analytic for
 this calculation but breaks conjugate symmetry, so these values are for
 stability/response analysis only and must not be used as published gain or
 compression numbers without the project loss-model review.
+
+### Branch-locked fixed-drive torus continuation (2026-08-19)
+
+The fixed-drive torus path now has a separate branch-locked corrector in
+`TorusProblem.solve_newton_branch_locked`. It uses an affine oblique row in
+normalized real coordinates,
+
+```text
+c = normalize(g_hat + beta*r_hat)
+P_lock(X) = c^T (X - X_predictor)
+```
+
+where `r` is the q != 0 sector and `g[h,q] = i*q*X[h,q]`. A configurable
+q-sector collapse guard rejects line-search trials that approach the trivial
+period-1 branch. The existing phase-anchored Newton and PALC implementations
+were not changed. The runner retries a failed secant predictor from the last
+accepted finite torus, which avoids the observed secant overshoot.
+
+The geometry regression proves that the finite predictor satisfies the affine
+condition while the corresponding q=0 period-1 state does not. Focused torus,
+signal, and runner tests pass:
+
+```text
+22 passed in 1.28s
+```
+
+Using re-solved `ipm_2c_fixed` pump checkpoints at 7.9 GHz, K=5, Q=1,
+PARDISO, and explicit `current_complex_c`, two physical post-NS points
+converged:
+
+```text
+drive_dBm   pump_uA   omega_a/f_p   r^2        r_J       gain_dB   residual_rel
+-24.05      6.83555   0.09150053    0.17809    0.68834   16.09398   8.35e-11
+-23.90      6.95462   0.09121317    0.31612    0.73515   18.93919   1.21e-12
+```
+
+The first point required 10 Newton iterations and 92.94 s; the second
+required 10 iterations and 98.64 s. The lock projections were
+`|c^T g_hat|=|c^T r_hat|=0.70710678`; the period-1 lock values were
+`-0.00722` and `-0.27492`, respectively. The omitted-q residuals were
+`2.89e-2` and `5.25e-2` relative. The 7.4 GHz response residuals were below
+`1e-12`.
+
+The `-23.80 dBm` corrector was stopped after 20 iterations at relative
+coefficient residual `1.52e-4`. Its q-sector remained `1.10` times the
+predictor, so this was not a collapse to period-1; it is a fixed-drive
+corrector limit. No physical value is reported for that failed point.
+
+The partial comparison figure, with branch-locked points shown as crimson
+diamonds, is:
+
+```text
+C:\Users\Edoardo\AppData\Local\Temp\ipm_2c_fixed_k5_branch_locked.png
+```
+
+The branch-locked runner writes incremental CSV and state checkpoints to the
+system temporary directory. The response and `r_J` values use the existing
+definitions. `current_complex_c` remains an analytic stability/response
+convention that breaks conjugate symmetry; these values must not be used as
+published gain or compression numbers without the loss-model review.

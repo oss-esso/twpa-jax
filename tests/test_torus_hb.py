@@ -15,6 +15,7 @@ from twpa_solver.multitone.torus import (
     TorusProblem,
     apply_border_aware_preconditioner,
     apply_one_border_preconditioner,
+    build_branch_lock_geometry,
     lattice_label_audit,
 )
 from twpa_solver.pump.solver import bordered_solve_refined
@@ -90,6 +91,23 @@ def test_amplitude_solve_refuses_a_period1_start() -> None:
 
     with pytest.raises(ValueError, match="period-1 branch"):
         problem.solve_newton_amplitude(state, 1.0e-9)
+
+
+def test_branch_lock_separates_finite_torus_from_period1() -> None:
+    problem = _torus_problem()
+    predictor = problem.full_problem().zeros()
+    predictor[problem.basis.index_of(ToneIndex(1, 0)), 0] = 1.0e-12
+    predictor[problem.basis.index_of(ToneIndex(0, 1)), 0] = 1.0e-10 + 2.0e-11j
+    q_values = np.asarray([tone.q for tone in problem.basis.tones])
+    geometry = build_branch_lock_geometry(predictor, q_values)
+
+    period1 = predictor.copy()
+    period1[problem.basis.index_of(ToneIndex(0, 1)), 0] = 0.0
+
+    assert geometry.value(predictor) == pytest.approx(0.0, abs=1.0e-15)
+    assert abs(geometry.value(period1)) > 1.0e-3
+    assert abs(geometry.phase_projection) > 0.1
+    assert abs(geometry.radial_projection) > 0.1
 
 
 def test_branch_switch_uses_the_critical_direction_before_arclength(

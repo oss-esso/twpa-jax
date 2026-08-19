@@ -137,6 +137,7 @@ def _plot(
     torus_rows: list[dict[str, Any]],
     signal_rows: list[dict[str, Any]],
     response_rows: list[dict[str, Any]],
+    branch_locked_rows: list[dict[str, Any]],
     output: Path,
 ) -> None:
     """Write the three-panel Phase C plot with torus diagnostics overlaid."""
@@ -182,6 +183,20 @@ def _plot(
             color="black",
             label="K=5 autonomous torus HB",
         )
+    if branch_locked_rows:
+        branch_gain = [
+            (float(row["pump_current_a"]) * 1.0e6,
+             _number(row.get("gain_vs_off_db")))
+            for row in branch_locked_rows
+        ]
+        branch_gain = [item for item in branch_gain if item[1] is not None]
+        gain_ax.plot(
+            [item[0] for item in branch_gain],
+            [item[1] for item in branch_gain],
+            "D",
+            color="crimson",
+            label="K=5 branch-locked torus HB",
+        )
     gain_ax.legend()
     gain_ax.text(
         0.99,
@@ -226,6 +241,20 @@ def _plot(
             color="black",
             label="K=5 autonomous torus HB",
         )
+    if branch_locked_rows:
+        branch_rj = [
+            (float(row["pump_current_a"]) * 1.0e6,
+             _number(row.get("r_j")))
+            for row in branch_locked_rows
+        ]
+        branch_rj = [item for item in branch_rj if item[1] is not None]
+        rj_ax.plot(
+            [item[0] for item in branch_rj],
+            [item[1] for item in branch_rj],
+            "D",
+            color="crimson",
+            label="K=5 branch-locked torus HB",
+        )
     rj_ax.set_ylabel("junction utilization")
     rj_ax.legend()
     for prefix, label, marker in (
@@ -262,6 +291,25 @@ def _plot(
             color="black",
             label="K=5 torus + linear response",
         )
+    if branch_locked_rows:
+        branch_runtime = [
+            (
+                float(row["pump_current_a"]) * 1.0e6,
+                _number(row.get("solver_runtime_s")),
+                _number(row.get("signal_runtime_s")) or 0.0,
+            )
+            for row in branch_locked_rows
+        ]
+        branch_runtime = [item for item in branch_runtime if item[1] is not None]
+        runtime_ax.plot(
+            [item[0] for item in branch_runtime],
+            [
+                float(item[1]) + float(item[2]) for item in branch_runtime
+            ],
+            "D",
+            color="crimson",
+            label="K=5 branch-locked torus + response",
+        )
     runtime_ax.set_ylabel("wall time (s)")
     runtime_ax.set_xlabel("achieved pump current (microampere)")
     runtime_ax.legend()
@@ -281,6 +329,12 @@ def main() -> int:
     parser.add_argument("--timing-jsonl", type=Path, required=True)
     parser.add_argument("--signal-probe-csv", type=Path, default=None)
     parser.add_argument("--torus-response-csv", type=Path, default=None)
+    parser.add_argument(
+        "--branch-locked-csv",
+        type=Path,
+        nargs="+",
+        default=None,
+    )
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--circuit-dir", type=Path, required=True)
     parser.add_argument("--pump-port", type=int, default=4)
@@ -290,6 +344,10 @@ def main() -> int:
     torus_rows = _read_rows(args.torus_json)
     signal_rows = _read_signal_probe(args.signal_probe_csv)
     response_rows = _read_torus_response(args.torus_response_csv)
+    branch_locked_rows: list[dict[str, Any]] = []
+    if args.branch_locked_csv is not None:
+        for path in args.branch_locked_csv:
+            branch_locked_rows.extend(_read_torus_response(path))
     timings = _timings(args.timing_jsonl)
     enriched: list[dict[str, Any]] = []
     for row in torus_rows:
@@ -317,10 +375,18 @@ def main() -> int:
                 "torus_radius_squared": row["torus_radius_squared"],
             }
         )
-    _plot(base_rows, enriched, signal_rows, response_rows, args.output)
+    _plot(
+        base_rows,
+        enriched,
+        signal_rows,
+        response_rows,
+        branch_locked_rows,
+        args.output,
+    )
     print(json.dumps({"output": str(args.output), "points": enriched,
                       "signal_probe_points": signal_rows,
-                      "torus_response_points": response_rows}, indent=2))
+                      "torus_response_points": response_rows,
+                      "branch_locked_points": branch_locked_rows}, indent=2))
     return 0
 
 

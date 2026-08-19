@@ -231,6 +231,79 @@ def _gmres_solve(
 
 
 @dataclass
+class BranchLockGeometry:
+    """Normalized affine row used to retain a finite torus branch."""
+
+    predictor_packed: np.ndarray
+    state_scale: float
+    radial_unit: np.ndarray
+    phase_unit: np.ndarray
+    constraint_row: np.ndarray
+    beta: float
+
+    @property
+    def row_physical(self) -> np.ndarray:
+        """Return the row acting on unscaled packed state coordinates."""
+        return self.constraint_row / self.state_scale
+
+    @property
+    def radial_projection(self) -> float:
+        """Return the lock-row projection on the radial direction."""
+        return float(self.constraint_row @ self.radial_unit)
+
+    @property
+    def phase_projection(self) -> float:
+        """Return the lock-row projection on the phase direction."""
+        return float(self.constraint_row @ self.phase_unit)
+
+    def value(self, state: np.ndarray) -> float:
+        """Evaluate the affine lock condition at a complex state."""
+        packed = pack_complex(np.asarray(state, dtype=np.complex128))
+        return float(
+            self.constraint_row @ (packed - self.predictor_packed)
+            / self.state_scale
+        )
+
+
+def build_branch_lock_geometry(
+    predictor: np.ndarray,
+    q_values: np.ndarray,
+    *,
+    beta: float = 1.0,
+) -> BranchLockGeometry:
+    """Build an oblique normalized row from q-sector radial and phase modes."""
+    state = np.asarray(predictor, dtype=np.complex128)
+    q_array = np.asarray(q_values, dtype=int).reshape(-1)
+    if state.ndim != 2 or q_array.size != state.shape[0]:
+        raise ValueError("q_values must contain one entry per torus tone")
+    if beta == 0.0:
+        raise ValueError("beta must be nonzero")
+    radial = state * (q_array[:, None] != 0)
+    phase = 1j * q_array[:, None] * state
+    radial_packed = pack_complex(radial)
+    phase_packed = pack_complex(phase)
+    radial_norm = float(np.linalg.norm(radial_packed))
+    phase_norm = float(np.linalg.norm(phase_packed))
+    if radial_norm <= 0.0:
+        raise ValueError("predictor has no q != 0 content")
+    if phase_norm <= 0.0:
+        raise ValueError("predictor has no autonomous phase direction")
+    radial_unit = radial_packed / radial_norm
+    phase_unit = phase_packed / phase_norm
+    constraint = phase_unit + float(beta) * radial_unit
+    constraint /= max(float(np.linalg.norm(constraint)), 1.0e-300)
+    state_scale = max(float(np.linalg.norm(pack_complex(state))), 1.0e-300)
+    return BranchLockGeometry(
+        predictor_packed=pack_complex(state),
+        state_scale=state_scale,
+        radial_unit=radial_unit,
+        phase_unit=phase_unit,
+        constraint_row=constraint,
+        beta=float(beta),
+    )
+
+
+@dataclass
 class TorusProblem:
     """Wrap a multitone problem with the unknown generator frequency.
 
@@ -887,6 +960,238 @@ class TorusProblem:
         if not rows:
             raise ValueError("basis has no autonomous q != 0 sector")
         return float(np.linalg.norm(np.asarray(X)[rows]))
+
+    def branch_lock_geometry(
+        self,
+        predictor: np.ndarray,
+        *,
+        beta: float = 1.0,
+    ) -> "BranchLockGeometry":
+        """Build an oblique phase and branch-lock row at ``predictor``.
+
+        The row is expressed in normalized real state coordinates.  Its two
+        components are the radial q != 0 direction and the autonomous phase
+        direction.  The affine row therefore fixes the torus gauge while
+        excluding the period-1 state from the fixed-drive corrector.
+        """
+        state = np.asarray(predictor, dtype=np.complex128)
+        expected_shape = (self.basis.n_tones, self.base_problem.n)
+        if state.shape != expected_shape:
+            raise ValueError("predictor shape does not match the torus basis")
+        q_values = np.asarray(
+            [tone.q for tone in self.basis.tones], dtype=int
+        )
+        return build_branch_lock_geometry(state, q_values, beta=beta)
+
+    def solve_newton_branch_locked(
+        self,
+        X0: np.ndarray,
+        *,
+        predictor_X: np.ndarray | None = None,
+        omega_a0: float | None = None,
+        beta: float = 1.0,
+        branch_collapse_fraction: float = 0.25,
+        max_newton: int = 20,
+        residual_tol: float = 1.0e-9,
+        min_alpha: float = 1.0 / 1024.0,
+    ) -> tuple[np.ndarray, float, dict[str, Any]]:
+        """Correct a finite torus at fixed source drive with a branch lock.
+
+        This is deliberately separate from :meth:`solve_newton`.  The latter
+        retains the phase-anchor formulation for diagnostics and period-1
+        control runs.  Here the affine oblique row is fixed at a finite torus
+        predictor, so a Newton line search cannot accept the coexisting
+        period-1 root merely because its q != 0 phase anchor vanishes.
+        """
+        if not 0.0 < branch_collapse_fraction < 1.0:
+            raise ValueError("branch_collapse_fraction must lie in (0, 1)")
+        if beta == 0.0:
+            raise ValueError("beta must be nonzero")
+        X = np.asarray(X0, dtype=np.complex128).copy()
+        predictor = X.copy() if predictor_X is None else np.asarray(
+            predictor_X, dtype=np.complex128
+        )
+        if X.shape != predictor.shape:
+            raise ValueError("X0 and predictor_X shapes do not match")
+        expected_shape = (self.basis.n_tones, self.base_problem.n)
+        if X.shape != expected_shape:
+            raise ValueError("X0 shape does not match the torus basis")
+        geometry = self.branch_lock_geometry(predictor, beta=beta)
+        predictor_generator_norm = self.generator_norm(predictor)
+        if predictor_generator_norm <= 0.0:
+            raise ValueError("predictor has no q != 0 content")
+        omega = self.omega_a if omega_a0 is None else float(omega_a0)
+        residual_history: list[float] = []
+        merit_history: list[float] = []
+        factor_backends: list[str] = []
+        lock_history: list[float] = []
+        collapse_history: list[float] = []
+
+        for iteration in range(max_newton + 1):
+            current = self.with_omega_a(omega)
+            problem = current.full_problem()
+            coefficients = problem.residual_coeffs(X, current.source_tau)
+            packed = pack_complex(coefficients)
+            source = pack_complex(problem.source_coeffs(current.source_tau))
+            coefficient_scale = max(
+                float(np.linalg.norm(source) / max(np.sqrt(source.size), 1.0)),
+                1.0e-30,
+            )
+            coefficient_relative = float(
+                np.linalg.norm(packed)
+                / max(np.sqrt(packed.size), 1.0)
+                / coefficient_scale
+            )
+            lock_value = geometry.value(X)
+            merit = max(coefficient_relative, abs(lock_value))
+            generator_ratio = self.generator_norm(X) / predictor_generator_norm
+            residual_history.append(float(np.linalg.norm(packed)))
+            merit_history.append(merit)
+            lock_history.append(lock_value)
+            collapse_history.append(generator_ratio)
+            if coefficient_relative <= residual_tol and abs(lock_value) <= residual_tol:
+                return X, omega, {
+                    "converged": True,
+                    "iterations": iteration,
+                    "residual_norm": float(np.linalg.norm(packed)),
+                    "coefficient_relative": coefficient_relative,
+                    "lock_value": lock_value,
+                    "generator_norm_relative": generator_ratio,
+                    "residual_history": residual_history,
+                    "merit_history": merit_history,
+                    "lock_history": lock_history,
+                    "generator_norm_history": collapse_history,
+                    "factor_backend": factor_backends,
+                    "branch_lock_beta": float(beta),
+                    "branch_lock_phase_projection": (
+                        geometry.phase_projection
+                    ),
+                    "branch_lock_radial_projection": (
+                        geometry.radial_projection
+                    ),
+                    "branch_lock_pump_value": None,
+                    "precond_reuse": self.precond_reuse,
+                }
+            if iteration == max_newton:
+                break
+
+            matvec, preconditioner = current._linearization(problem, X)
+            step_size = current.omega_fd_relative_step * max(abs(omega), 1.0)
+            plus = pack_complex(current.residual_coeffs(X, omega + step_size))
+            minus = pack_complex(current.residual_coeffs(X, omega - step_size))
+            d_omega = (plus - minus) / (2.0 * step_size)
+
+            def lock_dot(vector: np.ndarray) -> float:
+                return float(geometry.row_physical @ vector)
+
+            update = bordered_solve_refined(
+                matvec,
+                preconditioner.solve,
+                packed,
+                lock_value,
+                -d_omega,
+                lock_dot,
+                0.0,
+            )
+            factor_backends.append(preconditioner.last_factor_backend)
+            if update is None:
+                return X, omega, {
+                    "converged": False,
+                    "iterations": iteration,
+                    "residual_norm": float(np.linalg.norm(packed)),
+                    "coefficient_relative": coefficient_relative,
+                    "lock_value": lock_value,
+                    "generator_norm_relative": generator_ratio,
+                    "residual_history": residual_history,
+                    "merit_history": merit_history,
+                    "lock_history": lock_history,
+                    "generator_norm_history": collapse_history,
+                    "factor_backend": factor_backends,
+                    "branch_lock_beta": float(beta),
+                    "branch_lock_phase_projection": geometry.phase_projection,
+                    "branch_lock_radial_projection": geometry.radial_projection,
+                    "branch_lock_pump_value": None,
+                    "precond_reuse": self.precond_reuse,
+                    "failure_reason": "branch-lock bordered denominator degenerated",
+                }
+            step, delta_omega = update
+            delta_x = unpack_complex(step, X.shape)
+            alpha = 1.0
+            accepted = False
+            while alpha >= min_alpha:
+                trial_x = X + alpha * delta_x
+                trial_omega = omega + alpha * delta_omega
+                if trial_omega <= 0.0:
+                    alpha *= 0.5
+                    continue
+                trial_ratio = (
+                    current.generator_norm(trial_x)
+                    / predictor_generator_norm
+                )
+                if trial_ratio < branch_collapse_fraction:
+                    alpha *= 0.5
+                    continue
+                trial_problem = current.with_omega_a(trial_omega).full_problem()
+                trial_coefficients = trial_problem.residual_coeffs(
+                    trial_x, current.source_tau
+                )
+                trial_packed = pack_complex(trial_coefficients)
+                trial_relative = float(
+                    np.linalg.norm(trial_packed)
+                    / max(np.sqrt(trial_packed.size), 1.0)
+                    / coefficient_scale
+                )
+                trial_lock = geometry.value(trial_x)
+                trial_merit = max(trial_relative, abs(trial_lock))
+                if trial_merit < merit:
+                    X, omega = trial_x, trial_omega
+                    accepted = True
+                    break
+                alpha *= 0.5
+            if not accepted:
+                return X, omega, {
+                    "converged": False,
+                    "iterations": iteration,
+                    "residual_norm": float(np.linalg.norm(packed)),
+                    "coefficient_relative": coefficient_relative,
+                    "lock_value": lock_value,
+                    "generator_norm_relative": generator_ratio,
+                    "residual_history": residual_history,
+                    "merit_history": merit_history,
+                    "lock_history": lock_history,
+                    "generator_norm_history": collapse_history,
+                    "factor_backend": factor_backends,
+                    "branch_lock_beta": float(beta),
+                    "branch_lock_phase_projection": geometry.phase_projection,
+                    "branch_lock_radial_projection": geometry.radial_projection,
+                    "branch_lock_pump_value": None,
+                    "precond_reuse": self.precond_reuse,
+                    "failure_reason": "branch-lock line search failed",
+                }
+
+        return X, omega, {
+            "converged": False,
+            "iterations": max_newton,
+            "residual_norm": float(residual_history[-1]),
+            "coefficient_relative": float(
+                merit_history[-1] if merit_history else np.inf
+            ),
+            "lock_value": float(lock_history[-1]) if lock_history else np.inf,
+            "generator_norm_relative": (
+                float(collapse_history[-1]) if collapse_history else 0.0
+            ),
+            "residual_history": residual_history,
+            "merit_history": merit_history,
+            "lock_history": lock_history,
+            "generator_norm_history": collapse_history,
+            "factor_backend": factor_backends,
+            "branch_lock_beta": float(beta),
+            "branch_lock_phase_projection": geometry.phase_projection,
+            "branch_lock_radial_projection": geometry.radial_projection,
+            "branch_lock_pump_value": None,
+            "precond_reuse": self.precond_reuse,
+            "failure_reason": "maximum Newton iterations reached",
+        }
 
     def omitted_q_residual(
         self, X: np.ndarray, evaluation_q_max: int
