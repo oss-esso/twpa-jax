@@ -30,6 +30,7 @@ def _bordered_block_step(
     c_dot: Callable[[np.ndarray], float],
     lam_dot: float,
     b: np.ndarray | None = None,
+    diagnostics: dict[str, float] | None = None,
 ) -> tuple[np.ndarray, float, np.ndarray] | None:
     """One block-elimination pass of the arclength bordered system.
 
@@ -45,6 +46,10 @@ def _bordered_block_step(
         b = linsolve(S)
     a = linsolve(rhs_a)
     denom = c_dot(b) + lam_dot
+    if diagnostics is not None:
+        diagnostics["denominator"] = float(denom)
+        diagnostics["state_rhs_norm"] = float(np.linalg.norm(rhs_a))
+        diagnostics["state_source_norm"] = float(np.linalg.norm(S))
     if not math.isfinite(denom) or abs(denom) < 1e-300:
         return None
     d_lam = (target - c_dot(a)) / denom
@@ -60,6 +65,7 @@ def bordered_solve_refined(
     S: np.ndarray,
     c_dot: Callable[[np.ndarray], float],
     lam_dot: float,
+    diagnostics: dict[str, float] | None = None,
 ) -> tuple[np.ndarray, float] | None:
     """Bordered block elimination with one Govaerts-Pryce refinement pass.
 
@@ -74,16 +80,50 @@ def bordered_solve_refined(
     bordered linear systems accurately", BIT 30, 1990). Returns ``None`` if
     the first pass degenerates.
     """
-    first = _bordered_block_step(linsolve, -R, -n, S, c_dot, lam_dot)
+    first_diagnostics: dict[str, float] = {}
+    first = _bordered_block_step(
+        linsolve,
+        -R,
+        -n,
+        S,
+        c_dot,
+        lam_dot,
+        diagnostics=first_diagnostics,
+    )
+    if diagnostics is not None:
+        diagnostics.update(
+            {f"first_{key}": value for key, value in first_diagnostics.items()}
+        )
     if first is None:
         return None
     d_X, d_lam, b = first
     r1 = -R - (matvec(d_X) - S * d_lam)
     r2 = -n - (c_dot(d_X) + lam_dot * d_lam)
-    second = _bordered_block_step(linsolve, r1, r2, S, c_dot, lam_dot, b=b)
+    if diagnostics is not None:
+        diagnostics["first_border_residual_norm"] = float(
+            np.hypot(np.linalg.norm(r1), abs(r2))
+        )
+    second_diagnostics: dict[str, float] = {}
+    second = _bordered_block_step(
+        linsolve,
+        r1,
+        r2,
+        S,
+        c_dot,
+        lam_dot,
+        b=b,
+        diagnostics=second_diagnostics,
+    )
+    if diagnostics is not None:
+        diagnostics.update(
+            {f"second_{key}": value for key, value in second_diagnostics.items()}
+        )
     if second is None:
         return d_X, d_lam
     dd_X, dd_lam, _b = second
+    if diagnostics is not None:
+        diagnostics["refinement_state_norm"] = float(np.linalg.norm(dd_X))
+        diagnostics["refinement_parameter_abs"] = float(abs(dd_lam))
     return d_X + dd_X, d_lam + dd_lam
 
 

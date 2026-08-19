@@ -2803,3 +2803,109 @@ design compact, two Kimpa, and two loss-model failures. Focused validation was
 `24 passed`; `git diff --check` was clean. The explicit loss convention remains
 analytic `current_complex_c`, which breaks conjugate symmetry and is therefore
 not a publishable gain or compression convention.
+
+### Torus stall diagnosis and bounded-cache rerun (2026-08-19)
+
+The diagnostic implementation was limited to the frequency cache and
+instrumentation. `solve_newton_branch_locked`, `branch_lock_geometry`,
+`solve_newton`, and `solve_torus_arclength` were not changed mathematically.
+`TorusProblem._problem_caches` is now an LRU with at most three
+frequency-lattice entries, and eviction releases cached native preconditioner
+resources. `bordered_solve_refined` optionally exposes its existing
+denominator, bordered residual, and refinement correction. The branch-locked
+corrector records step norms, frequency-step norms, accepted line-search
+alpha, rejected trial residuals, and refinement diagnostics.
+
+Environment and baseline:
+
+```text
+twpa_solver.__file__ =
+D:\Projects\Thesis\twpa_jax\src\twpa_solver\__init__.py
+pytest baseline = 6 failed, 939 passed, 5 skipped, 1 xfailed
+focused cache/bordered/torus tests = 29 passed in 10.77 s
+git diff --check = clean
+graphify update . = completed
+```
+
+#### Gate C1
+
+The accepted sequence was re-run with re-solved pump checkpoints:
+`-24.19555 -> -24.05 -> -23.90 dBm`, K=5, Q=1, PARDISO, and explicit
+`current_complex_c`.
+
+```text
+previous unbounded-cache peak RSS = 9.88 GB
+LRU peak RSS observed             = 2.03 GB
+free memory during LRU run        = 4.50--5.80 GB
+-23.90 coefficient_relative      = 1.2104372828801366e-12
+C1                                 = PASS
+```
+
+The endpoint is numerically consistent with the known accepted value. The
+first retry used an ACL-protected artifact path and did not produce a solver
+result; it was not counted as a gate run.
+
+#### Gate C2
+
+The warm predictor was run from the accepted `-23.90 dBm` state to
+`-23.80 dBm`. It reached relative residual `1.515663970476295e-4` after 21
+Newton updates and failed its line search. The complete per-iteration table
+is:
+
+```text
+iter step_rel       omega_rel     alpha       coeff_rel       q_ratio       denominator   refinement_param
+00   9.877448e-02   8.234503e-04  0.5         1.144691e-02    1.000000      -1.245496e-02  1.254643e-04
+01   1.836840e-02   4.451337e-04  1.0         1.053803e-02    1.060376       1.100627e-08  1.585830e-06
+02   8.489833e-02   1.534458e-03  0.015625    5.231817e-03    1.084124       4.862850e-09  1.477910e-03
+03   1.413996e-02   1.599022e-04  1.0         5.222210e-03    1.083744       2.269222e-08  3.610081e-05
+04   6.689785e-03   4.484529e-04  1.0         3.092382e-03    1.092198       3.706822e-08  3.706220e-05
+05   8.929078e-04   2.459250e-05  1.0         4.152386e-04    1.101021       4.323597e-07  2.743294e-06
+06   8.874728e-04   4.243795e-07  0.25        1.786433e-04    1.101531       7.854183e-07  1.627021e-06
+07   1.193421e-03   1.073165e-06  0.125       1.652954e-04    1.101509       8.498657e-07  1.366200e-06
+08   1.554714e-03   1.832696e-06  0.0625      1.605540e-04    1.101496       8.761838e-07  2.885258e-06
+09   1.928017e-03   2.648273e-06  0.03125     1.575213e-04    1.101489       8.937770e-07  1.603986e-06
+10   2.262200e-03   3.399964e-06  0.03125     1.553155e-04    1.101484       9.068737e-07  9.906864e-06
+11   2.794216e-03   4.641478e-06  0.015625    1.542049e-04    1.101479       9.142092e-07  3.626666e-06
+12   3.267443e-03   5.767375e-06  0.015625    1.532188e-04    1.101475       9.206790e-07  2.369844e-07
+13   4.026646e-03   7.613837e-06  0.0078125   1.527622e-04    1.101471       9.245202e-07  5.137707e-06
+14   4.698752e-03   9.267188e-06  0.0078125   1.522988e-04    1.101469       9.282431e-07  1.610687e-05
+15   5.785673e-03   1.197449e-05  0.00390625  1.520969e-04    1.101466       9.310699e-07  3.638771e-06
+16   6.745502e-03   1.438056e-05  0.00390625  1.518740e-04    1.101464       9.338293e-07  1.569505e-07
+17   8.310607e-03   1.833080e-05  0.001953125 1.517823e-04    1.101462       9.367715e-07  5.080861e-06
+18   9.694462e-03   2.183579e-05  0.001953125 1.516746e-04    1.101460       9.395443e-07  1.541415e-05
+19   1.197483e-02   2.763272e-05  0.0009765625 1.516339e-04    1.101459       9.433645e-07  2.045806e-05
+20   1.400649e-02   3.280694e-05  0.0009765625 1.515826e-04    1.101458       9.468913e-07  1.531746e-05
+21   1.741069e-02   4.149372e-05  none        1.515664e-04    1.101456       9.524703e-07  4.288535e-05
+```
+
+The final rejected-trial residual profiles, copied from the incremental CSV,
+were:
+
+```text
+iteration 19: 0.107342, 0.0261725, 0.00659385, 0.00174871, 0.000544554,
+              0.000246809, 0.000174111, 0.000156648, 0.000152591,
+              0.000151725, 0.000151583
+iteration 20: 0.148145, 0.0357373, 0.00894673, 0.00233480, 0.000690801,
+              0.000283137, 0.000183082, 0.000158843, 0.000153100,
+              0.000151814, 0.000151566
+iteration 21: 0.233599, 0.0552528, 0.0137098, 0.00351913, 0.000986403,
+              0.000356733, 0.000201321, 0.000163366, 0.000154217,
+              0.000152081, 0.000151621
+```
+
+The step norm does not explode: its maximum is `9.877e-2` at the first
+iteration and it is `1.741e-2` at the failed iteration. The line-search alpha
+collapses from `0.5` to `9.765625e-4`, while the residual decreases only from
+`1.6055e-4` to `1.5157e-4`. The refinement denominator remains finite and
+approaches `9.525e-7`; the refinement correction is recorded but does not
+indicate a singular fixed-drive fold. C2 is therefore the non-fold outcome:
+non-descent or insufficient linearization accuracy. `C2 = NON-FOLD STALL`.
+
+Because C2 did not classify the point as a fold, the stop rule was applied:
+Phase 3 arclength crossing and Phase 4 Q=2 controls were not run. No physical
+claim is made for `-23.80 dBm`.
+
+The explicit `current_complex_c` convention is analytic in frequency but does
+not preserve conjugate symmetry. These response and utilization diagnostics
+remain stability-analysis conventions and must not be published as gain or
+compression values without the loss-model review.

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import math
+
 import numpy as np
 import pytest
 
@@ -41,6 +43,49 @@ def test_torus_problem_exposes_square_unbordered_jacobian() -> None:
     assert residual.size == problem.unknown_size
     assert jacobian.shape == (problem.unknown_size - 1, problem.unknown_size - 1)
     assert ToneIndex(0, 1) in problem.basis.tones
+
+
+def test_torus_frequency_cache_evicts_old_entries_and_releases_resources() -> None:
+    problem = _torus_problem()
+
+    class Resource:
+        def __init__(self) -> None:
+            self.released = False
+
+        def release(self) -> None:
+            self.released = True
+
+    resources: list[Resource] = []
+    for index in range(4):
+        resource = Resource()
+        resources.append(resource)
+        problem._frequency_cache(float(index + 1))["resource"] = resource
+
+    assert list(problem._problem_caches) == [2.0, 3.0, 4.0]
+    assert resources[0].released
+    assert not resources[1].released
+
+
+def test_bordered_refinement_exposes_diagnostics() -> None:
+    matrix = np.array([[2.0, 0.1], [0.2, 1.5]])
+    source = np.array([0.3, -0.4])
+    residual = np.array([0.7, -0.2])
+    diagnostics: dict[str, float] = {}
+
+    result = bordered_solve_refined(
+        lambda value: matrix @ value,
+        lambda value: np.linalg.solve(matrix, value),
+        residual,
+        0.2,
+        -source,
+        lambda value: float(value[0] - 0.5 * value[1]),
+        0.0,
+        diagnostics=diagnostics,
+    )
+
+    assert result is not None
+    assert math.isfinite(diagnostics["first_denominator"])
+    assert "first_border_residual_norm" in diagnostics
 
 
 def test_torus_anchor_is_the_imaginary_generator_coordinate() -> None:

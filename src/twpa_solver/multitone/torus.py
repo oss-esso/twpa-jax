@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import time
+from collections import OrderedDict
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Callable
@@ -26,6 +27,9 @@ from twpa_solver.multitone.source import AffineSourcePath
 from twpa_solver.pump.backends.fast_coupled import FastCoupledPreconditioner
 from twpa_solver.pump.problem import pack_complex, unpack_complex
 from twpa_solver.pump.solver import bordered_solve_refined
+
+
+_MAX_FREQUENCY_CACHES = 3
 
 
 def apply_border_aware_preconditioner(
@@ -325,11 +329,37 @@ class TorusProblem:
     factor_backend: str = "pardiso"
     precond_reuse: int = 1
     max_step_over_state: float = 2.0
-    _problem_caches: dict[float, dict[object, object]] = field(
-        default_factory=dict,
+    _problem_caches: OrderedDict[float, dict[object, object]] = field(
+        default_factory=OrderedDict,
         init=False,
         repr=False,
     )
+
+    def _release_problem_cache(self, cache: dict[object, object]) -> None:
+        """Release native resources owned by one frequency cache."""
+        released: set[int] = set()
+        for resource in cache.values():
+            resource_id = id(resource)
+            if resource_id in released:
+                continue
+            release = getattr(resource, "release", None)
+            if callable(release):
+                release()
+            released.add(resource_id)
+
+    def _frequency_cache(self, omega_a: float) -> dict[object, object]:
+        """Return an LRU cache for one frequency lattice."""
+        current = float(omega_a)
+        cache = self._problem_caches.get(current)
+        if cache is not None:
+            self._problem_caches.move_to_end(current)
+            return cache
+        while len(self._problem_caches) >= _MAX_FREQUENCY_CACHES:
+            _old_omega, old_cache = self._problem_caches.popitem(last=False)
+            self._release_problem_cache(old_cache)
+        cache = {}
+        self._problem_caches[current] = cache
+        return cache
 
     def __post_init__(self) -> None:
         if self.omega_a <= 0.0:
@@ -355,7 +385,7 @@ class TorusProblem:
                 "base_problem must use an autonomous torus basis, not a signal sector"
             )
         if self.is_schur:
-            cache = self._problem_caches.setdefault(self.omega_a, {})
+            cache = self._frequency_cache(self.omega_a)
             cache["torus_schur_problem"] = self.base_problem
 
     @property
@@ -414,7 +444,7 @@ class TorusProblem:
             n_p=self.base_problem.basis.n_p,
             n_delta=self.base_problem.basis.n_delta,
         )
-        cache = self._problem_caches.setdefault(current, {})
+        cache = self._frequency_cache(current)
         if not self.is_schur:
             return replace(self.base_problem, basis=basis, cache=cache)
 
@@ -1026,6 +1056,11 @@ class TorusProblem:
         factor_backends: list[str] = []
         lock_history: list[float] = []
         collapse_history: list[float] = []
+        step_norm_history: list[float | None] = []
+        omega_step_history: list[float | None] = []
+        accepted_alpha_history: list[float | None] = []
+        trial_relative_history: list[list[float | None]] = []
+        refinement_history: list[dict[str, float]] = []
 
         for iteration in range(max_newton + 1):
             current = self.with_omega_a(omega)
@@ -1062,6 +1097,11 @@ class TorusProblem:
                     "lock_history": lock_history,
                     "generator_norm_history": collapse_history,
                     "factor_backend": factor_backends,
+                    "step_norm_relative": step_norm_history,
+                    "omega_step_relative": omega_step_history,
+                    "accepted_alpha": accepted_alpha_history,
+                    "trial_relative": trial_relative_history,
+                    "bordered_refinement": refinement_history,
                     "branch_lock_beta": float(beta),
                     "branch_lock_phase_projection": (
                         geometry.phase_projection
@@ -1084,6 +1124,7 @@ class TorusProblem:
             def lock_dot(vector: np.ndarray) -> float:
                 return float(geometry.row_physical @ vector)
 
+            refinement: dict[str, float] = {}
             update = bordered_solve_refined(
                 matvec,
                 preconditioner.solve,
@@ -1092,9 +1133,15 @@ class TorusProblem:
                 -d_omega,
                 lock_dot,
                 0.0,
+                diagnostics=refinement,
             )
+            refinement_history.append(refinement)
             factor_backends.append(preconditioner.last_factor_backend)
             if update is None:
+                step_norm_history.append(None)
+                omega_step_history.append(None)
+                accepted_alpha_history.append(None)
+                trial_relative_history.append([])
                 return X, omega, {
                     "converged": False,
                     "iterations": iteration,
@@ -1107,6 +1154,11 @@ class TorusProblem:
                     "lock_history": lock_history,
                     "generator_norm_history": collapse_history,
                     "factor_backend": factor_backends,
+                    "step_norm_relative": step_norm_history,
+                    "omega_step_relative": omega_step_history,
+                    "accepted_alpha": accepted_alpha_history,
+                    "trial_relative": trial_relative_history,
+                    "bordered_refinement": refinement_history,
                     "branch_lock_beta": float(beta),
                     "branch_lock_phase_projection": geometry.phase_projection,
                     "branch_lock_radial_projection": geometry.radial_projection,
@@ -1116,12 +1168,21 @@ class TorusProblem:
                 }
             step, delta_omega = update
             delta_x = unpack_complex(step, X.shape)
+            state_norm = max(float(np.linalg.norm(pack_complex(X))), 1.0e-300)
+            step_norm_history.append(
+                float(np.linalg.norm(pack_complex(delta_x)) / state_norm)
+            )
+            omega_step_history.append(
+                float(abs(delta_omega) / max(abs(omega), 1.0e-300))
+            )
             alpha = 1.0
             accepted = False
+            iteration_trial_relative: list[float | None] = []
             while alpha >= min_alpha:
                 trial_x = X + alpha * delta_x
                 trial_omega = omega + alpha * delta_omega
                 if trial_omega <= 0.0:
+                    iteration_trial_relative.append(None)
                     alpha *= 0.5
                     continue
                 trial_ratio = (
@@ -1129,6 +1190,7 @@ class TorusProblem:
                     / predictor_generator_norm
                 )
                 if trial_ratio < branch_collapse_fraction:
+                    iteration_trial_relative.append(None)
                     alpha *= 0.5
                     continue
                 trial_problem = current.with_omega_a(trial_omega).full_problem()
@@ -1141,6 +1203,7 @@ class TorusProblem:
                     / max(np.sqrt(trial_packed.size), 1.0)
                     / coefficient_scale
                 )
+                iteration_trial_relative.append(trial_relative)
                 trial_lock = geometry.value(trial_x)
                 trial_merit = max(trial_relative, abs(trial_lock))
                 if trial_merit < merit:
@@ -1148,6 +1211,8 @@ class TorusProblem:
                     accepted = True
                     break
                 alpha *= 0.5
+            trial_relative_history.append(iteration_trial_relative)
+            accepted_alpha_history.append(float(alpha) if accepted else None)
             if not accepted:
                 return X, omega, {
                     "converged": False,
@@ -1161,6 +1226,11 @@ class TorusProblem:
                     "lock_history": lock_history,
                     "generator_norm_history": collapse_history,
                     "factor_backend": factor_backends,
+                    "step_norm_relative": step_norm_history,
+                    "omega_step_relative": omega_step_history,
+                    "accepted_alpha": accepted_alpha_history,
+                    "trial_relative": trial_relative_history,
+                    "bordered_refinement": refinement_history,
                     "branch_lock_beta": float(beta),
                     "branch_lock_phase_projection": geometry.phase_projection,
                     "branch_lock_radial_projection": geometry.radial_projection,
@@ -1185,6 +1255,11 @@ class TorusProblem:
             "lock_history": lock_history,
             "generator_norm_history": collapse_history,
             "factor_backend": factor_backends,
+            "step_norm_relative": step_norm_history,
+            "omega_step_relative": omega_step_history,
+            "accepted_alpha": accepted_alpha_history,
+            "trial_relative": trial_relative_history,
+            "bordered_refinement": refinement_history,
             "branch_lock_beta": float(beta),
             "branch_lock_phase_projection": geometry.phase_projection,
             "branch_lock_radial_projection": geometry.radial_projection,
