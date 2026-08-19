@@ -43,13 +43,13 @@ class IPMBuilders:
         pump: Path,
         *,
         rows: int,
-        array_length: int,
+        jtl_cells_per_array: int,
         Lj: float,
         Cj: float,
         Cg: float,
-        short_tl_cells: int,
-        long_tl_cells: int,
-        coupler_section_cells: int,
+        inter_array_cpw_cells: int,
+        signal_inter_coupler_cpw_cells: int,
+        pump_inter_coupler_cpw_cells: int,
         coupler: Mapping[str, Any] | None = None,
         name: str | None = None,
         tl_L: float | None = None,
@@ -61,14 +61,14 @@ class IPMBuilders:
         self._validate_ipm_paths(signal, pump)
         if not isinstance(rows, int) or isinstance(rows, bool) or rows <= 0:
             raise ValueError("rows must be a positive integer")
-        if not isinstance(array_length, int) or isinstance(array_length, bool):
-            raise TypeError("array_length must be an integer")
-        if array_length <= 0:
-            raise ValueError("array_length must be a positive integer")
+        if not isinstance(jtl_cells_per_array, int) or isinstance(jtl_cells_per_array, bool):
+            raise TypeError("jtl_cells_per_array must be an integer")
+        if jtl_cells_per_array <= 0:
+            raise ValueError("jtl_cells_per_array must be a positive integer")
         for label, value in (
-            ("short_tl_cells", short_tl_cells),
-            ("long_tl_cells", long_tl_cells),
-            ("coupler_section_cells", coupler_section_cells),
+            ("inter_array_cpw_cells", inter_array_cpw_cells),
+            ("signal_inter_coupler_cpw_cells", signal_inter_coupler_cpw_cells),
+            ("pump_inter_coupler_cpw_cells", pump_inter_coupler_cpw_cells),
         ):
             if not isinstance(value, int) or isinstance(value, bool) or value < 0:
                 raise ValueError(f"{label} must be a non-negative integer")
@@ -79,7 +79,8 @@ class IPMBuilders:
         lj = validate_positive(Lj, "Lj", signal.name)
         cj = validate_positive(Cj, "Cj", signal.name)
         cg = validate_positive(Cg, "Cg", signal.name)
-        if short_tl_cells or long_tl_cells or coupler_section_cells:
+        if (inter_array_cpw_cells or signal_inter_coupler_cpw_cells
+                or pump_inter_coupler_cpw_cells):
             if tl_L is None or tl_C is None:
                 raise ValueError("tl_L and tl_C are required for IPM routing cells")
             line_l = validate_positive(tl_L, "tl_L", signal.name)
@@ -92,12 +93,12 @@ class IPMBuilders:
         for row_index in range(rows):
             line = self.add_jj_line(
                 signal,
-                cells=array_length,
+                cells=jtl_cells_per_array,
                 Lj=lj,
                 Cj=cj,
                 Cg=cg,
                 boundary_caps=True,
-                cell_index_start=cell_index_start + row_index * array_length,
+                cell_index_start=cell_index_start + row_index * jtl_cells_per_array,
                 name=f"{block_path}.row[{row_index}].array[0]",
             )
             array = IPMArrayHandle(
@@ -113,7 +114,7 @@ class IPMBuilders:
             if row_index < rows - 1 or coupler is None:
                 self.add_transmission_line(
                     signal,
-                    cells=short_tl_cells,
+                    cells=inter_array_cpw_cells,
                     L=line_l,
                     C=line_c,
                     name=f"{block_path}.row[{row_index}].short_tl",
@@ -125,14 +126,14 @@ class IPMBuilders:
                 raise TypeError("coupler must be a mapping or None")
             self.add_transmission_line(
                 signal,
-                cells=long_tl_cells,
+                cells=signal_inter_coupler_cpw_cells,
                 L=line_l,
                 C=line_c,
                 name=f"{block_path}.long_tl.signal",
             )
             self.add_transmission_line(
                 pump,
-                cells=coupler_section_cells,
+                cells=pump_inter_coupler_cpw_cells,
                 L=line_l,
                 C=line_c,
                 name=f"{block_path}.long_tl.pump",
@@ -145,14 +146,14 @@ class IPMBuilders:
             )
         self.graph.hierarchy[block_path] = {
             "rows": rows,
-            "array_length": array_length,
+            "jtl_cells_per_array": jtl_cells_per_array,
             "coupler": coupler_handle is not None,
         }
         return IPMSectionHandle(
             path=block_path,
             row=row_handles,
             coupler=coupler_handle,
-            next_cell_index=cell_index_start + rows * array_length,
+            next_cell_index=cell_index_start + rows * jtl_cells_per_array,
         )
 
     def _validate_ipm_paths(self, signal: Path, pump: Path) -> None:

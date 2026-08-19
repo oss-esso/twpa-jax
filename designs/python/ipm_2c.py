@@ -9,7 +9,7 @@ from twpa_solver.circuit import Circuit, Technology, load_technology
 
 
 _DESIGN_DEFAULTS: dict[str, float | int] = {
-    "array_length": 418,
+    "jtl_cells_per_array": 418,
 }
 
 
@@ -59,7 +59,7 @@ def build_ipm_2c(
         key: _override_value(
             overrides,
             key,
-            _technology_value(technology, key) if key != "array_length" else value,
+            _technology_value(technology, key) if key != "jtl_cells_per_array" else value,
         )
         for key, value in _DESIGN_DEFAULTS.items()
     }
@@ -69,9 +69,11 @@ def build_ipm_2c(
         )
     technology_keys = (
         "Ll", "Cl", "coupling_dB", "coupler_freq_hz", "Z0",
-        "length_of_short_TL", "length_of_long_TL", "coupler_section_length",
-        "len1", "len2", "len3", "len4", "Rleft", "Rright", "Rm",
-        "cell_length_um", "num_rows", "arrays_per_dc",
+        "inter_array_cpw_cells", "signal_inter_coupler_cpw_cells",
+        "pump_inter_coupler_cpw_cells", "signal_input_cpw_cells",
+        "signal_output_cpw_cells", "pump_input_cpw_cells",
+        "pump_output_cpw_cells", "Rleft", "Rright", "Rm",
+        "cell_length_um", "jtl_row_count", "jtl_rows_per_coupler",
     )
     values = {
         key: _override_value(overrides, key, _technology_value(technology, key))
@@ -81,8 +83,8 @@ def build_ipm_2c(
     start_node_bot = _override_value(overrides, "start_node_bot", technology.cursors["pump"])
     if overrides is not None:
         circuit.set_design_parameters({"Ll": values["Ll"], "Cl": values["Cl"]})
-    if int(values["num_rows"]) <= int(values["arrays_per_dc"]) + 1:
-        raise ValueError("IPM 2c num_rows must leave a non-empty tail section")
+    if int(values["jtl_row_count"]) <= int(values["jtl_rows_per_coupler"]) + 1:
+        raise ValueError("IPM 2c jtl_row_count must leave a non-empty tail section")
 
     signal = circuit.path("signal")
     pump = circuit.path("pump")
@@ -95,7 +97,7 @@ def build_ipm_2c(
     circuit.add_resistor(signal.start, circuit.ground, float(values["Rleft"]))
     circuit.add_transmission_line(
         signal,
-        cells=int(values["len1"]),
+        cells=int(values["signal_input_cpw_cells"]),
         name="input.signal_tl",
     )
 
@@ -103,7 +105,7 @@ def build_ipm_2c(
     circuit.add_resistor(pump.start, circuit.ground, float(values["Rm"]))
     circuit.add_transmission_line(
         pump,
-        cells=int(values["len3"]),
+        cells=int(values["pump_input_cpw_cells"]),
         name="input.pump_tl",
     )
 
@@ -111,7 +113,7 @@ def build_ipm_2c(
         "coupling_db": float(values["coupling_dB"]),
         "frequency": float(values["coupler_freq_hz"]),
         "z0": float(values["Z0"]),
-        "mode": _override_value(overrides, "coupler_mode", "cached"),
+        "mode": _override_value(overrides, "coupler_mode", "auto"),
         "cell_length_um": float(values["cell_length_um"]),
     }
     circuit.add_directional_coupler(signal, pump, **coupler, name="input_coupler")
@@ -119,14 +121,14 @@ def build_ipm_2c(
     circuit.add_ipm_section(
         signal,
         pump,
-        rows=int(values["arrays_per_dc"]),
-        array_length=int(design_values["array_length"]),
+        rows=int(values["jtl_rows_per_coupler"]),
+        jtl_cells_per_array=int(design_values["jtl_cells_per_array"]),
         Lj=float(design_values["Lj"]),
         Cj=float(design_values["Cj"]),
         Cg=float(design_values["Cg"]),
-        short_tl_cells=int(values["length_of_short_TL"]),
-        long_tl_cells=int(values["length_of_long_TL"]),
-        coupler_section_cells=int(values["coupler_section_length"]),
+        inter_array_cpw_cells=int(values["inter_array_cpw_cells"]),
+        signal_inter_coupler_cpw_cells=int(values["signal_inter_coupler_cpw_cells"]),
+        pump_inter_coupler_cpw_cells=int(values["pump_inter_coupler_cpw_cells"]),
         coupler=coupler,
         tl_L=float(values["Ll"]),
         tl_C=float(values["Cl"]),
@@ -134,39 +136,47 @@ def build_ipm_2c(
         name="section[0]",
     )
 
-    tail_rows = int(values["num_rows"]) - int(values["arrays_per_dc"]) - 1
+    tail_rows = int(values["jtl_row_count"]) - int(values["jtl_rows_per_coupler"]) - 1
     circuit.add_ipm_section(
         signal,
         pump,
         rows=tail_rows,
-        array_length=int(design_values["array_length"]),
+        jtl_cells_per_array=int(design_values["jtl_cells_per_array"]),
         Lj=float(design_values["Lj"]),
         Cj=float(design_values["Cj"]),
         Cg=float(design_values["Cg"]),
-        short_tl_cells=int(values["length_of_short_TL"]),
-        long_tl_cells=0,
-        coupler_section_cells=0,
+        inter_array_cpw_cells=int(values["inter_array_cpw_cells"]),
+        signal_inter_coupler_cpw_cells=0,
+        pump_inter_coupler_cpw_cells=0,
         coupler=None,
         tl_L=float(values["Ll"]),
         tl_C=float(values["Cl"]),
-        cell_index_start=int(values["arrays_per_dc"]) * int(design_values["array_length"]),
+        cell_index_start=int(values["jtl_rows_per_coupler"]) * int(
+            design_values["jtl_cells_per_array"]
+        ),
         name="section[1]",
     )
     circuit.add_jj_line(
         signal,
-        cells=int(design_values["array_length"]),
+        cells=int(design_values["jtl_cells_per_array"]),
         Lj=float(design_values["Lj"]),
         Cj=float(design_values["Cj"]),
         Cg=float(design_values["Cg"]),
         boundary_caps=True,
-        cell_index_start=(int(values["num_rows"]) - 1) * int(design_values["array_length"]),
+        cell_index_start=(int(values["jtl_row_count"]) - 1) * int(
+            design_values["jtl_cells_per_array"]
+        ),
         name="section[1].final_array",
     )
 
-    circuit.add_transmission_line(signal, cells=int(values["len2"]), name="output.signal_tl")
+    circuit.add_transmission_line(
+        signal, cells=int(values["signal_output_cpw_cells"]), name="output.signal_tl"
+    )
     circuit.add_resistor(signal.end, circuit.ground, float(values["Rright"]))
     circuit.add_port(signal.end, number=2, impedance=float(values["Rright"]))
-    circuit.add_transmission_line(pump, cells=int(values["len4"]), name="output.pump_tl")
+    circuit.add_transmission_line(
+        pump, cells=int(values["pump_output_cpw_cells"]), name="output.pump_tl"
+    )
     circuit.add_resistor(pump.end, circuit.ground, float(values["Rm"]))
     circuit.add_port(pump.end, number=4, impedance=float(values["Rm"]))
     return circuit

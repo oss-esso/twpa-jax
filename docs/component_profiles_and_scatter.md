@@ -126,7 +126,7 @@ only 2514 are `Cg` (six are TL `Cl`, two are coupler end caps).
 ## Variants of an existing design
 
 `build_variant_design(source_dir, outdir, ...)` rebuilds a stored design from
-its own `ipm_summary.json["params"]` with `--coupler-mode cached`, gates the
+its own `ipm_summary.json["params"]` with `--coupler-mode auto`, gates the
 result, then applies the profile and scatter.
 
 `assert_source_topology` runs that gate on a **nominal** rebuild. Comparing the
@@ -135,10 +135,8 @@ changing component values is the point. The gate is exact — names, nodes,
 kinds, and values must all match — and a mismatch raises rather than
 proceeding, because it means the stored params do not describe the artifact.
 
-`designs/ipm_2c_fixed` passes at 16312/16312 elements with `C/G/K/Bphi`
-maxdiff 0.0. Other design directories must be checked before being used as
-variant sources; `--coupler-mode ideal` and `optimize` do **not** reproduce
-`ipm_2c_fixed`.
+Newly generated variant sources should be checked before use; explicit
+`--coupler-mode ideal` and `optimize` builds are intentionally not interchangeable.
 
 ## Tests
 

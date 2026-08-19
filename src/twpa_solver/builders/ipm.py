@@ -43,7 +43,7 @@ Run:
     python -m twpa_solver.builders.ipm --write-matrices --draw
 
 Fast default:
-    --coupler-mode cached
+    --coupler-mode auto
 
 More literal CPW reverse optimization:
     --coupler-mode optimize
@@ -62,9 +62,9 @@ import math
 import os
 import re
 import shutil
-from dataclasses import asdict, dataclass, field
+from dataclasses import MISSING, asdict, dataclass, field, fields as dataclass_fields
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any, ClassVar, Mapping, Sequence
 
 import numpy as np
 import scipy.sparse as sp
@@ -156,27 +156,27 @@ class CouplerDiscrete:
     geometry: CouplerGeometry
 
 
-@dataclass
+@dataclass(init=False)
 class IPMParams:
     start_node_top: int = 1
     start_node_bot: int = 100_000
     ground: int = 0
 
-    array_length: int = 418
-    num_rows: int = 6
-    arrays_per_dc: int = 3
+    jtl_cells_per_array: int = 418
+    jtl_row_count: int = 6
+    jtl_rows_per_coupler: int = 3
 
     coupling_dB: float = -14.0
     Z0: float = 50.0
     coupler_freq_hz: float = 8.0e9
 
-    length_of_long_TL: int = 900
-    length_of_short_TL: int = 90
-    coupler_section_length: int = 800
-    len1: int = 0
-    len2: int = 50
-    len3: int = 0
-    len4: int = 0
+    inter_array_cpw_cells: int = 90
+    signal_inter_coupler_cpw_cells: int = 900
+    pump_inter_coupler_cpw_cells: int = 800
+    signal_input_cpw_cells: int = 0
+    signal_output_cpw_cells: int = 50
+    pump_input_cpw_cells: int = 0
+    pump_output_cpw_cells: int = 0
 
     Lj: float = 123.9e-12
     Cj: float = 145.0e-15
@@ -193,12 +193,93 @@ class IPMParams:
 
     cell_length_um: float = 10.0
 
-    # Cached geometry close to the previous optimized design printout.
-    # Use --coupler-mode optimize to recompute with scipy L-BFGS-B.
-    cached_coupler_width_um: float = 39.897
-    cached_coupler_gap_um: float = 44.762
-    cached_coupler_gap_to_ground_um: float = 10.5973385055
-    cached_coupler_length_um: float = 3787.7
+    _LEGACY_ALIASES: ClassVar[dict[str, str]] = {
+        "array_length": "jtl_cells_per_array",
+        "num_rows": "jtl_row_count",
+        "arrays_per_dc": "jtl_rows_per_coupler",
+        "length_of_short_TL": "inter_array_cpw_cells",
+        "length_of_long_TL": "signal_inter_coupler_cpw_cells",
+        "coupler_section_length": "pump_inter_coupler_cpw_cells",
+        "len1": "signal_input_cpw_cells",
+        "len2": "signal_output_cpw_cells",
+        "len3": "pump_input_cpw_cells",
+        "len4": "pump_output_cpw_cells",
+    }
+
+    def __init__(self, **values: Any) -> None:
+        """Construct parameters using canonical names or legacy aliases.
+
+        The aliases keep old JSON summaries and external Python callers
+        readable while making the public parameter names describe the actual
+        IPM paths.
+        """
+
+        values = dict(values)
+        for legacy, canonical in self._LEGACY_ALIASES.items():
+            if legacy in values:
+                if canonical in values:
+                    raise TypeError(
+                        f"pass only one of {legacy!r} and {canonical!r}"
+                    )
+                values[canonical] = values.pop(legacy)
+
+        allowed = {item.name for item in dataclass_fields(type(self))}
+        unknown = set(values) - allowed
+        if unknown:
+            raise TypeError(f"unexpected IPM parameter(s): {sorted(unknown)}")
+        for item in dataclass_fields(type(self)):
+            if item.name in values:
+                value = values[item.name]
+            elif item.default is not MISSING:
+                value = item.default
+            elif item.default_factory is not MISSING:  # pragma: no cover
+                value = item.default_factory()
+            else:  # pragma: no cover
+                raise TypeError(f"missing IPM parameter {item.name!r}")
+            setattr(self, item.name, value)
+
+    def _legacy_value(self, name: str) -> Any:
+        return getattr(self, self._LEGACY_ALIASES[name])
+
+    @property
+    def array_length(self) -> int:
+        return self._legacy_value("array_length")
+
+    @property
+    def num_rows(self) -> int:
+        return self._legacy_value("num_rows")
+
+    @property
+    def arrays_per_dc(self) -> int:
+        return self._legacy_value("arrays_per_dc")
+
+    @property
+    def length_of_short_TL(self) -> int:
+        return self._legacy_value("length_of_short_TL")
+
+    @property
+    def length_of_long_TL(self) -> int:
+        return self._legacy_value("length_of_long_TL")
+
+    @property
+    def coupler_section_length(self) -> int:
+        return self._legacy_value("coupler_section_length")
+
+    @property
+    def len1(self) -> int:
+        return self._legacy_value("len1")
+
+    @property
+    def len2(self) -> int:
+        return self._legacy_value("len2")
+
+    @property
+    def len3(self) -> int:
+        return self._legacy_value("len3")
+
+    @property
+    def len4(self) -> int:
+        return self._legacy_value("len4")
 
     @property
     def Cl(self) -> float:
@@ -740,15 +821,6 @@ def make_coupler_discrete(params: IPMParams, mode: str) -> CouplerDiscrete:
         )
         return calculate_conformal_discrete_params(result, params.cell_length_um)
 
-    if mode == "cached":
-        return calculate_discrete_params(
-            params.cached_coupler_width_um,
-            params.cached_coupler_gap_to_ground_um,
-            params.cached_coupler_gap_um,
-            params.cached_coupler_length_um,
-            params.cell_length_um,
-        )
-
     if mode == "optimize":
         geom = optimize_coupler_geometry(
             coupling_dB=params.coupling_dB,
@@ -793,13 +865,13 @@ def build_component_plan(
     seed: int = 1,
 ) -> ComponentPlan:
     """Build nominal and independently scattered per-cell component arrays."""
-    n_cells = params.num_rows * params.array_length
+    n_cells = params.jtl_row_count * params.jtl_cells_per_array
     lj_nominal = evaluate_profile(lj_segments, n_cells=n_cells,
-                                  cells_per_row=params.array_length,
+                                  cells_per_row=params.jtl_cells_per_array,
                                   base_value=params.Lj)
     cj_nominal = params.Cj * (params.Lj / lj_nominal)
     cg_nominal = evaluate_profile(cg_segments, n_cells=n_cells,
-                                  cells_per_row=params.array_length,
+                                  cells_per_row=params.jtl_cells_per_array,
                                   base_value=params.Cg)
     lj, lj_meta = apply_scatter(lj_nominal, lj_scatter, component_rng(seed, "Lj"))
     if cj_scatter.mode == "plasma_locked":
@@ -821,7 +893,7 @@ def build_component_plan(
     metadata = {
         "seed": int(seed),
         "n_cells": int(n_cells),
-        "cells_per_row": int(params.array_length),
+        "cells_per_row": int(params.jtl_cells_per_array),
         "segments": {"Lj": segments_to_json(lj_segments),
                      "Cg": segments_to_json(cg_segments)},
         "scatter": {"Lj": lj_meta, "Cj": cj_meta, "Cg": cg_meta},
@@ -1305,7 +1377,7 @@ def draw_schematics(outdir: str) -> None:
     print(f"wrote={os.path.join(outdir, 'ipm_block_diagram.svg')}")
 
 
-COUPLER_MODES = ("cached", "ideal", "optimize")
+COUPLER_MODES = ("auto", "ideal", "optimize")
 
 
 def _topology_mismatch(
@@ -1340,8 +1412,8 @@ def assert_source_topology(
     scattered netlist to the source would reject every real variant, since
     changing component values is the whole point.
 
-    The coupler mode is not recorded in the summary, so ``auto`` tries each in
-    turn; a design built with ``ideal`` is not reproduced by ``cached``.
+    The coupler mode is not recorded in the summary, so ``auto`` tries each
+    supported mode in turn.
     """
     source = os.fspath(source_dir)
     with open(os.path.join(source, "ipm_summary.json"), encoding="utf-8") as handle:
@@ -1396,15 +1468,17 @@ def build_variant_design(
 # CLI
 # =============================================================================
 
-def _add_optional_argument(parser: argparse.ArgumentParser, name: str, **kwargs: Any) -> None:
-    parser.add_argument(name, default=None, **kwargs)
+def _add_optional_argument(
+    parser: argparse.ArgumentParser, *names: str, **kwargs: Any
+) -> None:
+    parser.add_argument(*names, default=None, **kwargs)
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(conflict_handler="resolve")
     p.add_argument("--outdir", default=os.path.join("outputs", "ipm_python_design"))
     p.add_argument(
-        "--coupler-mode", choices=["cached", "optimize", "ideal"], default="cached"
+        "--coupler-mode", choices=["auto", "optimize", "ideal"], default="auto"
     )
     p.add_argument("--write-matrices", action="store_true")
     p.add_argument("--draw", action="store_true")
@@ -1414,16 +1488,30 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     _add_optional_argument(p, "--start-node-top", type=int)
     _add_optional_argument(p, "--start-node-bot", type=int)
     _add_optional_argument(p, "--ground", type=int)
-    _add_optional_argument(p, "--array-length", type=int)
-    _add_optional_argument(p, "--num-rows", type=int)
-    _add_optional_argument(p, "--arrays-per-dc", type=int)
-    _add_optional_argument(p, "--length-of-long-tl", type=int)
-    _add_optional_argument(p, "--length-of-short-tl", type=int)
-    _add_optional_argument(p, "--coupler-section-length", type=int)
-    _add_optional_argument(p, "--len1", type=int)
-    _add_optional_argument(p, "--len2", type=int)
-    _add_optional_argument(p, "--len3", type=int)
-    _add_optional_argument(p, "--len4", type=int)
+    _add_optional_argument(p, "--jtl-cells-per-array", "--array-length",
+                           dest="jtl_cells_per_array", type=int)
+    _add_optional_argument(p, "--jtl-row-count", "--num-rows",
+                           dest="jtl_row_count", type=int)
+    _add_optional_argument(p, "--jtl-rows-per-coupler", "--arrays-per-dc",
+                           dest="jtl_rows_per_coupler", type=int)
+    _add_optional_argument(p, "--inter-array-cpw-cells", "--length-of-short-tl",
+                           dest="inter_array_cpw_cells", type=int)
+    _add_optional_argument(
+        p, "--signal-inter-coupler-cpw-cells", "--length-of-long-tl",
+        dest="signal_inter_coupler_cpw_cells", type=int,
+    )
+    _add_optional_argument(
+        p, "--pump-inter-coupler-cpw-cells", "--coupler-section-length",
+        dest="pump_inter_coupler_cpw_cells", type=int,
+    )
+    _add_optional_argument(p, "--signal-input-cpw-cells", "--len1",
+                           dest="signal_input_cpw_cells", type=int)
+    _add_optional_argument(p, "--signal-output-cpw-cells", "--len2",
+                           dest="signal_output_cpw_cells", type=int)
+    _add_optional_argument(p, "--pump-input-cpw-cells", "--len3",
+                           dest="pump_input_cpw_cells", type=int)
+    _add_optional_argument(p, "--pump-output-cpw-cells", "--len4",
+                           dest="pump_output_cpw_cells", type=int)
 
     # Electrical parameters use convenient engineering units in the CLI.
     _add_optional_argument(p, "--coupling-db", type=float)
@@ -1438,13 +1526,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     _add_optional_argument(p, "--rright-ohm", type=float)
     _add_optional_argument(p, "--rm-ohm", type=float)
     _add_optional_argument(p, "--cell-length-um", type=float)
-
-    # Cached coupler geometry overrides.  These are ignored when
-    # --coupler-mode optimize is selected.
-    _add_optional_argument(p, "--cached-coupler-width-um", type=float)
-    _add_optional_argument(p, "--cached-coupler-gap-um", type=float)
-    _add_optional_argument(p, "--cached-coupler-gap-to-ground-um", type=float)
-    _add_optional_argument(p, "--cached-coupler-length-um", type=float)
 
     p.add_argument("--lj-scatter-sigma", type=float, default=0.0)
     p.add_argument("--lj-scatter-seed", type=int, default=None)
@@ -1488,16 +1569,16 @@ def params_from_args(args: argparse.Namespace) -> IPMParams:
         "start_node_top": "start_node_top",
         "start_node_bot": "start_node_bot",
         "ground": "ground",
-        "array_length": "array_length",
-        "num_rows": "num_rows",
-        "arrays_per_dc": "arrays_per_dc",
-        "length_of_long_TL": "length_of_long_tl",
-        "length_of_short_TL": "length_of_short_tl",
-        "coupler_section_length": "coupler_section_length",
-        "len1": "len1",
-        "len2": "len2",
-        "len3": "len3",
-        "len4": "len4",
+        "jtl_cells_per_array": "jtl_cells_per_array",
+        "jtl_row_count": "jtl_row_count",
+        "jtl_rows_per_coupler": "jtl_rows_per_coupler",
+        "inter_array_cpw_cells": "inter_array_cpw_cells",
+        "signal_inter_coupler_cpw_cells": "signal_inter_coupler_cpw_cells",
+        "pump_inter_coupler_cpw_cells": "pump_inter_coupler_cpw_cells",
+        "signal_input_cpw_cells": "signal_input_cpw_cells",
+        "signal_output_cpw_cells": "signal_output_cpw_cells",
+        "pump_input_cpw_cells": "pump_input_cpw_cells",
+        "pump_output_cpw_cells": "pump_output_cpw_cells",
     }
     overrides: dict[str, Any] = {}
     for field, arg_name in direct_fields.items():
@@ -1518,10 +1599,6 @@ def params_from_args(args: argparse.Namespace) -> IPMParams:
         "Rright": ("rright_ohm", 1.0),
         "Rm": ("rm_ohm", 1.0),
         "cell_length_um": ("cell_length_um", 1.0),
-        "cached_coupler_width_um": ("cached_coupler_width_um", 1.0),
-        "cached_coupler_gap_um": ("cached_coupler_gap_um", 1.0),
-        "cached_coupler_gap_to_ground_um": ("cached_coupler_gap_to_ground_um", 1.0),
-        "cached_coupler_length_um": ("cached_coupler_length_um", 1.0),
     }
     for field, (arg_name, scale) in scaled_fields.items():
         value = getattr(args, arg_name)

@@ -85,6 +85,11 @@ def load_technology(
     coupler_mode = raw.get("coupler_mode", "auto")
     if not isinstance(coupler_mode, str) or not coupler_mode:
         raise ValueError(f"{source}: coupler_mode must be a non-empty string")
+    if coupler_mode not in {"auto", "ideal", "optimize"}:
+        raise ValueError(
+            f"{source}: unsupported coupler_mode {coupler_mode!r}; "
+            "expected auto, ideal, or optimize"
+        )
     return Technology(
         name=str(raw.get("name", name)),
         components=component_values,

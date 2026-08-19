@@ -13,21 +13,65 @@ components:
   Rright: 50.0
   Rm: 50.0
   cell_length_um: 10.0
-  cached_coupler_width_um: 39.897
-  cached_coupler_gap_um: 44.762
-  cached_coupler_gap_to_ground_um: 10.5973385055
-  cached_coupler_length_um: 3787.7
 architecture:
-  length_of_short_TL: 90
-  length_of_long_TL: 900
-  coupler_section_length: 800
-  len1: 0
-  len2: 50
-  len3: 0
-  len4: 0
-  num_rows: 6
-  arrays_per_dc: 3
+  jtl_cells_per_array: 418
+  jtl_row_count: 6
+  jtl_rows_per_coupler: 3
+  inter_array_cpw_cells: 90
+  signal_inter_coupler_cpw_cells: 900
+  pump_inter_coupler_cpw_cells: 800
+  signal_input_cpw_cells: 0
+  signal_output_cpw_cells: 50
+  pump_input_cpw_cells: 0
+  pump_output_cpw_cells: 0
 cursors:
   signal: 1
   pump: 10000
 ground: 0
+
+
+
+
+### Actual signal path
+#
+#  Port 1
+#    │
+#    ├── input termination
+#    │
+#    ├── coupler_in
+#    │
+#    ├── JTL row 0: 418 cells = 4.18 mm
+#    ├── inter-array CPW: 90 cells = 0.90 mm
+#    ├── JTL row 1: 418 cells = 4.18 mm
+#    ├── inter-array CPW: 90 cells = 0.90 mm
+#    ├── JTL row 2: 418 cells = 4.18 mm
+#    │
+#    ├── signal inter-coupler CPW: 900 cells = 9.00 mm
+#    │
+#    ├── coupler_1
+#    │
+#    ├── JTL row 3: 418 cells = 4.18 mm
+#    ├── inter-array CPW: 90 cells = 0.90 mm
+#    ├── JTL row 4: 418 cells = 4.18 mm
+#    ├── inter-array CPW: 90 cells = 0.90 mm
+#    ├── JTL row 5: 418 cells = 4.18 mm
+#    │
+#    ├── output CPW: 50 cells = 0.50 mm
+#    │
+#  Port 2
+#
+
+#
+#  ### Actual pump path
+#
+#  Port 3
+#    │
+#    ├── input termination
+#    │
+#    ├── coupler_in
+#    │
+#    ├── pump inter-coupler CPW: 800 cells = 8.00 mm
+#    │
+#    ├── coupler_1
+#    │
+#  Port 4

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import importlib.util
+import json
 from pathlib import Path
 from typing import Any
 
@@ -92,7 +93,7 @@ def _public_legacy_compilation() -> Any:
 
 def test_public_ipm_matches_make_ipm_and_stored_elements() -> None:
     params, _, compiled = _public_legacy_compilation()
-    legacy, _ = make_ipm(params, make_coupler_discrete(params, "cached"))
+    legacy, _ = make_ipm(params, make_coupler_discrete(params, "auto"))
 
     assert [_element_fields(element) for element in compiled.elements] == [
         _element_fields(element) for element in legacy
@@ -102,15 +103,15 @@ def test_public_ipm_matches_make_ipm_and_stored_elements() -> None:
     )
     assert {number: port.node for number, port in compiled.ports.items()} == {
         1: 1,
-        2: 4577,
+        2: 4557,
         3: 10000,
-        4: 11558,
+        4: 11538,
     }
 
 
 def test_public_ipm_matches_make_ipm_and_stored_matrices() -> None:
     params, _, compiled = _public_legacy_compilation()
-    legacy, _ = make_ipm(params, make_coupler_discrete(params, "cached"))
+    legacy, _ = make_ipm(params, make_coupler_discrete(params, "auto"))
     actual = build_matrices(compiled.elements)
     expected = build_matrices(legacy)
 

@@ -1,22 +1,23 @@
 name: qanova_ipm_v1
-coupler_mode: cached
 parameters:
   Ll: 4.24e-12
   Cl: 1.695e-15
   coupling_dB: -14.0
   Z0: 50.0
   coupler_freq_hz: 8.0e9
-  length_of_short_TL: 90
-  length_of_long_TL: 900
-  coupler_section_length: 800
-  cached_coupler_width_um: 39.897
-  cached_coupler_gap_um: 44.762
-  cached_coupler_gap_to_ground_um: 10.5973385055
-  cached_coupler_length_um: 3787.7
+  inter_array_cpw_cells: 90
+  signal_inter_coupler_cpw_cells: 900
+  pump_inter_coupler_cpw_cells: 800
+  signal_input_cpw_cells: 0
+  signal_output_cpw_cells: 50
+  pump_input_cpw_cells: 0
+  pump_output_cpw_cells: 0
   Rleft: 50.0
   Rright: 50.0
   Rm: 50.0
-  array_length: 418
+  jtl_cells_per_array: 418
+  jtl_row_count: 6
+  jtl_rows_per_coupler: 3
 cursors:
   signal: 1
   pump: 100000

@@ -43,7 +43,7 @@ def build_design(outdir: Path, **overrides) -> None:
     if (outdir / "C.npz").exists():
         return
     params = ipm.IPMParams(**overrides)
-    coupler = ipm.make_coupler_discrete(params, "cached")
+    coupler = ipm.make_coupler_discrete(params, "auto")
     circuit, ends = ipm.make_ipm(params, coupler)
     mats = ipm.build_matrices(circuit)
     ipm.write_outputs(str(outdir), circuit, params, coupler, ends, mats)

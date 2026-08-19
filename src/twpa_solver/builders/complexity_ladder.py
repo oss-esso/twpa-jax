@@ -136,7 +136,7 @@ def build_uniform_jtl(n_cells: int, params: LadderParameters | None = None) -> C
 
 
 def build_ipm_single_nonlinear_section(
-    n_cells: int = IPMParams.array_length,
+    n_cells: int = IPMParams.jtl_cells_per_array,
     params: LadderParameters | None = None,
 ) -> CircuitMatrices:
     """Build one actual IPM nonlinear section without couplers or side paths."""

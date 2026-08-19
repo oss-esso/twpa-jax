@@ -24,6 +24,13 @@ def validate_design(spec: Mapping[str, Any]) -> None:
         raise DesignSchemaError("parameters: expected a mapping")
     if "technology" in spec and not isinstance(spec["technology"], str):
         raise DesignSchemaError("technology: expected a preset name")
+    if "coupler_mode" in spec and (
+        not isinstance(spec["coupler_mode"], str)
+        or spec["coupler_mode"] not in {"auto", "ideal", "optimize"}
+    ):
+        raise DesignSchemaError(
+            "coupler_mode: expected 'auto', 'ideal', or 'optimize'"
+        )
     if "extends" in spec and not isinstance(spec["extends"], str):
         raise DesignSchemaError("extends: expected a YAML path")
     if "profiles" in spec and not isinstance(spec["profiles"], Mapping):
@@ -70,9 +77,9 @@ _FIELDS = {
     "coupler": {"type", "name", "cursors"},
     "capacitor": {"type", "name", "nodes", "C"},
     "inductor": {"type", "name", "nodes", "L"},
-    "ipm_line": {"type", "name", "cursor", "arrays", "rows", "cells", "Lj", "Cj", "Cg", "between", "end_coupler"},
+    "ipm_line": {"type", "name", "cursor", "arrays", "rows", "cells", "Lj", "Cj", "Cg", "between", "end_coupler", "trailing_signal_cpw_cells", "trailing_pump_cpw_cells"},
     "ipm_row": {"type", "name", "cursor", "cells", "Lj", "Cj", "Cg"},
-    "ipm_tail": {"type", "name", "cursor", "rows", "cells", "Lj", "Cj", "Cg", "final_array"},
+    "ipm_tail": {"type", "name", "cursor", "rows", "cells", "Lj", "Cj", "Cg", "between", "final_array"},
     "signal_port": {"type", "name", "port"},
     "pump_port": {"type", "name", "port"},
     "input_ports": {"type", "name", "cursor", "port", "resistance"},

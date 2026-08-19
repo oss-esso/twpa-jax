@@ -99,7 +99,7 @@ def build_ipm_v2(config: IPMv2Config | None = None) -> Circuit:
             pump,
             coupling_db=_coupling_db(settings, coupler_number),
             frequency=settings.coupler_frequency_hz,
-            mode="cached",
+            mode="auto",
             cell_length_um=settings.cell_length_um,
             name=f"section[{section}].coupler",
         )

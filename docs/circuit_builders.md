@@ -104,7 +104,7 @@ The production builder. Ports the Julia topology generator
 
 A top signal line and a bottom pump rail, joined by edge-coupled directional
 couplers. The signal line alternates JTL rows (Josephson junction arrays) with
-plain transmission-line sections; every `arrays_per_dc` rows the two lines meet
+plain transmission-line sections; every `jtl_rows_per_coupler` rows the two lines meet
 in another coupler.
 
 Ports: `1` signal in, `2` signal out, `3` pump rail reference, `4` pump source.
@@ -118,25 +118,23 @@ counts unless the name carries a unit.
 
 | Group | Fields | Defaults (2c) |
 | --- | --- | --- |
-| Array | `array_length`, `num_rows`, `arrays_per_dc` | 418, 6, 3 |
+| Array | `jtl_cells_per_array`, `jtl_row_count`, `jtl_rows_per_coupler` | 418, 6, 3 |
 | Junctions | `Lj`, `Cj`, `Cg` | 123.9 pH, 145 fF, 66 fF |
 | Line | `Cl_per_um`, `Ll_per_um`, `cell_length_um` | 0.1695 fF, 0.424 pH, 10 µm |
 | Coupler | `coupling_dB`, `Z0`, `coupler_freq_hz` | −14 dB, 50 Ω, 8 GHz |
-| Sections | `length_of_long_TL`, `length_of_short_TL`, `coupler_section_length`, `len1`–`len4` | 900, 90, 800, 0/50/0/0 |
+| Sections | `inter_array_cpw_cells`, `signal_inter_coupler_cpw_cells`, `pump_inter_coupler_cpw_cells`, signal/pump input/output CPW fields | 90, 900, 800, 0/50/0/0 |
 | Terminations | `Rleft`, `Rright`, `Rm` | 50 Ω each |
-| Cached geometry | `cached_coupler_width_um`, `..._gap_um`, `..._gap_to_ground_um`, `..._length_um` | 39.897, 44.762, 10.597, 3787.7 |
 
 `Cl` and `Ll` are properties, so they always track `cell_length_um`.
 
 ## Coupler modes
 
-`--coupler-mode` selects how the directional coupler is derived. **The three are
+`--coupler-mode` selects how the directional coupler is derived. **The modes are
 not interchangeable — a design built with one is not reproduced by another.**
 
 | Mode | Behavior | Cost |
 | --- | --- | --- |
 | `auto` (design-file default) | Optimizes the requested coupling/frequency and selects two-line or centre-ground three-line CPW geometry | slow |
-| `cached` | Uses the stored CPW cross-section, discretized by `calculate_discrete_params` | fast |
 | `optimize` | L-BFGS-B search over (width, gap, gap-to-ground) to hit `coupling_dB` and `Z0` | slow |
 | `ideal` | No geometry at all: even/odd impedances set directly from the target coupling, discretized to a quarter wave at `coupler_freq_hz` | fast |
 
@@ -144,8 +142,8 @@ not interchangeable — a design built with one is not reproduced by another.**
 YAML `coupling_dB`, `coupler_freq_hz`, and `Z0` values. Targets at or above
 -20 dB use the two-line CPW model; weaker-coupling targets select the
 centre-ground three-line model. The selected model and optimized geometry
-are retained in the resolved design metadata. `cached`, `optimize`, and
-`ideal` remain available for compatibility and controlled comparisons.
+are retained in the resolved design metadata. `optimize` and `ideal` remain
+available for compatibility and controlled comparisons.
 
 `ideal` still produces a *distributed* coupler (many short cells), so it stays
 broadband, unlike a single lumped cell that only matches at one frequency.
@@ -153,7 +151,7 @@ broadband, unlike a single lumped cell that only matches at one frequency.
 ## Per-cell profiles
 
 Nominal `Lj` and `Cg` can vary cell by cell. All arrays share one index space:
-the JTL cell index, `0 .. num_rows * array_length - 1` (2508 on 2c).
+the JTL cell index, `0 .. jtl_row_count * jtl_cells_per_array - 1` (2508 on 2c).
 
 **There is no `Cj` profile.** Nominal `Cj` is derived from the `Lj` profile as
 `Cj_i = Cj * (Lj / Lj_i)`, so the plasma frequency `1/sqrt(Lj_i Cj_i)` is
@@ -305,7 +303,7 @@ ground on a Josephson node" returns 2522 elements on 2c, of which only 2514 are
 Stock 2c, matrices written:
 
 ```powershell
-python -m twpa_solver.builders.ipm --outdir outputs/ipm_2c --write-matrices --coupler-mode cached
+python -m twpa_solver.builders.ipm --outdir outputs/ipm_2c --write-matrices --coupler-mode auto
 ```
 
 Half the junctions at one value, half tapered, with a shaped `Cg` and scatter on
@@ -313,7 +311,7 @@ all three components:
 
 ```powershell
 python -m twpa_solver.builders.ipm --outdir outputs/ipm_2c_taper --write-matrices `
-  --coupler-mode cached `
+  --coupler-mode auto `
   --lj-profile "rows=0-2:const:150p" `
   --lj-profile "rows=3-5:linear:123.9p->140p" `
   --cg-profile "all:half_cosine:66f->72f" `
@@ -331,8 +329,8 @@ from twpa_solver.builders.ipm import (
 from twpa_solver.builders.profiles import parse_profile_shorthand as shorthand
 from twpa_solver.builders.scatter import ScatterSpec
 
-params = IPMParams(array_length=418, num_rows=6)
-coupler = make_coupler_discrete(params, "cached")
+params = IPMParams(jtl_cells_per_array=418, jtl_row_count=6)
+coupler = make_coupler_discrete(params, "auto")
 plan = build_component_plan(
     params,
     lj_segments=[shorthand("rows=0:const:150p")],
@@ -373,10 +371,10 @@ variant, since changing component values is the point. The gate is exact
 mismatch means the stored parameters do not describe the artifact.
 
 The coupler mode is not recorded in the summary, so `coupler_mode="auto"`
-(default) tries `cached`, `ideal`, `optimize` in turn and records the winner as
+(default) tries `auto`, `ideal`, `optimize` in turn and records the winner as
 `source_coupler_mode`. All eight directories under `designs/` currently pass;
 `ipm_2c_fixed` matches at 16312/16312 elements with `C/G/K/Bphi` maxdiff 0.0,
-under `cached`. Passing an explicit wrong mode still raises.
+under `auto`. Passing an explicit wrong mode still raises.
 
 ---
 
@@ -557,8 +555,8 @@ meta["factor_std"], meta["clip_hits"], meta["factor_digest"]
 
 - **Live designs are `designs/*`.** Circuit directories under `outputs/` are
   stale; all of exp20–exp31 compression ran on a stale 2c circuit.
-- **Coupler modes are not interchangeable.** `cached` reproduces
-  `ipm_2c_fixed`; `ideal` and `optimize` do not.
+- **Coupler modes are not interchangeable.** `auto`, `ideal`, and `optimize`
+  produce different coupler realizations when explicitly selected.
 - **Pump injection is port 4** for the gain-map 2c wiring, while signal
   scattering is 1 → 2.
 - **JC is not a physical reference** — see the `jc_doc.py` section.

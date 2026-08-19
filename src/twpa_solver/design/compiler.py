@@ -180,8 +180,8 @@ def _design_plan(spec: Mapping[str, Any], parameters: dict[str, Any]) -> Any:
     ):
         return None
     plan_parameters = dict(parameters)
-    if "num_rows" not in plan_parameters:
-        plan_parameters["num_rows"] = sum(
+    if "jtl_row_count" not in plan_parameters:
+        plan_parameters["jtl_row_count"] = sum(
             int(item.get("rows", item.get("arrays", 1))) if isinstance(item, Mapping)
             and item.get("type") in {"ipm_line", "ipm_tail"} else 1
             for item in spec.get("topology", [])
@@ -233,13 +233,15 @@ def _expand_composites(items: list[Any], params: Mapping[str, Any]) -> list[Any]
                 {"type": "resistor", "name": "input_signal_resistor", "cursor": "signal",
                  "value": params.get("Rleft", 50.0)},
                 {"type": "transmission_line", "name": "input_signal_tl", "cursor": "signal",
-                 "cells": params.get("len1", 0), "L": params.get("Ll", 0.0),
+                 "cells": params.get("signal_input_cpw_cells", params.get("len1", 0)),
+                 "L": params.get("Ll", 0.0),
                  "C": params.get("Cl", 0.0)},
                 {"type": "port", "name": "input_pump", "cursor": "pump", "port": 3},
                 {"type": "resistor", "name": "input_pump_resistor", "cursor": "pump",
                  "value": params.get("Rm", 50.0)},
                 {"type": "transmission_line", "name": "input_pump_tl", "cursor": "pump",
-                 "cells": params.get("len3", 0), "L": params.get("Ll", 0.0),
+                 "cells": params.get("pump_input_cpw_cells", params.get("len3", 0)),
+                 "L": params.get("Ll", 0.0),
                  "C": params.get("Cl", 0.0)},
             ])
             continue
@@ -268,13 +270,15 @@ def _expand_composites(items: list[Any], params: Mapping[str, Any]) -> list[Any]
                 continue
             expanded.extend([
                 {"type": "transmission_line", "name": "output_signal_tl", "cursor": "signal",
-                 "cells": params.get("len2", 50), "L": params.get("Ll", 0.0),
+                 "cells": params.get("signal_output_cpw_cells", params.get("len2", 50)),
+                 "L": params.get("Ll", 0.0),
                  "C": params.get("Cl", 0.0)},
                 {"type": "resistor", "name": "output_signal_resistor", "cursor": "signal",
                  "value": params.get("Rright", 50.0)},
                 {"type": "port", "name": "output_signal", "cursor": "signal", "port": 2},
                 {"type": "transmission_line", "name": "output_pump_tl", "cursor": "pump",
-                 "cells": params.get("len4", 0), "L": params.get("Ll", 0.0),
+                 "cells": params.get("pump_output_cpw_cells", params.get("len4", 0)),
+                 "L": params.get("Ll", 0.0),
                  "C": params.get("Cl", 0.0)},
                 {"type": "resistor", "name": "output_pump_resistor", "cursor": "pump",
                  "value": params.get("Rm", 50.0)},
@@ -288,7 +292,9 @@ def _expand_composites(items: list[Any], params: Mapping[str, Any]) -> list[Any]
             continue
         if kind == "jtl":
             rows = int(item.get("rows", 1))
-            cells = int(item.get("cells", params.get("array_length", 0)))
+            cells = int(item.get(
+                "cells", params.get("jtl_cells_per_array", params.get("array_length", 0))
+            ))
             if rows < 1:
                 raise DesignSchemaError(
                     f"{item.get('name', kind)}.rows must be positive"
@@ -323,7 +329,11 @@ def _expand_composites(items: list[Any], params: Mapping[str, Any]) -> list[Any]
                 expanded.append({"type": "jj_line",
                                  "name": f"{name}.row[{index}].array[0]",
                                  "cursor": cursor,
-                                 "cells": item.get("cells", params.get("array_length", 0)),
+                                 "cells": item.get(
+                                     "cells", params.get(
+                                         "jtl_cells_per_array", params.get("array_length", 0)
+                                     )
+                                 ),
                                  "Lj": item.get("Lj", params.get("Lj")),
                                  "Cj": item.get("Cj", params.get("Cj")),
                                  "Cg": item.get("Cg", params.get("Cg"))})
@@ -331,15 +341,28 @@ def _expand_composites(items: list[Any], params: Mapping[str, Any]) -> list[Any]
                     expanded.append({"type": "transmission_line",
                                      "name": f"{name}.row[{index}].short_tl",
                                      "cursor": cursor,
-                                     "cells": params.get("length_of_short_TL", 0),
+                                     "cells": item.get("between", params.get(
+                                         "inter_array_cpw_cells",
+                                         params.get("length_of_short_TL", 0),
+                                     )),
                                      "L": params.get("Ll", 0.0), "C": params.get("Cl", 0.0)})
             if kind == "ipm_line" and item.get("end_coupler", True):
                 expanded.extend([
                     {"type": "transmission_line", "name": f"{name}.long_tl",
-                     "cursor": cursor, "cells": params.get("length_of_long_TL", 0),
+                     "cursor": cursor, "cells": item.get(
+                         "trailing_signal_cpw_cells", params.get(
+                             "signal_inter_coupler_cpw_cells",
+                             params.get("length_of_long_TL", 0),
+                         )
+                     ),
                      "L": params.get("Ll", 0.0), "C": params.get("Cl", 0.0)},
                     {"type": "transmission_line", "name": f"{name}.pump_section",
-                     "cursor": "pump", "cells": params.get("coupler_section_length", 0),
+                     "cursor": "pump", "cells": item.get(
+                         "trailing_pump_cpw_cells", params.get(
+                             "pump_inter_coupler_cpw_cells",
+                             params.get("coupler_section_length", 0),
+                         )
+                     ),
                      "L": params.get("Ll", 0.0), "C": params.get("Cl", 0.0)},
                 ])
             continue
@@ -348,13 +371,19 @@ def _expand_composites(items: list[Any], params: Mapping[str, Any]) -> list[Any]
             if count < 1:
                 raise DesignSchemaError(f"{item.get('name', 'ipm_line')}.arrays must be positive")
             name = str(item["name"])
-            between = item.get("between", params.get("length_of_short_TL",
-                                                        params.get("short_tl", 0)))
+            between = item.get(
+                "between", params.get(
+                    "inter_array_cpw_cells",
+                    params.get("length_of_short_TL", params.get("short_tl", 0)),
+                )
+            )
             for index in range(count):
                 lower = {key: value for key, value in item.items()
                          if key not in {"type", "arrays", "between"}}
                 lower.update({"type": "jj_line", "name": f"{name}.array[{index}]"})
-                lower.setdefault("cells", item.get("cells", params.get("array_length", 0)))
+                lower.setdefault("cells", item.get(
+                    "cells", params.get("jtl_cells_per_array", params.get("array_length", 0))
+                ))
                 expanded.append(lower)
                 if index + 1 < count and int(between) > 0:
                     expanded.append({"type": "transmission_line",
@@ -880,20 +909,17 @@ def compile_design(spec: Mapping[str, Any], *, coupler_mode: str | None = None,
         # Composite blocks consume parameters inside their compiler expansion,
         # so those references are not visible in the compact source topology.
         implicit_by_block = {
-            "input_ports": {"Rleft", "Rm", "Ll", "Cl", "len1", "len3"},
-            "output_ports": {"Rright", "Rm", "Ll", "Cl", "len2", "len4"},
-            "directional_coupler": {"coupling_dB", "Z0", "coupler_freq_hz",
-                                     "cached_coupler_width_um",
-                                     "cached_coupler_gap_um",
-                                     "cached_coupler_gap_to_ground_um",
-                                     "cached_coupler_length_um"},
-            "coupler": {"coupling_dB", "Z0", "coupler_freq_hz",
-                        "cached_coupler_width_um", "cached_coupler_gap_um",
-                        "cached_coupler_gap_to_ground_um",
-                        "cached_coupler_length_um"},
-            "ipm_line": {"array_length", "Lj", "Cj", "Cg", "Ll", "Cl",
-                         "length_of_short_TL", "short_tl"},
-            "ipm_tail": {"array_length", "Lj", "Cj", "Cg", "Ll", "Cl"},
+            "input_ports": {"Rleft", "Rm", "Ll", "Cl", "signal_input_cpw_cells",
+                             "pump_input_cpw_cells"},
+            "output_ports": {"Rright", "Rm", "Ll", "Cl", "signal_output_cpw_cells",
+                              "pump_output_cpw_cells"},
+            "directional_coupler": {"coupling_dB", "Z0", "coupler_freq_hz"},
+            "coupler": {"coupling_dB", "Z0", "coupler_freq_hz"},
+            "ipm_line": {"jtl_cells_per_array", "Lj", "Cj", "Cg", "Ll", "Cl",
+                         "inter_array_cpw_cells", "signal_inter_coupler_cpw_cells",
+                         "pump_inter_coupler_cpw_cells"},
+            "ipm_tail": {"jtl_cells_per_array", "Lj", "Cj", "Cg", "Ll", "Cl",
+                         "inter_array_cpw_cells"},
             "jtl": {"Lj", "Cj", "Cg"},
             "transmission_line": {"Ll", "Cl"},
         }
@@ -906,6 +932,10 @@ def compile_design(spec: Mapping[str, Any], *, coupler_mode: str | None = None,
     cursors = {str(key): int(value) for key, value in spec["cursors"].items()}
     coupler_choice = str(coupler_mode or spec.get(
         "coupler_mode", parameters.get("coupler_mode", "auto")))
+    if coupler_choice not in {"auto", "ideal", "optimize"}:
+        raise DesignSchemaError(
+            "coupler_mode: expected 'auto', 'ideal', or 'optimize'"
+        )
     effective_plan = plan or _design_plan(spec, parameters)
     technology = spec.get("_technology")
     if technology is not None and not isinstance(technology, Technology):

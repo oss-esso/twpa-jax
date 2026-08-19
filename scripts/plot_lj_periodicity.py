@@ -278,7 +278,9 @@ def main() -> int:
     parser.add_argument("--run-sweep", action="store_true")
     parser.add_argument("--lj-values", type=float, nargs="+", default=[79.0, 100.0, 123.9, 150.0])
     parser.add_argument("--cg-ff", type=float, default=66.0)
-    parser.add_argument("--coupler-mode", choices=["cached", "optimize"], default="cached")
+    parser.add_argument(
+        "--coupler-mode", choices=["optimize"], default="optimize"
+    )
     parser.add_argument("--design-root", type=Path, default=Path("outputs/lj_periodicity_designs"))
     parser.add_argument("--sweep-root", type=Path, default=Path("outputs/lj_periodicity_maps"))
     parser.add_argument("--n-frequency", type=int, default=51)
