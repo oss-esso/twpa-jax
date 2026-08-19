@@ -2737,3 +2737,69 @@ system temporary directory. The response and `r_J` values use the existing
 definitions. `current_complex_c` remains an analytic stability/response
 convention that breaks conjugate symmetry; these values must not be used as
 published gain or compression numbers without the loss-model review.
+
+### Branch-locked normal-form march (2026-08-19)
+
+Follow-up `e4a14e6` changes were restricted to
+`scripts/chaos/run_branch_locked_torus.py`; the torus corrector and PALC code
+were not modified. The runner now:
+
+- fits `r^2 = a * (P - P_c)` over accepted points;
+- predicts the nonzero generator sectors by the fitted radius ratio;
+- extrapolates the q=0 sector and omega_a with the accepted-drive secant;
+- tries normal-form, secant, and warm predictors in that order;
+- raises the default Newton budget to 60;
+- records every predictor attempt incrementally;
+- supports prior-state checkpoints for a march beginning at a requested drive;
+- releases native PARDISO resources between target points;
+- flags omitted-q residuals above 10 percent and stops at r_J >= 0.95 or the
+  configured adaptive step/runtime limits.
+
+The P2 calculation was reproduced from the two accepted points:
+
+```text
+normal-form ratio, -24.05 -> -23.90 = 1.3323228175
+converged warm ratio                 = 1.3531118305
+relative difference                  = 1.54 percent
+old secant ratio                     = 1.797
+old secant overshoot                 = 32.8 percent
+normal-form ratio, -23.90 -> -23.80 = 1.1362647600
+fitted a                             = 0.9202186444
+fitted P_c                          = -24.2435273887 dBm
+P2                                   = PASS
+```
+
+The first bounded P3 run used re-solved pump checkpoints at 7.9 GHz and
+explicit `current_complex_c`. It accepted the `-23.90 dBm` bootstrap row, then
+recorded the following `-23.80 dBm` attempts:
+
+```text
+route       iterations  residual_rel       q_norm_ratio  outcome
+normal_form 13           3.0983414526e-03   0.9752998347  line-search failure
+warm        21           1.5156639705e-04   1.1014564204  line-search failure
+```
+
+The normal-form row reported `r^2_predicted=0.4081421724` and radius ratio
+`1.1362647599`, so the predictor scaling itself matched the fitted normal form.
+The corrector did not reach the requested `1e-9` residual, and no signal
+response or physical `r_J` value was emitted for the failed point.
+
+A longer fallback attempt was stopped after the process reached `9.88 GB` RSS
+with `0.22 GB` available. The process was terminated to protect the machine;
+no Q=2 run was started. Therefore P3 did not pass: the campaign did not obtain
+four accepted points beyond `-23.90 dBm`, and it stopped before either the
+10-percent omitted-sector criterion or `r_J=0.95` could be evaluated on an
+accepted row. The output CSVs remain in the system temporary directory:
+
+```text
+C:\Users\Edoardo\AppData\Local\Temp\phaseC_k5_nf_full.csv
+C:\Users\Edoardo\AppData\Local\Temp\phaseC_k5_nf_single.csv
+C:\Users\Edoardo\AppData\Local\Temp\phaseC_k5_warm_bg.csv
+```
+
+The full pytest baseline after these changes was `6 failed, 939 passed,
+5 skipped, 1 xfailed`. The six failures are the pre-existing design CLI,
+design compact, two Kimpa, and two loss-model failures. Focused validation was
+`24 passed`; `git diff --check` was clean. The explicit loss convention remains
+analytic `current_complex_c`, which breaks conjugate symmetry and is therefore
+not a publishable gain or compression convention.
