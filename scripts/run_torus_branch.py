@@ -103,6 +103,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=None,
         help="Warm-start PALC from a saved torus state checkpoint.",
     )
+    parser.add_argument(
+        "--reverse-initial-tangent",
+        action="store_true",
+        help="Continue the opposite local PALC direction from the checkpoint.",
+    )
     parser.add_argument("--max-newton", type=int, default=20)
     parser.add_argument("--residual-tol", type=float, default=1e-9)
     parser.add_argument(
@@ -671,6 +676,8 @@ def run_branch(args: argparse.Namespace) -> dict[str, Any]:
                 source_state,
                 max(float(np.linalg.norm(pack_complex(previous_state))), 1e-300),
             )
+            if args.reverse_initial_tangent:
+                previous_tangent = -previous_tangent
             checkpoint_applied = True
             _append_timing_event(
                 args.timing_path,

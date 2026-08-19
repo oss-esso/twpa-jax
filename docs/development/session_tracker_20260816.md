@@ -2621,3 +2621,59 @@ The plot overlays the ten finite-signal probe gains in purple and retains the
 nine autonomous-torus `r_J` and runtime points. A note on the gain panel states
 that a true torus gain observable requires a third independent frequency; no
 autonomous-torus gain value is substituted for it.
+
+### Independent-frequency torus response (2026-08-19)
+
+The missing gain observable was implemented in
+`src/twpa_solver/multitone/torus_signal.py`. It is a linear solve about the
+converged autonomous torus, not a nonlinear pump-plus-signal probe. The
+response lattice is signed in
+`f_s + h f_p + q f_a`, with `h=-2..2` and `q=-1..1`, so the negative-frequency
+idler sector is retained explicitly. The torus tangent is Fourier projected
+onto the retained Schur nodes, the response matrix is assembled from the
+linear dynamic blocks plus the torus tangent convolution, and the complex
+system is solved through the existing PARDISO wrapper. Pump-off normalization
+uses the same network linearization, including the zero-state Josephson
+tangent, and the existing S-like port convention.
+
+The single-point physical check at the NS checkpoint passed:
+
+```text
+response unknowns       = 37770 complex
+matrix nonzeros         = 1687034
+torus residual           = 3.4351329e-11
+signal residual          = 1.8600213e-12
+r_J                      = 0.5590746584
+gain_vs_off(7.4 GHz)    = 11.65319231 dB
+response runtime         = 2.65 s
+```
+
+The result is within `0.00272 dB` of the existing period-1 pump-plus-signal
+probe at the same small-radius point (`11.65047080 dB`), as expected near the
+NS limit. The response runner is
+`scripts/chaos/run_torus_signal_response.py` and writes each result as a
+flushed CSV row.
+
+The nine recovered torus checkpoints were also evaluated with the independent
+response. Their torus residuals and response residuals passed, but their
+achieved physical currents remain approximately `6.722--6.724 uA` because the
+earlier PALC campaign changed pump checkpoints while compensating with
+`source_tau`. They must therefore not be presented as a physical power sweep.
+An attempted reverse-direction PALC run at the fixed NS pump reproduced the
+known augmented-GMRES stall (`>1100` preconditioner callbacks, approximately
+`1.6 GB` RSS) and was terminated at the bounded limit. Fixed-drive Newton
+correction from the finite torus returned to the trivial branch, so no higher
+physical-power torus point is claimed here.
+
+The updated comparison figure adds the true autonomous response as black
+diamonds while retaining the prior finite-signal probe in purple:
+
+```text
+C:\Users\Edoardo\AppData\Local\Temp\ipm_2c_fixed_k5_torus_true_response.png
+```
+
+The new response tests and the existing torus tests pass together. The
+stability convention remains explicit: `current_complex_c` is analytic for
+this calculation but breaks conjugate symmetry, so these values are for
+stability/response analysis only and must not be used as published gain or
+compression numbers without the project loss-model review.

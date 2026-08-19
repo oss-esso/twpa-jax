@@ -47,6 +47,14 @@ def _read_signal_probe(path: Path | None) -> list[dict[str, Any]]:
         return list(csv.DictReader(handle))
 
 
+def _read_torus_response(path: Path | None) -> list[dict[str, Any]]:
+    """Read the true independent-frequency torus response rows."""
+    if path is None:
+        return []
+    with path.open(newline="", encoding="utf-8") as handle:
+        return list(csv.DictReader(handle))
+
+
 def _pump_current(pump: Any) -> float:
     """Read the achieved pump current from checkpoint metadata."""
     for key in ("pump_current_a", "pump_current_peak_a", "current_a"):
@@ -128,6 +136,7 @@ def _plot(
     base_rows: list[dict[str, Any]],
     torus_rows: list[dict[str, Any]],
     signal_rows: list[dict[str, Any]],
+    response_rows: list[dict[str, Any]],
     output: Path,
 ) -> None:
     """Write the three-panel Phase C plot with torus diagnostics overlaid."""
@@ -165,6 +174,14 @@ def _plot(
             color="tab:purple",
             label="K=5 pump+signal probe",
         )
+    if response_rows:
+        gain_ax.plot(
+            [float(row["achieved_pump_current_a"]) * 1.0e6 for row in response_rows],
+            [float(row["gain_vs_off_db"]) for row in response_rows],
+            "D-",
+            color="black",
+            label="K=5 autonomous torus HB",
+        )
     gain_ax.legend()
     gain_ax.text(
         0.99,
@@ -201,6 +218,14 @@ def _plot(
         color="tab:purple",
         label="K=5 torus HB",
     )
+    if response_rows:
+        rj_ax.plot(
+            [float(row["achieved_pump_current_a"]) * 1.0e6 for row in response_rows],
+            [float(row["r_j"]) for row in response_rows],
+            "D-",
+            color="black",
+            label="K=5 autonomous torus HB",
+        )
     rj_ax.set_ylabel("junction utilization")
     rj_ax.legend()
     for prefix, label, marker in (
@@ -226,6 +251,17 @@ def _plot(
         color="tab:purple",
         label="K=5 torus HB",
     )
+    if response_rows:
+        runtime_ax.plot(
+            [float(row["achieved_pump_current_a"]) * 1.0e6 for row in response_rows],
+            [
+                float(row["torus_runtime_s"])
+                for row in response_rows
+            ],
+            "D-",
+            color="black",
+            label="K=5 torus + linear response",
+        )
     runtime_ax.set_ylabel("wall time (s)")
     runtime_ax.set_xlabel("achieved pump current (microampere)")
     runtime_ax.legend()
@@ -244,6 +280,7 @@ def main() -> int:
     parser.add_argument("--state-dir", type=Path, required=True)
     parser.add_argument("--timing-jsonl", type=Path, required=True)
     parser.add_argument("--signal-probe-csv", type=Path, default=None)
+    parser.add_argument("--torus-response-csv", type=Path, default=None)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--circuit-dir", type=Path, required=True)
     parser.add_argument("--pump-port", type=int, default=4)
@@ -252,6 +289,7 @@ def main() -> int:
     base_rows = _read_rows(args.base_csv)
     torus_rows = _read_rows(args.torus_json)
     signal_rows = _read_signal_probe(args.signal_probe_csv)
+    response_rows = _read_torus_response(args.torus_response_csv)
     timings = _timings(args.timing_jsonl)
     enriched: list[dict[str, Any]] = []
     for row in torus_rows:
@@ -279,9 +317,10 @@ def main() -> int:
                 "torus_radius_squared": row["torus_radius_squared"],
             }
         )
-    _plot(base_rows, enriched, signal_rows, args.output)
+    _plot(base_rows, enriched, signal_rows, response_rows, args.output)
     print(json.dumps({"output": str(args.output), "points": enriched,
-                      "signal_probe_points": signal_rows}, indent=2))
+                      "signal_probe_points": signal_rows,
+                      "torus_response_points": response_rows}, indent=2))
     return 0
 
 
