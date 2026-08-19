@@ -24,6 +24,10 @@ Three questions are answered per operating point:
     signature of a torus and is representable by a three-frequency balance.
     A raised continuum does neither and is representable by no balance at all.
 
+The historical columns use the pump-plus-signal lattice.  Pump-only campaigns
+can request additive ``*_pump_only`` columns with ``--include-pump-only``;
+those columns use only ``n*f_p`` nodes (``m = 0``).
+
 Usage::
 
     python -m scripts.chaos.measure_ansatz_validity outputs/chaos/phaseB_signal
@@ -64,6 +68,13 @@ def _nodes(pump_hz: float, signal_hz: float, pump_divisor: int) -> np.ndarray:
     return np.unique(grid[grid > 0.0])
 
 
+def _pump_only_nodes(pump_hz: float, pump_divisor: int) -> np.ndarray:
+    """Positive pump-only lattice frequencies for ``n*f_p/pump_divisor``."""
+    orders = range(-PUMP_ORDER * pump_divisor, PUMP_ORDER * pump_divisor + 1)
+    nodes = np.abs(np.asarray(orders, dtype=float) * pump_hz / pump_divisor)
+    return np.unique(nodes[nodes > 0.0])
+
+
 def _within_window(freq: np.ndarray, nodes: np.ndarray, window_hz: float) -> np.ndarray:
     """Boolean mask of the frequencies lying within ``window_hz`` of a node."""
     sorted_nodes = np.sort(nodes)
@@ -73,6 +84,48 @@ def _within_window(freq: np.ndarray, nodes: np.ndarray, window_hz: float) -> np.
     distance = np.minimum(np.abs(freq - sorted_nodes[left]),
                           np.abs(freq - sorted_nodes[right]))
     return distance <= window_hz
+
+
+def _reduce_lattice(
+    freq: np.ndarray,
+    power: np.ndarray,
+    pump_hz: float,
+    signal_hz: float,
+    window_hz: float,
+    n_generator_trials: int,
+    pump_only: bool = False,
+) -> dict[str, float]:
+    """Reduce one lattice convention without changing the other convention."""
+    nodes = (
+        _pump_only_nodes(pump_hz, 1)
+        if pump_only
+        else _nodes(pump_hz, signal_hz, 1)
+    )
+    integer_mask = _within_window(freq, nodes, window_hz)
+    total = float(power.sum())
+    on_lattice = float(power[integer_mask].sum() / total)
+    off_power = power[~integer_mask]
+    off_total = float(off_power.sum())
+    top20 = (
+        float(np.sort(off_power)[::-1][:20].sum() / off_total)
+        if off_total > 0.0
+        else float("nan")
+    )
+    generator_share, generator_ratio = _best_generator(
+        freq[~integer_mask],
+        off_power,
+        pump_hz,
+        0.0 if pump_only else signal_hz,
+        window_hz,
+        n_generator_trials,
+    )
+    return {
+        "on_lattice": on_lattice,
+        "off_lattice": 1.0 - on_lattice,
+        "top20_of_off_lattice": top20,
+        "generator_share": generator_share,
+        "generator_over_pump": generator_ratio,
+    }
 
 
 def _best_generator(
@@ -104,7 +157,11 @@ def _best_generator(
     return best_share, best_fa
 
 
-def analyse_point(point_dir: Path, n_generator_trials: int) -> dict[str, Any] | None:
+def analyse_point(
+    point_dir: Path,
+    n_generator_trials: int,
+    include_pump_only: bool = False,
+) -> dict[str, Any] | None:
     """Return the ansatz-validity statistics for one campaign point."""
     result_path = point_dir / "result.json"
     spectrum_path = point_dir / "spectrum.npz"
@@ -134,8 +191,11 @@ def analyse_point(point_dir: Path, n_generator_trials: int) -> dict[str, Any] | 
     total = float(power.sum())
     window_hz = WINDOW_BINS * float(np.median(np.diff(freq)))
 
+    signal_reduction = _reduce_lattice(
+        freq, power, pump_hz, signal_hz, window_hz, n_generator_trials,
+    )
     integer_mask = _within_window(freq, _nodes(pump_hz, signal_hz, 1), window_hz)
-    on_lattice = float(power[integer_mask].sum() / total)
+    on_lattice = signal_reduction["on_lattice"]
     on_half = float(
         power[_within_window(freq, _nodes(pump_hz, signal_hz, 2), window_hz)].sum()
         / total
@@ -145,16 +205,7 @@ def analyse_point(point_dir: Path, n_generator_trials: int) -> dict[str, Any] | 
         / total
     )
 
-    off_power = power[~integer_mask]
-    off_total = float(off_power.sum())
-    top20 = (float(np.sort(off_power)[::-1][:20].sum() / off_total)
-             if off_total > 0.0 else float("nan"))
-    generator_share, generator_ratio = _best_generator(
-        freq[~integer_mask], off_power, pump_hz, signal_hz, window_hz,
-        n_generator_trials,
-    )
-
-    return {
+    row: dict[str, Any] = {
         "device": record.get("device"),
         "control_axis": record.get("control_axis"),
         "control_value": record.get("control_value"),
@@ -166,11 +217,21 @@ def analyse_point(point_dir: Path, n_generator_trials: int) -> dict[str, Any] | 
         "on_lattice": on_lattice,
         "on_half": on_half,
         "on_third": on_third,
-        "off_lattice": 1.0 - on_lattice,
-        "top20_of_off_lattice": top20,
-        "generator_share": generator_share,
-        "generator_over_pump": generator_ratio,
+        "off_lattice": signal_reduction["off_lattice"],
+        "top20_of_off_lattice": signal_reduction["top20_of_off_lattice"],
+        "generator_share": signal_reduction["generator_share"],
+        "generator_over_pump": signal_reduction["generator_over_pump"],
     }
+    if include_pump_only:
+        pump_reduction = _reduce_lattice(
+            freq, power, pump_hz, signal_hz, window_hz, n_generator_trials,
+            pump_only=True,
+        )
+        row.update({
+            f"{key}_pump_only": value
+            for key, value in pump_reduction.items()
+        })
+    return row
 
 
 def main() -> int:
@@ -181,12 +242,19 @@ def main() -> int:
                         help="write the full table here as well as printing it")
     parser.add_argument("--generator-trials", type=int, default=400,
                         help="number of f_a values in the extra-generator scan")
+    parser.add_argument(
+        "--include-pump-only",
+        action="store_true",
+        help="add reduction columns for the pump-only m=0 lattice",
+    )
     args = parser.parse_args()
 
     rows = [
         row
         for point in sorted(args.root.glob("*/*/"))
-        if (row := analyse_point(point, args.generator_trials)) is not None
+        if (row := analyse_point(
+            point, args.generator_trials, args.include_pump_only,
+        )) is not None
     ]
     if not rows:
         print(f"no reducible points under {args.root}")
@@ -202,6 +270,9 @@ def main() -> int:
             print(f"{'control':>10} {'gain dB':>8} {'I/Ic':>7} {'mincos':>7} "
                   f"{'lattice':>8} {'+half':>8} {'+third':>8} "
                   f"{'top20':>7} {'gen':>7} {'fa/fp':>7}")
+            if args.include_pump_only:
+                print("pump-only columns: on_lattice off_lattice top20 "
+                      "generator_share fa/fp")
         print(
             f"{row['control_value']:>10.3f} "
             f"{_fmt(row['gain_vs_off_db']):>8} {_fmt(row['branch_current_max_over_ic'], 4):>7} "
@@ -210,6 +281,15 @@ def main() -> int:
             f"{row['top20_of_off_lattice']:>7.3f} {row['generator_share']:>7.3f} "
             f"{row['generator_over_pump']:>7.4f}"
         )
+        if args.include_pump_only:
+            print(
+                f"{'':>10} {'pump-only':>8} "
+                f"{row['on_lattice_pump_only']:>8.4f} "
+                f"{row['off_lattice_pump_only']:>8.4f} "
+                f"{row['top20_of_off_lattice_pump_only']:>7.3f} "
+                f"{row['generator_share_pump_only']:>7.3f} "
+                f"{row['generator_over_pump_pump_only']:>7.4f}"
+            )
 
     if args.csv:
         args.csv.parent.mkdir(parents=True, exist_ok=True)
