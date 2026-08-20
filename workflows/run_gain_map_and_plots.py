@@ -209,6 +209,8 @@ def _run_one(
         plot_args.append("--save-pdf")
     if args.plot_save_svg:
         plot_args.append("--save-svg")
+    if args.plot_no_quantum_efficiency:
+        plot_args.append("--no-quantum-efficiency")
     try:
         result = plot_gain_map.main(plot_args)
 
@@ -259,6 +261,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--plot-min-gain-db", type=float, default=10.0)
     parser.add_argument("--plot-save-pdf", action="store_true")
     parser.add_argument("--plot-save-svg", action="store_true")
+    parser.add_argument(
+        "--no-quantum-efficiency", "--plot-no-quantum-efficiency",
+        dest="plot_no_quantum_efficiency", action="store_true",
+        help="Skip the full-row QE/QE_ideal trace on candidate S21 plots. "
+             "Measured on 2c: the row costs one Schur solve per sideband per "
+             "sweep point, 2.570 s/point against 0.223 s/point without it.",
+    )
     args, run_args = parser.parse_known_args(argv)
 
     design_paths = list(args.design)
