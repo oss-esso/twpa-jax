@@ -5,6 +5,13 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
+__all__ = [
+    "available_ports",
+    "resolve_port_roles",
+    "external_bias_present",
+    "resolve_mixing_order",
+]
+
 
 def available_ports(circuit_or_ports: Any) -> tuple[int, ...]:
     """Return the sorted numeric ports exposed by a circuit or port mapping."""
