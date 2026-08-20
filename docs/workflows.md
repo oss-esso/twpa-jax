@@ -54,8 +54,8 @@ For a declarative YAML design:
 
 ```powershell
 python workflows/build_design_and_passive.py `
-  --design designs/ipm_2c_line_scoped.yaml `
-  --design-dir outputs/ipm_2c_passive
+  --design designs/ipm_2c.yaml `
+  --output-dir outputs/ipm_2c_passive
 ```
 
 Build several YAML designs sequentially by using one output root. Each design
@@ -63,18 +63,18 @@ is written to a subdirectory named after its YAML file:
 
 ```powershell
 python workflows/build_design_and_passive.py `
-  --design designs/ipm_2c_line_scoped.yaml designs/ipm_3c.yaml `
-  --design-dir outputs/passive_batch
+  --design designs/ipm_2c.yaml designs/ipm_3c.yaml `
+  --output-dir outputs/passive_batch
 ```
 
 Omitting `--design` selects the **legacy IPM builder** instead of the
 declarative compiler. This does not read an existing directory: it builds a
 fresh IPM design from `IPMParams` defaults plus any legacy override flags, and
-writes it into `--design-dir`.
+writes it into `--output-dir`.
 
 ```powershell
 python workflows/build_design_and_passive.py `
-  --design-dir outputs/ipm_2c_legacy `
+  --output-dir outputs/ipm_2c_legacy `
   --coupler-mode auto
 ```
 
@@ -92,8 +92,8 @@ indices must remain stable.
 
 | Option | Default | Meaning |
 | --- | ---: | --- |
-| `--design PATH [PATH ...]` | none | One or more declarative YAML sources. Use together with `--design-dir`; with multiple inputs, that path is the output root. |
-| `--design-dir PATH` | none | Output directory for the generated circuit. Required whenever `--design` is given; one of the two must always be supplied. |
+| `--design PATH [PATH ...]` | none | One or more declarative YAML sources. Use together with `--output-dir`; with multiple inputs, that path is the output root. |
+| `--output-dir PATH` (`--design-dir` alias) | none | Output root for generated circuits. Batched inputs are written to one subdirectory per YAML stem. |
 | `--passive-start-ghz VALUE` | `4.0` | First passive-response frequency. |
 | `--passive-stop-ghz VALUE` | `11.0` | Last passive-response frequency. |
 | `--passive-points INT` | `1401` | Number of passive frequency points. Must be at least 2. |
@@ -209,7 +209,7 @@ pump power.
 python workflows/run_gain_map_and_plots.py `
   --fast `
   --design outputs/ipm_2c_passive `
-  --run-dir outputs/ipm_2c_gain `
+  --output-dir outputs/ipm_2c_gain `
   --n-power 20 `
   --n-frequency 20 `
   --pump-power-min-dbm -35 `
@@ -226,7 +226,7 @@ input directory:
 python workflows/run_gain_map_and_plots.py `
   --fast `
   --design outputs/passive_batch/ipm_2c outputs/passive_batch/ipm_3c `
-  --run-dir outputs/gain_batch
+  --output-dir outputs/gain_batch
 ```
 
 Your flags are forwarded to `scripts/run_gain_map.py`.
@@ -313,8 +313,8 @@ For an unbiased 4WM design, the normal basis is:
 
 | Option | Default | Meaning |
 | --- | ---: | --- |
-| `--design PATH [PATH ...]` | required | One or more generated circuit directories. With multiple inputs, `--run-dir` is the output root. |
-| `--run-dir PATH` | `outputs/gain_map_workflow` | Output directory. |
+| `--design PATH [PATH ...]` (`--design-dir` alias) | required | One or more generated circuit directories. With multiple inputs, `--output-dir` is the output root. |
+| `--output-dir PATH` (`--run-dir`, `--outdir` aliases) | `outputs/gain_map_workflow` | Output root. Batched inputs are written to one subdirectory per design-directory name. |
 | `--fast` | off | Run the standard fast map. This is the default if `--slow` is absent. |
 | `--slow` | off | Use the HB-to-transient boundary workflow instead. |
 | `--plot-top-k INT` | `5` | Number of candidate plots. |
@@ -450,7 +450,7 @@ points. It is not a general high-power or saturation solver.
 python workflows/run_gain_map_and_plots.py `
   --slow `
   --design outputs/ipm_2c_passive `
-  --run-dir outputs/ipm_2c_slow `
+  --output-dir outputs/ipm_2c_slow `
   --n-power 10 `
   --n-frequency 1 `
   --pump-power-min-dbm -61 `

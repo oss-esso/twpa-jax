@@ -66,9 +66,13 @@ _FIELDS = {
     "port": {"type", "name", "cursor", "port"},
     "resistor": {"type", "name", "cursor", "value"},
     "transmission_line": {"type", "name", "cursor", "cells", "L", "C"},
-    "jj_line": {"type", "name", "cursor", "cells", "Lj", "Cj", "Cg"},
-    "jtl": {"type", "name", "cursor", "rows", "cells", "Lj", "Cj", "Cg",
-            "join_cursors"},
+    "jj_line": {"type", "name", "cursor", "cells", "Lj", "Cj", "Cg",
+                 "lj_scatter_sigma", "cj_scatter_sigma", "cg_scatter_sigma",
+                 "cj_scatter_mode", "scatter_seed", "tan_delta"},
+    "jtl": {"type", "name", "cursor", "rows", "jj_number", "jj number",
+            "cells", "Lj", "Cj", "Cg",
+            "join_cursors", "lj_scatter_sigma", "cj_scatter_sigma",
+            "cg_scatter_sigma", "cj_scatter_mode", "scatter_seed", "tan_delta"},
     "rf_squid_line": {"type", "name", "cursor", "cells", "Ic", "Lj", "Lm",
                       "Lw", "Lpar", "Cj", "Cg", "Cg_pattern",
                       "Cg_pattern_counts"},
@@ -83,13 +87,13 @@ _FIELDS = {
     },
     "capacitor": {"type", "name", "nodes", "C"},
     "inductor": {"type", "name", "nodes", "L"},
-    "ipm_line": {"type", "name", "cursor", "arrays", "rows", "cells", "Lj", "Cj", "Cg", "between", "end_coupler", "trailing_signal_cpw_cells", "trailing_pump_cpw_cells"},
+    "ipm_line": {"type", "name", "cursor", "arrays", "rows", "cells", "Lj", "Cj", "Cg", "between", "end_coupler", "trailing_signal_cpw_cells", "trailing_pump_cpw_cells", "lj_scatter_sigma", "cj_scatter_sigma", "cg_scatter_sigma", "cj_scatter_mode", "scatter_seed", "tan_delta"},
     "ipm_row": {"type", "name", "cursor", "cells", "Lj", "Cj", "Cg"},
-    "ipm_tail": {"type", "name", "cursor", "rows", "cells", "Lj", "Cj", "Cg", "between", "final_array"},
+    "ipm_tail": {"type", "name", "cursor", "rows", "cells", "Lj", "Cj", "Cg", "between", "final_array", "lj_scatter_sigma", "cj_scatter_sigma", "cg_scatter_sigma", "cj_scatter_mode", "scatter_seed", "tan_delta"},
     "signal_port": {"type", "name", "port"},
     "pump_port": {"type", "name", "port"},
-    "input_ports": {"type", "name", "cursor", "port", "resistance"},
-    "output_ports": {"type", "name", "cursor", "port", "resistance"},
+    "input_ports": {"type", "name", "cursor", "port", "resistance", "cpw_cells"},
+    "output_ports": {"type", "name", "cursor", "port", "resistance", "cpw_cells"},
 }
 _REQUIRED = {
     "port": {"cursor", "port"},
@@ -105,7 +109,7 @@ _REQUIRED = {
     "inductor": {"nodes", "L"},
     "ipm_line": set(),
     "ipm_row": {"cursor", "cells", "Lj", "Cj", "Cg"},
-    "ipm_tail": {"rows"},
+    "ipm_tail": set(),
     "signal_port": {"port"},
     "pump_port": {"port"},
     "input_ports": set(),
@@ -146,8 +150,6 @@ def _validate_topology(items: list[Any], path: str) -> None:
             raise DesignSchemaError(f"{item_path}.kind: unsupported element kind")
         if kind in {"capacitor", "inductor"} and len(item["nodes"]) != 2:
             raise DesignSchemaError(f"{item_path}.nodes: expected two endpoints")
-        if kind == "ipm_line" and "arrays" not in item and "rows" not in item:
-            raise DesignSchemaError(f"{item_path}: requires 'rows' or 'arrays'")
         if kind == "ipm_tail" and item.get("final_array", True) is not True:
             raise DesignSchemaError(f"{item_path}.final_array: expected true")
         name = item.get("name")

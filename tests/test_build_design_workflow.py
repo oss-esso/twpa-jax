@@ -32,7 +32,7 @@ def test_build_workflow_sequences_multiple_yaml_designs(
 
     result = build_design_and_passive.main([
         "--design", str(design_a), str(design_b),
-        "--design-dir", str(output_root),
+        "--output-dir", str(output_root),
     ])
 
     assert result == 0

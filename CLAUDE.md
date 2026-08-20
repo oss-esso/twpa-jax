@@ -45,6 +45,39 @@ curated merge. Before promotion, check that development-only paths are absent
 from the destination. Generated outputs belong under ignored `outputs/` (or
 another disposable path); source design YAML belongs under `designs/`.
 
+## Canonical IPM presentation designs
+
+The current coupler-count family is represented by exactly these source files:
+`designs/ipm_2c.yaml`, `designs/ipm_3c.yaml`, `designs/ipm_7c.yaml`, and
+`designs/ipm_20c.yaml`. `ipm_2c.yaml` is the renamed line-scoped 2c source;
+all four use the same IPM-line topology family. None of them sets
+`coupler_freq_hz` locally, so every coupler resolves the technology preset's
+value (`ipm_default` is 8 GHz). Only the historical `ipm_2c_coupler_edit.yaml`
+still pins 10 GHz locally, so it is not gain-comparable with the canonical
+four. For presentation comparisons, use these canonical files only. The
+`*_coupler_edit.yaml` and `*_no_coupler.yaml` files are historical variants and
+are not the canonical run set. All generated build, map, plot, and log
+artifacts must remain below `outputs/`, with batched workflow output rooted in
+the directory passed to `--output-dir`.
+
+Couplers name the two lines they join by endpoint port number (`port in
+signal`, `port in pump`, `port out signal`, `port out pump`). That spelling is
+the house style for checked-in designs; `cursors: [signal, pump]` remains valid
+but is not used in the canonical family.
+
+The declarative compiler supports `repeat` groups containing composite IPM
+blocks. `ipm_7c` and `ipm_20c` use one nested group; `ipm_2c` and `ipm_3c`
+write their one and two sections out flat, because a `repeat` of count 1 or 2
+costs more lines than it saves and hides the topology. `ipm_line` and
+`ipm_tail` may omit their row, cell, interconnect, and trailing-section fields;
+those values resolve from the technology preset. `input_ports` and
+`output_ports` carry their own launch CPW from the preset's
+`<cursor>_input_cpw_cells` / `<cursor>_output_cpw_cells`, so a design must not
+add a separate `cpw` block beside a port block. Technology presets expose
+zero-default dielectric-loss and component-scatter parameters. Designs may
+override them globally under `parameters`, or use local scatter fields and
+`tan_delta` on IPM/JTL blocks.
+
 ## Design-independent saturation validation status (2026-07-29)
 
 Do not use JosephsonCircuits.jl or the Themis measurement cube as physical

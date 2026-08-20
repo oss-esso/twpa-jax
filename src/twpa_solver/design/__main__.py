@@ -27,12 +27,12 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--profile-json")
     parser.add_argument("--lj-profile", action="append", default=[])
     parser.add_argument("--cg-profile", action="append", default=[])
-    parser.add_argument("--lj-scatter-sigma", type=float, default=0.0)
-    parser.add_argument("--cj-scatter-sigma", type=float, default=0.0)
-    parser.add_argument("--cj-scatter-mode", choices=("independent", "plasma_locked"), default="independent")
-    parser.add_argument("--cg-scatter-sigma", type=float, default=0.0)
-    parser.add_argument("--scatter-seed", type=int, default=1)
-    parser.add_argument("--tan-delta", type=float, default=0.0)
+    parser.add_argument("--lj-scatter-sigma", type=float, default=None)
+    parser.add_argument("--cj-scatter-sigma", type=float, default=None)
+    parser.add_argument("--cj-scatter-mode", choices=("independent", "plasma_locked"), default=None)
+    parser.add_argument("--cg-scatter-sigma", type=float, default=None)
+    parser.add_argument("--scatter-seed", type=int, default=None)
+    parser.add_argument("--tan-delta", type=float, default=None)
     parser.add_argument("--tan-delta-role", action="append", default=[])
     args = parser.parse_args(argv)
     outdir = Path(args.outdir)
@@ -40,11 +40,20 @@ def main(argv: list[str] | None = None) -> None:
         raise SystemExit(f"output directory is not empty: {outdir}; use --overwrite")
     outdir.mkdir(parents=True, exist_ok=True)
     source = load_design(args.design)
+    preview = compile_design(source, coupler_mode=args.coupler_mode)
+    parameters = dict(preview.metadata["parameters"])
+    lj_sigma = float(args.lj_scatter_sigma if args.lj_scatter_sigma is not None else parameters.get("lj_scatter_sigma", 0.0))
+    cj_sigma = float(args.cj_scatter_sigma if args.cj_scatter_sigma is not None else parameters.get("cj_scatter_sigma", 0.0))
+    cg_sigma = float(args.cg_scatter_sigma if args.cg_scatter_sigma is not None else parameters.get("cg_scatter_sigma", 0.0))
+    cj_mode = str(args.cj_scatter_mode or parameters.get("cj_scatter_mode", "independent"))
+    scatter_seed = int(args.scatter_seed if args.scatter_seed is not None else parameters.get("scatter_seed", 1))
+    scatter_distribution = str(parameters.get("scatter_distribution", "normal"))
+    scatter_clip_min = float(parameters.get("scatter_clip_min", 0.5))
+    scatter_clip_max = float(parameters.get("scatter_clip_max", 1.5))
     plan = None
     if (args.profile_json or args.lj_profile or args.cg_profile or
-            args.lj_scatter_sigma or args.cj_scatter_sigma or args.cg_scatter_sigma):
-        preview = compile_design(source, coupler_mode=args.coupler_mode)
-        parameters = dict(preview.metadata["parameters"])
+            lj_sigma or cj_sigma or cg_sigma or
+            parameters.get("profiles")):
         json_segments = (parse_profile_json(Path(args.profile_json))
                           if args.profile_json else {"Lj": [], "Cg": []})
         params = IPMParams(**{key: value for key, value in parameters.items()
@@ -55,10 +64,13 @@ def main(argv: list[str] | None = None) -> None:
                                                 for text in args.lj_profile],
             cg_segments=json_segments["Cg"] + [parse_profile_shorthand(text)
                                                 for text in args.cg_profile],
-            lj_scatter=ScatterSpec(args.lj_scatter_sigma),
-            cj_scatter=ScatterSpec(args.cj_scatter_sigma, mode=args.cj_scatter_mode),
-            cg_scatter=ScatterSpec(args.cg_scatter_sigma),
-            seed=args.scatter_seed,
+            lj_scatter=ScatterSpec(lj_sigma, scatter_distribution,
+                                   scatter_clip_min, scatter_clip_max),
+            cj_scatter=ScatterSpec(cj_sigma, scatter_distribution,
+                                   scatter_clip_min, scatter_clip_max, cj_mode),
+            cg_scatter=ScatterSpec(cg_sigma, scatter_distribution,
+                                   scatter_clip_min, scatter_clip_max),
+            seed=scatter_seed,
         )
     design = compile_design(source, coupler_mode=args.coupler_mode,
                             strict=args.strict, plan=plan)
@@ -77,7 +89,12 @@ def main(argv: list[str] | None = None) -> None:
         writer = csv.writer(handle)
         writer.writerow(("port", "node"))
         writer.writerows((number, record.node) for number, record in design.ports.items())
-    role_overrides: dict[str, float] = {}
+    design_loss = dict(design.metadata.get("loss", {}))
+    loss_default = float(args.tan_delta if args.tan_delta is not None else design_loss.get("default", 0.0))
+    role_overrides: dict[str, float] = {
+        str(role): float(value)
+        for role, value in dict(design_loss.get("by_role", {})).items()
+    }
     for item in args.tan_delta_role:
         role, separator, value = item.partition("=")
         if not separator or not role:
@@ -86,7 +103,7 @@ def main(argv: list[str] | None = None) -> None:
     summary = {
         "name": design.name, "elements": len(design.elements),
         "cursors": design.cursors, "ports": {str(k): v.node for k, v in design.ports.items()},
-        "loss": {"default": args.tan_delta, "by_role": role_overrides},
+        "loss": {"default": loss_default, "by_role": role_overrides},
     }
     if effective_plan is not None:
         summary["component_plan"] = effective_plan.metadata
@@ -104,7 +121,7 @@ def main(argv: list[str] | None = None) -> None:
         json.dumps(resolved, indent=2, default=str), encoding="utf-8")
     if args.write_matrices:
         matrices = build_matrices(design.elements,
-                                  LossSpec(args.tan_delta, role_overrides))
+                                  LossSpec(loss_default, role_overrides))
         for name in ("C", "G", "K", "Bphi"):
             sp.save_npz(outdir / f"{name}.npz", matrices[name])
         arrays = {key: matrices[key] for key in ("nodes", "Ic", "Lj")}

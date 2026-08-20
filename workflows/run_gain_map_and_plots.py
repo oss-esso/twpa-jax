@@ -243,17 +243,19 @@ def main(argv: list[str] | None = None) -> int:
         epilog="Unrecognised options are forwarded to run_gain_map.py.",
     )
     parser.add_argument(
-        "--design", "--ipm-dir", "--circuit-dir", type=Path,
+        "--design", "--design-dir", "--ipm-dir", "--circuit-dir", type=Path,
         nargs="+", required=True,
     )
     parser.add_argument(
-        "--run-dir", "--outdir", dest="run_dir",
+        "--output-dir", "--run-dir", "--outdir", dest="run_dir",
         type=Path, default=Path("outputs/gain_map_workflow"),
+        help="Output root; batched designs are written to one subdirectory each",
     )
     modes = parser.add_mutually_exclusive_group()
     modes.add_argument("--fast", action="store_true", help="baseline HB map")
     modes.add_argument("--slow", action="store_true", help="HB + TD physical-boundary map")
-    parser.add_argument("--plot-top-k", type=int, default=5)
+    parser.add_argument("--plot-top-k", "--top-k", dest="plot_top_k",
+                        type=int, default=10)
     parser.add_argument("--plot-min-gain-db", type=float, default=10.0)
     parser.add_argument("--plot-save-pdf", action="store_true")
     parser.add_argument("--plot-save-svg", action="store_true")

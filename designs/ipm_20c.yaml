@@ -1,5 +1,5 @@
 schema_version: 1
-name: ipm_3c
+name: ipm_20c
 cursors:
   signal: 1
   pump: 100000
@@ -21,31 +21,21 @@ topology:
         port out signal: 2
         port out pump: 4
 
-
-      - type: ipm_line
-        name: line_1
-
-      - type: directional_coupler
-        name: coupler_1
-        port in signal: 1
-        port in pump: 3
-        port out signal: 2
-        port out pump: 4
-
-
-      - type: ipm_line
-        name: line_2
-
-      - type: directional_coupler
-        name: coupler_2
-        port in signal: 1
-        port in pump: 3
-        port out signal: 2
-        port out pump: 4
-
+      - repeat:
+          name: period
+          count: 19
+          topology:
+            - type: ipm_line
+              name: line_period
+            - type: directional_coupler
+              name: coupler_period
+              port in signal: 1
+              port in pump: 3
+              port out signal: 2
+              port out pump: 4
 
       - type: ipm_tail
-        name: line_3
+        name: line_final
 
       - type: output_ports
         name: output_signal
@@ -60,20 +50,17 @@ topology:
       - type: directional_coupler
         name: coupler_in
 
-      - type: ipm_line
-        name: line_1
-
-      - type: directional_coupler
-        name: coupler_1
-
-      - type: ipm_line
-        name: line_2
-
-      - type: directional_coupler
-        name: coupler_2
+      - repeat:
+          name: period
+          count: 19
+          topology:
+            - type: ipm_line
+              name: line_period
+            - type: directional_coupler
+              name: coupler_period
 
       - type: ipm_tail
-        name: line_3
+        name: line_final
 
       - type: output_ports
         name: output_pump

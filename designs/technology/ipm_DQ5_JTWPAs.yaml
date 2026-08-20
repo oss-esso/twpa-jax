@@ -13,6 +13,17 @@ components:
   Rright: 50.0
   Rm: 50.0
   cell_length_um: 10.0
+  tan_delta: 0.0
+  tan_delta_jtl_cg: 0.0
+  tan_delta_coupling_cap: 0.0
+  lj_scatter_sigma: 0.0
+  cj_scatter_sigma: 0.0
+  cg_scatter_sigma: 0.0
+  cj_scatter_mode: independent
+  scatter_distribution: normal
+  scatter_clip_min: 0.5
+  scatter_clip_max: 1.5
+  scatter_seed: 1
   cached_coupler_width_um: 39.897
   cached_coupler_gap_um: 44.762
   cached_coupler_gap_to_ground_um: 10.5973385055

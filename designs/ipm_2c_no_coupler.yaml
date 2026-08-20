@@ -20,11 +20,6 @@ topology:
 
       - type: ipm_line
         name: line_1
-        rows: 3
-        cells: ${jtl_cells_per_array}
-        between: ${inter_array_cpw_cells}
-        trailing_signal_cpw_cells: ${signal_inter_coupler_cpw_cells}
-        trailing_pump_cpw_cells: ${pump_inter_coupler_cpw_cells}
 
       #- type: directional_coupler
       #  name: coupler_1
@@ -35,14 +30,7 @@ topology:
 
       - type: ipm_tail
         name: line_2
-        rows: 3
-        cells: ${jtl_cells_per_array}
-        between: ${inter_array_cpw_cells}
-        final_array: true
 
-      - type: cpw
-        name: output_signal_tl
-        cells: ${signal_output_cpw_cells}
 
       - type: output_ports
         name: output_signal

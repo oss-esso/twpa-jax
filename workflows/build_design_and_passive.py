@@ -20,7 +20,10 @@ def _parser() -> argparse.ArgumentParser:
         description=__doc__,
         epilog="All unrecognised options are forwarded to the IPM builder.",
     )
-    parser.add_argument("--design-dir", type=Path)
+    parser.add_argument(
+        "--output-dir", "--design-dir", dest="design_dir", type=Path,
+        help="Output root; batched designs are written to one subdirectory each",
+    )
     parser.add_argument(
         "--design", nargs="+", type=Path,
         help="One or more declarative YAML design inputs",
