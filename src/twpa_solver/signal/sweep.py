@@ -17,6 +17,7 @@ from twpa_solver.signal.floquet import (
     solve_gain_one,
 )
 from twpa_solver.signal.gamma import build_khat
+from twpa_solver.signal.qe_row import signal_row_quantum_efficiency
 
 
 def run_gain_sweep(
@@ -41,6 +42,7 @@ def run_gain_sweep(
     pump_state_scale: float = 1.0,
     drop_gamma_tol: float = 0.0,
     include_baselines: bool = True,
+    quantum_efficiency: bool = False,
 ) -> list[GainResult]:
     """Run and persist a production Floquet signal-gain sweep.
 
@@ -97,27 +99,49 @@ def run_gain_sweep(
     source_index = circuit.port_to_index[source_port]
     out_index = circuit.port_to_index[out_port]
     for signal_ghz in freqs:
-        rows.append(
-            solve_gain_one(
+        result = solve_gain_one(
+            circuit=circuit,
+            khat=khat,
+            khat_off_0=khat_off_0,
+            omega_p=pump.omega_p,
+            signal_ghz=float(signal_ghz),
+            sidebands=sidebands,
+            signal_m=signal_m,
+            idler_m=idler_m,
+            source_index=source_index,
+            out_index=out_index,
+            source_current_a=source_current_a,
+            source_port=source_port,
+            out_port=out_port,
+            z0_ohm=z0_ohm,
+            loss_model=loss_model,
+            khat_big_base=khat_big_base,
+            include_baselines=include_baselines,
+        )
+        if quantum_efficiency and result.status == "VALID_SOLVED":
+            row_qe = signal_row_quantum_efficiency(
                 circuit=circuit,
                 khat=khat,
                 khat_off_0=khat_off_0,
                 omega_p=pump.omega_p,
+                pump_freq_ghz=pump.pump_freq_ghz,
                 signal_ghz=float(signal_ghz),
                 sidebands=sidebands,
                 signal_m=signal_m,
                 idler_m=idler_m,
                 source_index=source_index,
                 out_index=out_index,
-                source_current_a=source_current_a,
                 source_port=source_port,
                 out_port=out_port,
                 z0_ohm=z0_ohm,
                 loss_model=loss_model,
-                khat_big_base=khat_big_base,
-                include_baselines=include_baselines,
             )
-        )
+            result.qe_signal = row_qe.qe_signal
+            result.qe_ideal_signal = row_qe.qe_ideal_signal
+            result.qe_ratio = row_qe.qe_ratio
+            result.qe_unitarity_residual = row_qe.unitarity_residual
+            result.qe_sidebands_summed = row_qe.sidebands_summed
+        rows.append(result)
 
     metadata = {
         "circuit_dir": str(circuit_dir),
@@ -146,6 +170,7 @@ def run_gain_sweep(
         "signal_stop_ghz": signal_stop_ghz,
         "points": points,
         "include_baselines": include_baselines,
+        "quantum_efficiency": quantum_efficiency,
     }
     write_outputs(outdir, rows, metadata)
     return rows
