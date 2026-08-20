@@ -11,6 +11,11 @@ import pytest
 import scripts.run_gain_map as run_gain_map
 
 
+def test_runtime_role_helpers_are_imported() -> None:
+    """The full CLI resolves port roles before starting the worker."""
+    assert callable(run_gain_map.resolve_port_roles)
+    assert callable(run_gain_map.resolve_mixing_order)
+
 def test_measurement_grid_loader_preserves_nonuniform_themis_axes() -> None:
     measurement_dir = Path(
         "docs/development/17.03.10_Themis_SetupAug25_noVTS_transmission_15mK"

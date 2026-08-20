@@ -97,7 +97,10 @@ from twpa_solver.ports import (  # noqa: E402
     port_available_power_w,
     port_current_from_power_a,
 )
-from twpa_solver.port_roles import resolve_mixing_order, resolve_port_roles  # noqa: E402
+from twpa_solver.port_roles import (
+    resolve_mixing_order,
+    resolve_port_roles,
+)
 
 
 # =============================================================================
