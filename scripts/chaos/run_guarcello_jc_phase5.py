@@ -1347,6 +1347,7 @@ def resolve_jax_device(preference: str = "auto") -> tuple[Any, str]:
 
 
 JAX_SOLVE_KINDS = ("sequential", "scan")
+JAX_DTYPES = ("float64", "float32")
 
 
 def _jax_banded_solve(
@@ -1478,6 +1479,8 @@ def _integrate_jc_banded_jax_batch(
     initial_q_previous: np.ndarray,
     initial_q_current: np.ndarray,
     solve_kind: str,
+    dtype: str,
+    chunked_scan: bool,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Run the experimental JAX ``vmap``/``lax.scan`` backend."""
     try:
@@ -1495,26 +1498,40 @@ def _integrate_jc_banded_jax_batch(
         raise ValueError(
             f"solve_kind must be one of {JAX_SOLVE_KINDS}, got {solve_kind!r}"
         )
+    if dtype not in JAX_DTYPES:
+        raise ValueError(f"dtype must be one of {JAX_DTYPES}, got {dtype!r}")
+    work_dtype = jnp.float64 if dtype == "float64" else jnp.float32
+    numpy_dtype = np.float64 if dtype == "float64" else np.float32
     diagonal, lower1, lower2, lower3, lower4, lower5, upper1, upper2, upper3, upper4, upper5 = factor_arrays
-    lower = tuple(jnp.asarray(value) for value in (lower1, lower2, lower3, lower4, lower5))
-    upper = tuple(jnp.asarray(value) for value in (upper1, upper2, upper3, upper4, upper5))
-    diagonal_jax = jnp.asarray(diagonal)
+    lower = tuple(
+        jnp.asarray(value, dtype=work_dtype)
+        for value in (lower1, lower2, lower3, lower4, lower5)
+    )
+    upper = tuple(
+        jnp.asarray(value, dtype=work_dtype)
+        for value in (upper1, upper2, upper3, upper4, upper5)
+    )
+    diagonal_jax = jnp.asarray(diagonal, dtype=work_dtype)
     selected_bandwidth = int(device.selected_bandwidth)
-    sparse_c = BCOO.from_scipy_sparse(device.C.tocoo())
-    sparse_g = BCOO.from_scipy_sparse(device.G.tocoo())
-    sparse_k = BCOO.from_scipy_sparse(device.K.tocoo())
-    sparse_b = BCOO.from_scipy_sparse(device.Bphi.tocoo())
-    ic = jnp.asarray(device.Ic)
+    sparse_c = BCOO.from_scipy_sparse(device.C.tocoo()).astype(work_dtype)
+    sparse_g = BCOO.from_scipy_sparse(device.G.tocoo()).astype(work_dtype)
+    sparse_k = BCOO.from_scipy_sparse(device.K.tocoo()).astype(work_dtype)
+    sparse_b = BCOO.from_scipy_sparse(device.Bphi.tocoo()).astype(work_dtype)
+    ic = jnp.asarray(device.Ic, dtype=work_dtype)
     n = device.n_nodes
     batch_size = pump_currents_a.size
     if initial_q_previous.shape[1] != n:
-        initial_q_previous = np.zeros((batch_size, n), dtype=np.float64)
+        initial_q_previous = np.zeros((batch_size, n), dtype=numpy_dtype)
     if initial_q_current.shape[1] != n:
-        initial_q_current = np.zeros((batch_size, n), dtype=np.float64)
-    inv_dt_sq = 1.0 / (dt_s * dt_s)
-    inv_two_dt = 1.0 / (2.0 * dt_s)
-    pump_omega = 2.0 * math.pi * pump_hz
-    signal_omega = 2.0 * math.pi * signal_hz
+        initial_q_current = np.zeros((batch_size, n), dtype=numpy_dtype)
+    phi0 = jnp.asarray(PHI0_REDUCED, dtype=work_dtype)
+    dt_value = jnp.asarray(dt_s, dtype=work_dtype)
+    inv_dt_sq = jnp.asarray(1.0 / (dt_s * dt_s), dtype=work_dtype)
+    inv_two_dt = jnp.asarray(1.0 / (2.0 * dt_s), dtype=work_dtype)
+    pump_omega = jnp.asarray(2.0 * math.pi * pump_hz, dtype=work_dtype)
+    signal_omega = jnp.asarray(2.0 * math.pi * signal_hz, dtype=work_dtype)
+    signal_current_value = jnp.asarray(signal_current_a, dtype=work_dtype)
+    phi_dc_value = jnp.asarray(phi_dc_rad, dtype=work_dtype)
 
     def solve_factor(rhs: Any) -> Any:
         return _jax_banded_solve(
@@ -1533,14 +1550,14 @@ def _integrate_jc_banded_jax_batch(
     ) -> tuple[Any, Any, Any, Any]:
         def step(carry: tuple[Any, Any], step_index: Any) -> tuple[tuple[Any, Any], tuple[Any, Any]]:
             q_previous, q_current = carry
-            t = step_index * dt_s
-            phase = (sparse_b.T @ q_current) / PHI0_REDUCED
-            sin_phase = jnp.sin(phase + phi_dc_rad)
-            source = jnp.zeros(n, dtype=jnp.float64)
+            t = step_index.astype(work_dtype) * dt_value
+            phase = (sparse_b.T @ q_current) / phi0
+            sin_phase = jnp.sin(phase + phi_dc_value)
+            source = jnp.zeros(n, dtype=work_dtype)
             source = source.at[device.pump_node].set(
                 pump_current * jnp.cos(pump_omega * t)
             )
-            signal = signal_current_a * jnp.cos(signal_omega * t)
+            signal = signal_current_value * jnp.cos(signal_omega * t)
             if device.signal_node == device.pump_node:
                 source = source.at[device.pump_node].add(signal)
             else:
@@ -1551,21 +1568,89 @@ def _integrate_jc_banded_jax_batch(
             rhs = rhs + sparse_c @ (2.0 * q_current - q_previous) * inv_dt_sq
             rhs = rhs + sparse_g @ q_previous * inv_two_dt
             q_next = solve_factor(rhs)
-            derivative = (q_next - q_previous) / (2.0 * dt_s)
+            derivative = (q_next - q_previous) / (2.0 * dt_value)
             return (q_current, q_next), (
                 derivative[device.output_node],
                 jnp.max(jnp.abs(sin_phase)),
             )
 
-        steps = jnp.arange(1, n_steps + 1, dtype=jnp.float64)
-        (_, q_final), outputs = jax.lax.scan(
-            step, (q_previous_initial, q_current_initial), steps,
+        if not chunked_scan:
+            steps = jnp.arange(1, n_steps + 1, dtype=jnp.int32)
+            (_, q_final), outputs = jax.lax.scan(
+                step, (q_previous_initial, q_current_initial), steps,
+            )
+            voltage_all, branch_all = outputs
+            selected = jnp.arange(
+                record_stride - 1, n_steps, record_stride, dtype=jnp.int32,
+            )
+            times = jnp.concatenate((
+                jnp.zeros(1, dtype=work_dtype),
+                selected.astype(work_dtype) * dt_value,
+            ))
+            voltage = jnp.concatenate((
+                jnp.zeros(1, dtype=work_dtype), voltage_all[selected],
+            ))
+            branch_r = jnp.concatenate((
+                jnp.zeros(1, dtype=work_dtype), branch_all[selected],
+            ))
+            return times, voltage, branch_r, q_final
+
+        full_chunks, remainder = divmod(n_steps, record_stride)
+
+        def record_chunk(
+            carry: tuple[Any, Any], chunk_index: Any,
+        ) -> tuple[tuple[Any, Any], tuple[Any, Any]]:
+            q_previous, q_current = carry
+            first_step = chunk_index * record_stride + 1
+            zero = jnp.asarray(0.0, dtype=work_dtype)
+
+            def advance(
+                local_index: Any, chunk_carry: tuple[Any, Any, Any, Any],
+            ) -> tuple[Any, Any, Any, Any]:
+                q_previous_inner, q_current_inner, _, _ = chunk_carry
+                next_carry, output = step(
+                    (q_previous_inner, q_current_inner),
+                    first_step + local_index,
+                )
+                return (*next_carry, output[0], output[1])
+
+            q_previous, q_current, voltage, branch = jax.lax.fori_loop(
+                0,
+                record_stride,
+                advance,
+                (q_previous, q_current, zero, zero),
+            )
+            return (q_previous, q_current), (voltage, branch)
+
+        chunk_indices = jnp.arange(full_chunks, dtype=jnp.int32)
+        (q_previous, q_current), outputs = jax.lax.scan(
+            record_chunk,
+            (q_previous_initial, q_current_initial),
+            chunk_indices,
         )
-        voltage_all, branch_all = outputs
-        selected = jnp.arange(record_stride - 1, n_steps, record_stride)
-        times = jnp.concatenate((jnp.zeros(1), selected * dt_s))
-        voltage = jnp.concatenate((jnp.zeros(1), voltage_all[selected]))
-        branch_r = jnp.concatenate((jnp.zeros(1), branch_all[selected]))
+        voltage, branch_r = outputs
+
+        def advance_remainder(local_index: Any, carry: tuple[Any, Any]) -> tuple[Any, Any]:
+            return step(
+                carry,
+                full_chunks * record_stride + local_index + 1,
+            )[0]
+
+        q_previous, q_final = jax.lax.fori_loop(
+            0, remainder, advance_remainder, (q_previous, q_current),
+        )
+        del q_previous
+        sample_indices = jnp.arange(1, full_chunks + 1, dtype=work_dtype)
+        times = jnp.concatenate((
+            jnp.zeros(1, dtype=work_dtype),
+            (sample_indices * record_stride - 1.0) * dt_value,
+        ))
+        voltage = jnp.concatenate((
+            jnp.zeros(1, dtype=work_dtype), voltage,
+        ))
+        branch_r = jnp.concatenate((
+            jnp.zeros(1, dtype=work_dtype), branch_r,
+        ))
         return times, voltage, branch_r, q_final
 
     def run_all(
@@ -1578,9 +1663,9 @@ def _integrate_jc_banded_jax_batch(
     compiled = jax.jit(run_all, device=target)
     with jax.default_device(target):
         result = compiled(
-            jnp.asarray(pump_currents_a),
-            jnp.asarray(initial_q_previous),
-            jnp.asarray(initial_q_current),
+            jnp.asarray(pump_currents_a, dtype=work_dtype),
+            jnp.asarray(initial_q_previous, dtype=work_dtype),
+            jnp.asarray(initial_q_current, dtype=work_dtype),
         )
     result = jax.tree_util.tree_map(lambda value: value.block_until_ready(), result)
     return tuple(np.asarray(value) for value in result)  # type: ignore[return-value]
@@ -1603,6 +1688,8 @@ def integrate_jc_banded_batch(
     backend: str = "numba",
     jax_device: str = "auto",
     solve_kind: str = "sequential",
+    dtype: str = "float64",
+    chunked_scan: bool = True,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, float, np.ndarray]:
     """Integrate independent pump drives with one shared banded factor.
 
@@ -1612,6 +1699,10 @@ def integrate_jc_banded_batch(
     experimental ``vmap``/``lax.scan`` backend for machines with an accelerator.
     The JAX solve is sequential by default; ``solve_kind='scan'`` replaces its
     per-row triangular chains with associative recurrence scans.
+    ``dtype`` selects the JAX arithmetic precision.  The numba backend remains
+    float64-only and rejects any other dtype explicitly.
+    ``chunked_scan`` keeps only recorded samples in the JAX scan output.  The
+    materialized path is retained as an internal equivalence oracle.
 
     ``jax_device`` selects where the ``jax`` backend runs: ``auto`` prefers an
     accelerator and falls back to the CPU, ``gpu`` refuses to run without one,
@@ -1628,6 +1719,10 @@ def integrate_jc_banded_batch(
         raise ValueError(
             f"solve_kind must be one of {JAX_SOLVE_KINDS}, got {solve_kind!r}"
         )
+    if dtype not in JAX_DTYPES:
+        raise ValueError(f"dtype must be one of {JAX_DTYPES}, got {dtype!r}")
+    if backend == "numba" and dtype != "float64":
+        raise ValueError("the numba backend is float64-only")
     if jax_device not in JAX_DEVICE_PREFERENCES:
         raise ValueError(f"jax_device must be one of {JAX_DEVICE_PREFERENCES}")
     if dt_s <= 0.0 or n_steps < 0 or record_stride <= 0:
@@ -1677,6 +1772,8 @@ def integrate_jc_banded_batch(
             initial_q_previous=previous,
             initial_q_current=current,
             solve_kind=solve_kind,
+            dtype=dtype,
+            chunked_scan=chunked_scan,
         )
     else:
         result = _integrate_jc_banded_numba_batch(
