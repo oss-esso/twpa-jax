@@ -162,6 +162,34 @@ governing scale may be the fastest mode measured against the **pump** frequency
 rather than against the plasma frequency. Resolving this would replace a
 per-device measurement with a predictive rule. Until then, measure.
 
+## Canonical IPM coupler-count designs
+
+- The canonical presentation sources are `designs/ipm_2c.yaml`,
+  `designs/ipm_3c.yaml`, `designs/ipm_7c.yaml`, and `designs/ipm_20c.yaml`.
+- `ipm_2c.yaml` is the renamed line-scoped 2c source. All four use the same
+  IPM-line topology family and none sets `coupler_freq_hz` locally, so every
+  coupler resolves the technology preset's value (`ipm_default` is 8 GHz).
+  Only the historical `ipm_2c_coupler_edit.yaml` still pins 10 GHz.
+- Couplers name the two lines they join by endpoint port number (`port in
+  signal`, `port in pump`, `port out signal`, `port out pump`).
+- For coupler-count comparisons and presentation runs, use only these four
+  canonical files. Do not substitute `*_coupler_edit.yaml`,
+  `*_no_coupler.yaml`, or unrelated legacy examples.
+- Build and map artifacts belong below `outputs/`. For batched workflows,
+  pass multiple design paths and one output root; each design receives a
+  subdirectory named after its design directory or YAML stem.
+- Repeated IPM sections use the declarative `repeat` group: `ipm_7c` and
+  `ipm_20c` do. `ipm_2c` and `ipm_3c` write their sections out flat, because a
+  `repeat` of count 1 or 2 costs more lines than it saves. Omitted `rows`,
+  `cells`, `between`, and trailing inter-coupler fields resolve from the
+  selected technology preset.
+- `input_ports` and `output_ports` carry their own launch CPW from the preset.
+  Do not add a separate `cpw` block beside a port block; that emits two CPWs
+  in series.
+- Dielectric loss and fabrication scatter are technology-backed design
+  parameters. Global values belong under `parameters`; IPM/JTL blocks may also
+  set local scatter fields and `tan_delta` for their shunt capacitors.
+
 ## graphify
 
 This project has a knowledge graph at graphify-out/ with god nodes, community structure, and cross-file relationships.

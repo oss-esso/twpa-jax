@@ -130,6 +130,30 @@ occurrence containing only `type` and `name` is a reference.  References add
 ordering constraints but do not emit duplicate elements.  The compiler orders
 all lines together, so both CPWs above are assembled before `coupler_1`.
 
+A shared coupler names the two lines it joins by their endpoint port numbers.
+Write them the spaced way, which is what the checked-in designs use:
+
+```yaml
+      - type: directional_coupler
+        name: coupler_1
+        port in signal: 1
+        port in pump: 3
+        port out signal: 2
+        port out pump: 4
+```
+
+The underscored spellings (`port_in_signal` and so on) are accepted as
+equivalents, and `cursors: [signal, pump]` names the lines directly instead of
+resolving them from ports.  Prefer the port form in checked-in designs: it
+states the physical wiring a reader is looking for.
+
+`input_ports` and `output_ports` carry their own launch CPW.  Its length comes
+from the technology preset keys `<cursor>_input_cpw_cells` and
+`<cursor>_output_cpw_cells`, and a local `cpw_cells` field overrides them.  A
+length of zero emits no transmission line at all, so a line that needs no
+launch section declares nothing.  Do not add a separate `cpw` block next to a
+port block for this purpose — that produces two CPWs in series.
+
 `cpw` uses the existing `transmission_line` builder and inherits `Ll` and `Cl`.
 `jtl` expands `rows` copies of the existing `jj_line` builder, each containing
 `jj_number` cells.  `jj_number` and `jj number` are equivalent YAML spellings.
@@ -330,7 +354,7 @@ operations:
 4. `ipm_tail` stops after the final JTL row. It does not add a long signal CPW,
    a pump CPW section, or a coupler.
 
-For `ipm_2c_line_scoped`, the resulting paths are:
+For `ipm_2c`, the resulting paths are:
 
 ```text
 Signal:
@@ -437,13 +461,12 @@ Block names must be unique **within one topology list**, and a `repeat` body
 is its own list. Reusing `jj` across the three occurrences above is therefore
 correct, not a duplicate-name error.
 
-**Composite blocks cannot appear inside a `repeat`.** Composite expansion runs
-over the top-level topology only, so `input_ports`, `output_ports`,
-`ipm_line`, `ipm_tail`, `ipm_row`, and `jtl` reach the emitter unexpanded and
-raise `unknown block type`. What a `repeat` body may contain is the primitive
-set: `jj_line`, `transmission_line`, `rf_squid_line`, `directional_coupler`,
-`coupler`, `port`, `signal_port`, `pump_port`, `resistor`, `capacitor`,
-`inductor`, `raw_element`, and `set`/`remove` actions.
+Composite blocks may appear inside a `repeat`; they are expanded after the
+repeat count is resolved. This includes `ipm_line`, `ipm_tail`, `ipm_row`, and
+`jtl`, so repeated IPM sections do not require one YAML block per section.
+Line-scoped designs use the same form inside a line's `blocks` list. Each
+occurrence receives a stable name such as `period[2].line` and can be shared
+by the signal and pump line definitions.
 
 **Nesting is limited to two levels.** A `repeat` may contain a `repeat`; a
 third level raises `repeat nesting deeper than 2 is unsupported`.
@@ -593,7 +616,7 @@ Inheritance is one-level-per-file and deterministic:
 
 ```yaml
 # ipm_2c_linear.yaml
-extends: ipm_2c_line_scoped.yaml
+extends: ipm_2c.yaml
 name: ipm_2c_linear
 
 profiles:
@@ -614,7 +637,7 @@ Compile a YAML design into a generated circuit directory:
 
 ```powershell
 python -m twpa_solver.design `
-  --design designs/ipm_2c_line_scoped.yaml `
+  --design designs/ipm_2c.yaml `
   --outdir outputs/ipm_2c_compiled `
   --write-matrices `
   --strict
@@ -650,9 +673,11 @@ The most useful checked-in examples are:
 
 | File | Use |
 | --- | --- |
-| `designs/ipm_2c_line_scoped.yaml` | Compact two-coupler IPM source. |
-| `designs/ipm_3c.yaml` | Compact three-coupler IPM source. |
-| `designs/ipm_7c_ideal_node205.yaml` | Seven-coupler IPM example with a local node-205 capacitor. |
+| `designs/ipm_2c.yaml` | Compact two-coupler IPM source. |
+| `designs/ipm_3c.yaml` | Three-coupler IPM source using a repeated section group. |
+| `designs/ipm_7c.yaml` | Seven-coupler IPM source using a repeated section group. |
+| `designs/ipm_20c.yaml` | Twenty-coupler IPM source using a repeated section group. |
+| `designs/ipm_7c_ideal_node205.yaml` | Historical seven-coupler example with a local node-205 capacitor. |
 | `designs/ipm_2c_linear.yaml` | IPM 2c with a YAML linear profile. |
 | `designs/rf_squid_2393_3wm.yaml` | RF-SQUID 3WM validation design. |
 | `designs/generic_blocks_showcase.yaml` | Line-scoped generic builder showcase. |

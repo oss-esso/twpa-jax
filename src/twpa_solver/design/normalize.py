@@ -41,6 +41,54 @@ def _line_cursor(item: Mapping[str, Any], path: str) -> str:
     )
 
 
+def _expand_line_repeats(
+    blocks: list[Mapping[str, Any]], path: str
+) -> list[Mapping[str, Any]]:
+    """Expand one repeat group before shared line blocks are collected."""
+
+    expanded: list[Mapping[str, Any]] = []
+    for index, block in enumerate(blocks):
+        item_path = f"{path}[{index}]"
+        if "repeat" not in block:
+            expanded.append(block)
+            continue
+        repeat = block["repeat"]
+        if not isinstance(repeat, Mapping):
+            raise DesignSchemaError(f"{item_path}.repeat: expected a mapping")
+        count = repeat.get("count")
+        if not isinstance(count, int) or isinstance(count, bool) or count < 0:
+            raise DesignSchemaError(
+                f"{item_path}.repeat.count: expected non-negative integer"
+            )
+        nested = repeat.get("topology")
+        if not isinstance(nested, list) or not nested:
+            raise DesignSchemaError(
+                f"{item_path}.repeat.topology: expected a non-empty sequence"
+            )
+        repeat_name = str(repeat.get("name", "repeat"))
+        for occurrence in range(count):
+            for nested_index, nested_block in enumerate(nested):
+                if not isinstance(nested_block, Mapping):
+                    raise DesignSchemaError(
+                        f"{item_path}.repeat.topology[{nested_index}]: expected a mapping"
+                    )
+                if "repeat" in nested_block:
+                    raise DesignSchemaError(
+                        f"{item_path}.repeat.topology[{nested_index}]: nested repeats "
+                        "are not supported in line-scoped blocks"
+                    )
+                name = nested_block.get("name")
+                if not isinstance(name, str) or not name:
+                    raise DesignSchemaError(
+                        f"{item_path}.repeat.topology[{nested_index}].name: required"
+                    )
+                expanded.append({
+                    **nested_block,
+                    "name": f"{repeat_name}[{occurrence}].{name}",
+                })
+    return expanded
+
+
 def _line(item: Mapping[str, Any], path: str) -> _Line:
     allowed = {"line", "port_in", "port_out", "port in", "port out", "blocks"}
     unknown = set(item) - allowed
@@ -53,11 +101,12 @@ def _line(item: Mapping[str, Any], path: str) -> _Line:
         raise DesignSchemaError(f"{path}.port_in: expected an integer")
     if not isinstance(port_out, int) or isinstance(port_out, bool):
         raise DesignSchemaError(f"{path}.port_out: expected an integer")
-    blocks = item.get("blocks")
-    if not isinstance(blocks, list) or not blocks:
+    raw_blocks = item.get("blocks")
+    if not isinstance(raw_blocks, list) or not raw_blocks:
         raise DesignSchemaError(f"{path}.blocks: expected a non-empty sequence")
-    if any(not isinstance(block, Mapping) for block in blocks):
+    if any(not isinstance(block, Mapping) for block in raw_blocks):
         raise DesignSchemaError(f"{path}.blocks: every block must be a mapping")
+    blocks = _expand_line_repeats(raw_blocks, f"{path}.blocks")
     return _Line(cursor, port_in, port_out, blocks)
 
 
@@ -127,7 +176,8 @@ def _normalize_block(
     if kind == "jtl":
         allowed = {
             "type", "name", "rows", "jj_number", "jj number", "cells",
-            "Lj", "Cj", "Cg",
+            "Lj", "Cj", "Cg", "lj_scatter_sigma", "cj_scatter_sigma",
+            "cg_scatter_sigma", "cj_scatter_mode", "scatter_seed", "tan_delta",
         }
         unknown = set(block) - allowed
         if unknown:
@@ -165,7 +215,7 @@ def _normalize_block(
         })
         return result
     if kind in {"input_ports", "output_ports"}:
-        allowed = {"type", "name", "resistance"}
+        allowed = {"type", "name", "resistance", "cpw_cells"}
         unknown = set(block) - allowed
         if unknown:
             raise DesignSchemaError(f"{path}: unknown port fields {sorted(unknown)}")
@@ -274,12 +324,10 @@ def _normalize_lines(items: list[Any]) -> list[dict[str, Any]]:
                 next_index += 1
             kind = _canonical_kind(block.get("type"))
             minimal = set(block) <= {"type", "name"}
-            is_reference = (
-                minimal
-                and (
-                    kind in {"directional_coupler", "ipm_line", "ipm_tail", "jtl"}
-                    or (kind == "output_ports" and name in definitions)
-                )
+            is_reference = minimal and (
+                kind == "directional_coupler"
+                or (kind in {"ipm_line", "ipm_tail", "jtl"} and name in definitions)
+                or (kind == "output_ports" and name in definitions)
             )
             prior = definitions.get(name)
             if prior is not None:

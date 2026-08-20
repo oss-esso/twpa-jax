@@ -408,7 +408,7 @@ newly generated source directory before relying on it as a variant base.
 <a id="two-2c-builds"></a>
 ## The current 2c build, and the retired one
 
-A 2c design built today — from `designs/ipm_2c_line_scoped.yaml` through the
+A 2c design built today — from `designs/ipm_2c.yaml` through the
 declarative compiler, or from `IPMParams()` through `ipm.py` — has:
 
 | quantity | value |

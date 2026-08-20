@@ -1,14 +1,17 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 from pathlib import Path
+import zlib
+
+import numpy as np
 
 from twpa_solver.builders.blocks import BlockRecord
 from twpa_solver.builders.ipm import Element, IPMParams
 from twpa_solver.builders.profiles import Selection, Segment, parse_profile_shorthand
-from twpa_solver.builders.scatter import ScatterSpec
+from twpa_solver.builders.scatter import ScatterSpec, component_rng, draw_factors
 from twpa_solver.circuit import Circuit
 from twpa_solver.circuit.technology import Technology, load_technology
 from twpa_solver.circuit.elements import ElementRef
@@ -63,6 +66,28 @@ def _config_for_block(cfg: dict[str, Any]) -> dict[str, Any]:
     """Preserve block declarations for the public builder resolver."""
 
     return dict(cfg)
+
+
+def _expand_composite_topology(
+    items: list[Any], params: Mapping[str, Any]
+) -> list[tuple[dict[str, Any], str]]:
+    """Expand repeats and composite blocks while retaining hierarchical paths."""
+
+    result: list[tuple[dict[str, Any], str]] = []
+    for cfg, generated_path in _expanded(items):
+        source_name = str(cfg.get("name", cfg.get("type", "block")))
+        prefix = (
+            generated_path[:-len(source_name)]
+            if generated_path.endswith(source_name) else ""
+        )
+        for primitive in _expand_composites([cfg], params):
+            primitive = dict(primitive)
+            primitive_name = str(
+                primitive.get("name", primitive.get("type", "block"))
+            )
+            primitive_path = f"{prefix}{primitive_name}" if prefix else primitive_name
+            result.append((primitive, primitive_path))
+    return result
 
 
 def _technology(spec: Mapping[str, Any]) -> dict[str, Any]:
@@ -173,28 +198,44 @@ def _profile_segments(spec: Mapping[str, Any], parameter: str) -> list[Segment]:
     return segments
 
 
-def _design_plan(spec: Mapping[str, Any], parameters: dict[str, Any]) -> Any:
+def _design_plan(
+    spec: Mapping[str, Any], parameters: dict[str, Any],
+    topology: list[dict[str, Any]],
+) -> Any:
+    scatter_keys = {"lj_scatter_sigma", "cj_scatter_sigma", "cg_scatter_sigma"}
+    has_scatter = any(float(parameters.get(key, 0.0)) != 0.0 for key in scatter_keys)
     if not spec.get("profiles") and not any(
         isinstance(value, Mapping) and "profile" in value
         for value in parameters.values()
-    ):
+    ) and not has_scatter:
         return None
     plan_parameters = dict(parameters)
-    if "jtl_row_count" not in plan_parameters:
-        plan_parameters["jtl_row_count"] = sum(
-            int(item.get("rows", item.get("arrays", 1))) if isinstance(item, Mapping)
-            and item.get("type") in {"ipm_line", "ipm_tail"} else 1
-            for item in spec.get("topology", [])
-            if isinstance(item, Mapping)
-            and item.get("type") in {"ipm_line", "ipm_tail", "ipm_row", "jj_line"}
-        )
+    plan_parameters["jtl_row_count"] = sum(
+        int(item.get("rows", item.get("arrays", 1))) if isinstance(item, Mapping)
+        and item.get("type") in {"ipm_line", "ipm_tail", "jtl", "jj_line"} else 1
+        for item in topology
+        if isinstance(item, Mapping)
+        and item.get("type") in {"ipm_line", "ipm_tail", "ipm_row", "jtl", "jj_line"}
+    )
     params = IPMParams(**{key: value for key, value in plan_parameters.items()
                           if key in IPMParams.__dataclass_fields__})
     from twpa_solver.builders.ipm import build_component_plan
+    from twpa_solver.builders.scatter import ScatterSpec
+    cj_mode = str(parameters.get("cj_scatter_mode", "independent"))
+    distribution = str(parameters.get("scatter_distribution", "normal"))
+    clip_min = float(parameters.get("scatter_clip_min", 0.5))
+    clip_max = float(parameters.get("scatter_clip_max", 1.5))
     return build_component_plan(
         params,
         lj_segments=_profile_segments(spec, "Lj"),
         cg_segments=_profile_segments(spec, "Cg"),
+        lj_scatter=ScatterSpec(float(parameters.get("lj_scatter_sigma", 0.0)),
+                               distribution, clip_min, clip_max),
+        cj_scatter=ScatterSpec(float(parameters.get("cj_scatter_sigma", 0.0)),
+                               distribution, clip_min, clip_max, cj_mode),
+        cg_scatter=ScatterSpec(float(parameters.get("cg_scatter_sigma", 0.0)),
+                               distribution, clip_min, clip_max),
+        seed=int(parameters.get("scatter_seed", 1)),
     )
 
 
@@ -227,6 +268,18 @@ def _expand_composites(items: list[Any], params: Mapping[str, Any]) -> list[Any]
                         "value": resistance,
                     },
                 ])
+                cells = int(item.get(
+                    "cpw_cells", params.get(f"{cursor}_input_cpw_cells", 0)
+                ))
+                if cells > 0:
+                    expanded.append({
+                        "type": "transmission_line",
+                        "name": f"{name}.cpw",
+                        "cursor": cursor,
+                        "cells": cells,
+                        "L": params.get("Ll", 0.0),
+                        "C": params.get("Cl", 0.0),
+                    })
                 continue
             expanded.extend([
                 {"type": "port", "name": "input_signal", "cursor": "signal", "port": 1},
@@ -253,6 +306,18 @@ def _expand_composites(items: list[Any], params: Mapping[str, Any]) -> list[Any]
                     params.get("Rright" if cursor == "signal" else "Rm", 50.0),
                 )
                 name = str(item["name"])
+                cells = int(item.get(
+                    "cpw_cells", params.get(f"{cursor}_output_cpw_cells", 0)
+                ))
+                if cells > 0:
+                    expanded.append({
+                        "type": "transmission_line",
+                        "name": f"{name}.cpw",
+                        "cursor": cursor,
+                        "cells": cells,
+                        "L": params.get("Ll", 0.0),
+                        "C": params.get("Cl", 0.0),
+                    })
                 expanded.extend([
                     {
                         "type": "resistor",
@@ -315,28 +380,37 @@ def _expand_composites(items: list[Any], params: Mapping[str, Any]) -> list[Any]
                     "Cj": item.get("Cj", params.get("Cj")),
                     "Cg": item.get("Cg", params.get("Cg")),
                 }
+                row.update({key: item[key] for key in (
+                    "lj_scatter_sigma", "cj_scatter_sigma", "cg_scatter_sigma",
+                    "cj_scatter_mode", "scatter_seed", "tan_delta",
+                ) if key in item})
                 if index == 0 and item.get("join_cursors"):
                     row["join_cursors"] = item["join_cursors"]
                 expanded.append(row)
             continue
-        if kind in {"ipm_line", "ipm_tail"} and ("rows" in item or kind == "ipm_tail"):
-            count = int(item.get("rows", 0))
+        if kind in {"ipm_line", "ipm_tail"} and (
+            "rows" in item or kind == "ipm_tail"
+            or (kind == "ipm_line" and "arrays" not in item)
+        ):
+            count = int(item.get("rows", params.get("jtl_rows_per_coupler", 3)))
             if count < 1:
                 raise DesignSchemaError(f"{item.get('name', kind)}.rows must be positive")
             name = str(item["name"])
             cursor = item.get("cursor", "signal")
             for index in range(count):
-                expanded.append({"type": "jj_line",
-                                 "name": f"{name}.row[{index}].array[0]",
-                                 "cursor": cursor,
-                                 "cells": item.get(
-                                     "cells", params.get(
-                                         "jtl_cells_per_array", params.get("array_length", 0)
-                                     )
-                                 ),
-                                 "Lj": item.get("Lj", params.get("Lj")),
-                                 "Cj": item.get("Cj", params.get("Cj")),
-                                 "Cg": item.get("Cg", params.get("Cg"))})
+                row = {"type": "jj_line",
+                       "name": f"{name}.row[{index}].array[0]",
+                       "cursor": cursor,
+                       "cells": item.get("cells", params.get(
+                           "jtl_cells_per_array", params.get("array_length", 0))),
+                       "Lj": item.get("Lj", params.get("Lj")),
+                       "Cj": item.get("Cj", params.get("Cj")),
+                       "Cg": item.get("Cg", params.get("Cg"))}
+                row.update({key: item[key] for key in (
+                    "lj_scatter_sigma", "cj_scatter_sigma", "cg_scatter_sigma",
+                    "cj_scatter_mode", "scatter_seed", "tan_delta",
+                ) if key in item})
+                expanded.append(row)
                 if index + 1 < count:
                     expanded.append({"type": "transmission_line",
                                      "name": f"{name}.row[{index}].short_tl",
@@ -423,6 +497,7 @@ class _AdapterState:
     cell_index: int = 0
     coupler_geometry: dict[str, Any] | None = None
     coupler_settings: dict[str, Any] | None = None
+    loss_by_role: dict[str, float] = field(default_factory=dict)
 
     def register_node(self, path: str, node: Node) -> None:
         self.named_nodes[path] = node
@@ -596,6 +671,68 @@ def _apply_plan_values(
     end_ref = state.circuit.graph.named_elements.get(f"{line.path}.end.Cg")
     if end_ref is not None:
         state.circuit.set_value(end_ref, float(plan.cg[end - 1]) / 2.0)
+
+
+def _apply_local_component_settings(
+    state: _AdapterState,
+    line: LineHandle,
+    cfg: Mapping[str, Any],
+    path: str,
+    parameters: Mapping[str, Any],
+) -> None:
+    """Apply optional per-line scatter and dielectric loss settings."""
+
+    local_seed = int(cfg.get("scatter_seed", parameters.get("scatter_seed", 1)))
+    block_seed = local_seed ^ zlib.crc32(path.encode("utf-8"))
+    distribution = str(parameters.get("scatter_distribution", "normal"))
+    clip_min = float(parameters.get("scatter_clip_min", 0.5))
+    clip_max = float(parameters.get("scatter_clip_max", 1.5))
+    lj_sigma = float(cfg.get("lj_scatter_sigma", 0.0))
+    cj_sigma = float(cfg.get("cj_scatter_sigma", 0.0))
+    cg_sigma = float(cfg.get("cg_scatter_sigma", 0.0))
+    cj_mode = str(cfg.get("cj_scatter_mode", parameters.get(
+        "cj_scatter_mode", "independent"
+    )))
+    if lj_sigma or cj_sigma or cg_sigma:
+        lj_factors = draw_factors(
+            ScatterSpec(lj_sigma, distribution, clip_min, clip_max),
+            len(line.cells), component_rng(block_seed, "Lj"),
+        )
+        if cj_mode == "plasma_locked":
+            if cj_sigma:
+                raise DesignSchemaError(
+                    f"{path}.cj_scatter_sigma must be zero in plasma_locked mode"
+                )
+            cj_factors = 1.0 / lj_factors
+        else:
+            cj_factors = draw_factors(
+                ScatterSpec(cj_sigma, distribution, clip_min, clip_max),
+                len(line.cells), component_rng(block_seed, "Cj"),
+            )
+        cg_factors = draw_factors(
+            ScatterSpec(cg_sigma, distribution, clip_min, clip_max),
+            len(line.cells), component_rng(block_seed, "Cg"),
+        )
+        for index, cell in enumerate(line.cells):
+            if cell.Lj is not None:
+                state.circuit.set_value(cell.Lj, float(cell.Lj.value) * lj_factors[index])
+            if cell.Cj is not None:
+                state.circuit.set_value(cell.Cj, float(cell.Cj.value) * cj_factors[index])
+            if cell.Cg is not None:
+                state.circuit.set_value(cell.Cg, float(cell.Cg.value) * cg_factors[index])
+
+    if "tan_delta" in cfg:
+        role = f"jtl_cg@{path}"
+        tangent = float(cfg["tan_delta"])
+        if tangent < 0.0:
+            raise DesignSchemaError(f"{path}.tan_delta must be non-negative")
+        state.loss_by_role[role] = tangent
+        for cell in line.cells:
+            if cell.Cg is not None:
+                cell.Cg.role = role
+        end_ref = state.circuit.graph.named_elements.get(f"{line.path}.end.Cg")
+        if end_ref is not None:
+            end_ref.role = role
 
 
 def _add_raw_element(
@@ -843,6 +980,7 @@ def _emit_adapter_block(
             name=path,
         )
         _apply_plan_values(state, line, plan, start_index)
+        _apply_local_component_settings(state, line, cfg, path, parameters)
         state.cell_index += len(line.cells)
         _register_line(state, path, cursor_name, line, kind)
         return
@@ -917,9 +1055,12 @@ def compile_design(spec: Mapping[str, Any], *, coupler_mode: str | None = None,
         base_parameters,
         "parameters",
     )
-    topology = resolve_parameters(_expand_composites(spec["topology"], parameters),
-                                  parameters, "topology",
-                                  base_parameters=base_parameters)
+    resolved_source_topology = resolve_parameters(
+        spec["topology"], parameters, "topology", base_parameters=base_parameters
+    )
+    expanded_topology = _expand_composite_topology(resolved_source_topology, parameters)
+    topology = [cfg for cfg, _ in expanded_topology]
+    design_plan = _design_plan(spec, parameters, topology)
     if strict:
         from twpa_solver.design.parameters import parameter_references
         used = parameter_references(spec["topology"])
@@ -939,12 +1080,20 @@ def compile_design(spec: Mapping[str, Any], *, coupler_mode: str | None = None,
                          "pump_inter_coupler_cpw_cells"},
             "ipm_tail": {"jtl_cells_per_array", "Lj", "Cj", "Cg", "Ll", "Cl",
                          "inter_array_cpw_cells"},
-            "jtl": {"Lj", "Cj", "Cg"},
-            "transmission_line": {"Ll", "Cl"},
+                "jtl": {"Lj", "Cj", "Cg"},
+                "jj_line": {"Lj", "Cj", "Cg"},
+                "ipm_row": {"Lj", "Cj", "Cg"},
+                "transmission_line": {"Ll", "Cl"},
         }
-        for item in spec["topology"]:
+        for item in topology:
             if isinstance(item, Mapping):
                 used.update(implicit_by_block.get(str(item.get("type")), set()))
+        used.update({
+            "tan_delta", "tan_delta_jtl_cg", "tan_delta_coupling_cap",
+            "tan_delta_by_role", "lj_scatter_sigma", "cj_scatter_sigma",
+            "cg_scatter_sigma", "cj_scatter_mode", "scatter_distribution",
+            "scatter_clip_min", "scatter_clip_max", "scatter_seed",
+        })
         unused = sorted(declared_parameters - used)
         if unused:
             raise DesignParameterError(f"parameters: declared but unused {unused}")
@@ -955,7 +1104,7 @@ def compile_design(spec: Mapping[str, Any], *, coupler_mode: str | None = None,
         raise DesignSchemaError(
             "coupler_mode: expected 'auto', 'ideal', or 'optimize'"
         )
-    effective_plan = plan or _design_plan(spec, parameters)
+    effective_plan = plan or design_plan
     technology = spec.get("_technology")
     if technology is not None and not isinstance(technology, Technology):
         raise DesignSchemaError("_technology: invalid loaded technology")
@@ -975,7 +1124,7 @@ def compile_design(spec: Mapping[str, Any], *, coupler_mode: str | None = None,
         state.register_node(f"{cursor}.start", paths[cursor].start)
         state.register_path(cursor)
 
-    for cfg, generated_path in _expanded(topology):
+    for cfg, generated_path in expanded_topology:
         if cfg.get("action") is not None:
             _apply_adapter_action(state, cfg, generated_path)
             continue
@@ -1042,6 +1191,15 @@ def compile_design(spec: Mapping[str, Any], *, coupler_mode: str | None = None,
         "source": spec.get("_source"),
         "coupler_geometry": _coupler_metadata(state),
         "coupler_settings": dict(state.coupler_settings or {}),
+        "loss": {
+            "default": float(parameters.get("tan_delta", 0.0)),
+            "by_role": {
+                "jtl_cg": float(parameters.get("tan_delta_jtl_cg", 0.0)),
+                "coupling_cap": float(parameters.get("tan_delta_coupling_cap", 0.0)),
+                **dict(parameters.get("tan_delta_by_role", {})),
+                **state.loss_by_role,
+            },
+        },
         "profiles": spec.get("profiles", {}),
         "component_plan": (
             effective_plan.metadata if effective_plan is not None else {}
