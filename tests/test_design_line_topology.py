@@ -124,6 +124,51 @@ def test_line_topology_rejects_duplicate_detailed_block() -> None:
         compile_design(spec)
 
 
+def test_line_topology_allows_local_coupler_parameter_overrides() -> None:
+    local = _line_design()
+    local["topology"][0]["blocks"][2].update({
+        "coupling_dB": -16.0,
+        "coupler_freq_hz": 10.0e9,
+        "Z0": 55.0,
+        "cell_length_um": 12.0,
+    })
+    global_values = _line_design()
+    global_values["parameters"].update({
+        "coupling_dB": -16.0,
+        "coupler_freq_hz": 10.0e9,
+        "Z0": 55.0,
+        "cell_length_um": 12.0,
+    })
+
+    local_design = compile_design(local, coupler_mode="ideal")
+    global_design = compile_design(global_values, coupler_mode="ideal")
+
+    assert [element.__dict__ for element in local_design.elements] == [
+        element.__dict__ for element in global_design.elements
+    ]
+
+
+def test_line_topology_allows_commenting_detailed_shared_coupler() -> None:
+    spec = _line_design()
+    # Leave the reference on the pump line to model commenting only the
+    # detailed signal-side declaration.
+    spec["topology"][0]["blocks"].pop(2)
+
+    compiled = compile_design(spec, coupler_mode="ideal")
+
+    assert all(block.type != "directional_coupler" for block in compiled.blocks)
+
+
+def test_line_topology_allows_commenting_both_shared_coupler_occurrences() -> None:
+    spec = _line_design()
+    spec["topology"][0]["blocks"].pop(2)
+    spec["topology"][1]["blocks"].pop(2)
+
+    compiled = compile_design(spec, coupler_mode="ideal")
+
+    assert all(block.type != "directional_coupler" for block in compiled.blocks)
+
+
 def test_parameter_expression_rejects_calls_and_cycles() -> None:
     call_spec = _line_design()
     call_spec["parameters"]["Lj"] = "abs($Lj$)"

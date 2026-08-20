@@ -1,0 +1,70 @@
+schema_version: 1
+name: ipm_2c_line_scoped
+parameters:
+  config: ipm_default
+
+topology:
+  - line: 1
+    port in: 1
+    port out: 2
+    blocks:
+      - type: input_ports
+        name: input_signal
+
+      #- type: directional_coupler
+      #  name: coupler_in
+      #  port in signal: 1
+      #  port in pump: 3
+      #  port out signal: 2
+      #  port out pump: 4
+
+      - type: ipm_line
+        name: line_1
+        rows: 3
+        cells: ${jtl_cells_per_array}
+        between: ${inter_array_cpw_cells}
+        trailing_signal_cpw_cells: ${signal_inter_coupler_cpw_cells}
+        trailing_pump_cpw_cells: ${pump_inter_coupler_cpw_cells}
+
+      #- type: directional_coupler
+      #  name: coupler_1
+      #  port in signal: 1
+      #  port in pump: 3
+      #  port out signal: 2
+      #  port out pump: 4
+
+      - type: ipm_tail
+        name: line_2
+        rows: 3
+        cells: ${jtl_cells_per_array}
+        between: ${inter_array_cpw_cells}
+        final_array: true
+
+      - type: cpw
+        name: output_signal_tl
+        cells: ${signal_output_cpw_cells}
+
+      - type: output_ports
+        name: output_signal
+
+  - line: 2
+    port in: 3
+    port out: 4
+    blocks:
+      - type: input_ports
+        name: input_pump
+
+      #- type: directional_coupler
+      #  name: coupler_in
+
+      - type: ipm_line
+        name: line_1
+
+      #- type: directional_coupler
+      #  name: coupler_1
+
+      - type: ipm_tail
+        name: line_2
+
+      - type: output_ports
+        name: output_pump

@@ -284,8 +284,8 @@ An unknown field is rejected, so the optional column is exhaustive.
 | --- | --- | --- | --- |
 | `input_ports` | `name` | `cursor`, `port`, `resistance` | Standard signal and pump input ports, terminations, and input lines. |
 | `output_ports` | `name` | `cursor`, `port`, `resistance` | Standard signal and pump output ports, terminations, and output lines. |
-| `directional_coupler` | `name` | `cursors` | Coupler between the signal and pump cursors. |
-| `coupler` | `name`, `cursors` | none | Explicit-cursor form of the same block. |
+| `directional_coupler` | `name` | `cursors`, `coupling_dB`, `coupler_freq_hz`, `Z0`, `cell_length_um` | Coupler between the signal and pump cursors. Electrical fields override the design and technology defaults for this coupler only. |
+| `coupler` | `name`, `cursors` | `coupling_dB`, `coupler_freq_hz`, `Z0`, `cell_length_um` | Explicit-cursor form of the same block. |
 | `ipm_line` | `name`, one of `rows`/`arrays` | `cursor`, `cells`, `Lj`, `Cj`, `Cg`, `between`, `trailing_signal_cpw_cells`, `trailing_pump_cpw_cells`, `end_coupler` | Nonlinear rows followed by the signal and pump routing to the next coupler. |
 | `ipm_tail` | `name`, `rows` | `cursor`, `cells`, `Lj`, `Cj`, `Cg`, `between`, `final_array` | Final nonlinear rows without a trailing coupler section. `final_array` may only be `true`. |
 | `ipm_row` | `name`, `cursor`, `cells`, `Lj`, `Cj`, `Cg` | none | One explicit nonlinear row. |

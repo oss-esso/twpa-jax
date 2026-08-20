@@ -72,9 +72,15 @@ _FIELDS = {
     "rf_squid_line": {"type", "name", "cursor", "cells", "Ic", "Lj", "Lm",
                       "Lw", "Lpar", "Cj", "Cg", "Cg_pattern",
                       "Cg_pattern_counts"},
-    "directional_coupler": {"type", "name", "cursors"},
+    "directional_coupler": {
+        "type", "name", "cursors", "coupling_dB", "coupler_freq_hz", "Z0",
+        "cell_length_um",
+    },
     "raw_element": {"type", "name", "nodes", "value", "kind"},
-    "coupler": {"type", "name", "cursors"},
+    "coupler": {
+        "type", "name", "cursors", "coupling_dB", "coupler_freq_hz", "Z0",
+        "cell_length_um",
+    },
     "capacitor": {"type", "name", "nodes", "C"},
     "inductor": {"type", "name", "nodes", "L"},
     "ipm_line": {"type", "name", "cursor", "arrays", "rows", "cells", "Lj", "Cj", "Cg", "between", "end_coupler", "trailing_signal_cpw_cells", "trailing_pump_cpw_cells"},

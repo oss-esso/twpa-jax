@@ -106,11 +106,20 @@ def _coupler_settings(
         resolved = json.loads(resolved_path.read_text(encoding="utf-8"))
         params = dict(resolved.get("parameters", {}))
         if params:
+            coupler_settings = dict(resolved.get("coupler_settings", {}))
             return {
-                "coupling_db": float(params.get("coupling_dB", -14.0)),
-                "frequency_hz": float(params.get("coupler_freq_hz", 8.0e9)),
-                "z0_ohm": float(params.get("Z0", 50.0)),
-                "cell_length_um": float(params.get("cell_length_um", 10.0)),
+                "coupling_db": float(coupler_settings.get(
+                    "coupling_dB", params.get("coupling_dB", -14.0)
+                )),
+                "frequency_hz": float(coupler_settings.get(
+                    "coupler_freq_hz", params.get("coupler_freq_hz", 8.0e9)
+                )),
+                "z0_ohm": float(coupler_settings.get(
+                    "Z0", params.get("Z0", 50.0)
+                )),
+                "cell_length_um": float(coupler_settings.get(
+                    "cell_length_um", params.get("cell_length_um", 10.0)
+                )),
                 "mode": str(resolved.get("coupler_mode", "auto")),
                 "model": str(resolved.get("coupler_geometry", {}).get("model", "auto")),
             }
@@ -212,6 +221,27 @@ def _write_coupler_passive(
     plt.close(fig)
 
 
+def _design_contains_coupler(design_dir: Path) -> bool:
+    """Return whether the resolved design contains a directional coupler."""
+
+    resolved_path = design_dir / "design_resolved.json"
+    if not resolved_path.exists():
+        # Legacy builder output does not carry the declarative block list.
+        return True
+    try:
+        resolved = json.loads(resolved_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return True
+    blocks = resolved.get("blocks")
+    if not isinstance(blocks, list):
+        return True
+    return any(
+        isinstance(block, dict)
+        and block.get("type") in {"coupler", "directional_coupler"}
+        for block in blocks
+    )
+
+
 def _job_directories(
     design_paths: list[Path], design_root: Path,
 ) -> list[tuple[Path, Path]]:
@@ -255,11 +285,12 @@ def _build_one(
         elif argument.startswith("--coupler-mode="):
             forwarded_coupler_mode = argument.split("=", 1)[1]
     _write_passive(design_dir, workflow_args)
-    _write_coupler_passive(
-        design_dir,
-        workflow_args,
-        mode_override=forwarded_coupler_mode,
-    )
+    if _design_contains_coupler(design_dir):
+        _write_coupler_passive(
+            design_dir,
+            workflow_args,
+            mode_override=forwarded_coupler_mode,
+        )
     print(f"wrote design and passive plots to {design_dir}")
 
 

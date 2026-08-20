@@ -422,6 +422,7 @@ class _AdapterState:
     blocks: list[_BlockSpec]
     cell_index: int = 0
     coupler_geometry: dict[str, Any] | None = None
+    coupler_settings: dict[str, Any] | None = None
 
     def register_node(self, path: str, node: Node) -> None:
         self.named_nodes[path] = node
@@ -743,18 +744,34 @@ def _emit_adapter_block(
             raise DesignSchemaError(f"{path}.cursors: expected two cursor names")
         signal = state.paths[cursor_names[0]]
         pump = state.paths[cursor_names[1]]
+        # A block may override the technology/design defaults locally.  The
+        # line-scoped normalizer preserves these fields; references on the
+        # other physical line contain only the shared block name.
+        coupler_parameters = {
+            key: cfg[key]
+            for key in ("coupling_dB", "coupler_freq_hz", "Z0", "cell_length_um")
+            if key in cfg
+        }
+        effective_coupler_parameters = {**parameters, **coupler_parameters}
         before = len(state.circuit.graph.elements)
+        effective_coupler_settings = {
+            "coupling_dB": float(effective_coupler_parameters.get("coupling_dB", -14.0)),
+            "coupler_freq_hz": float(effective_coupler_parameters.get("coupler_freq_hz", 8.0e9)),
+            "Z0": float(effective_coupler_parameters.get("Z0", 50.0)),
+            "cell_length_um": float(effective_coupler_parameters.get("cell_length_um", 10.0)),
+        }
         handle = state.circuit.add_directional_coupler(
             signal,
             pump,
-            coupling_db=float(parameters.get("coupling_dB", -14.0)),
-            frequency=float(parameters.get("coupler_freq_hz", 8.0e9)),
-            z0=float(parameters.get("Z0", 50.0)),
+            coupling_db=effective_coupler_settings["coupling_dB"],
+            frequency=effective_coupler_settings["coupler_freq_hz"],
+            z0=effective_coupler_settings["Z0"],
             mode=coupler_mode,
-            cell_length_um=float(parameters.get("cell_length_um", 10.0)),
+            cell_length_um=effective_coupler_settings["cell_length_um"],
             name=path,
         )
         geometry = handle.geometry
+        state.coupler_settings = effective_coupler_settings
         state.coupler_geometry = {
             "width_um": geometry.width_um,
             "gap_between_lines_um": geometry.gap_between_lines_um,
@@ -913,8 +930,10 @@ def compile_design(spec: Mapping[str, Any], *, coupler_mode: str | None = None,
                              "pump_input_cpw_cells"},
             "output_ports": {"Rright", "Rm", "Ll", "Cl", "signal_output_cpw_cells",
                               "pump_output_cpw_cells"},
-            "directional_coupler": {"coupling_dB", "Z0", "coupler_freq_hz"},
-            "coupler": {"coupling_dB", "Z0", "coupler_freq_hz"},
+            "directional_coupler": {"coupling_dB", "Z0", "coupler_freq_hz",
+                                    "cell_length_um"},
+            "coupler": {"coupling_dB", "Z0", "coupler_freq_hz",
+                         "cell_length_um"},
             "ipm_line": {"jtl_cells_per_array", "Lj", "Cj", "Cg", "Ll", "Cl",
                          "inter_array_cpw_cells", "signal_inter_coupler_cpw_cells",
                          "pump_inter_coupler_cpw_cells"},
@@ -1022,6 +1041,7 @@ def compile_design(spec: Mapping[str, Any], *, coupler_mode: str | None = None,
         "coupler_mode": coupler_choice,
         "source": spec.get("_source"),
         "coupler_geometry": _coupler_metadata(state),
+        "coupler_settings": dict(state.coupler_settings or {}),
         "profiles": spec.get("profiles", {}),
         "component_plan": (
             effective_plan.metadata if effective_plan is not None else {}
