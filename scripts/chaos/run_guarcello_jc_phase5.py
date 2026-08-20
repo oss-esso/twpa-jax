@@ -45,7 +45,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 
 from scripts.h1_transient_branch_transfer import (
     build_system,
-    implicit_trapezoid_ramp_bounded,
     make_observables,
     stroboscopic_diagnostics,
 )
