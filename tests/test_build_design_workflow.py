@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from workflows import build_design_and_passive
@@ -43,3 +44,74 @@ def test_build_workflow_sequences_multiple_yaml_designs(
         ("passive", str(output_root / "design_b"), str(output_root / "design_b")),
         ("coupler", str(output_root / "design_b"), "None"),
     ]
+
+
+def test_build_workflow_skips_isolated_coupler_for_no_coupler_design(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    design = tmp_path / "design.yaml"
+    output_dir = tmp_path / "compiled"
+    events: list[str] = []
+
+    def fake_compile(argv: list[str]) -> None:
+        outdir = Path(argv[argv.index("--outdir") + 1])
+        outdir.mkdir(parents=True, exist_ok=True)
+        (outdir / "design_resolved.json").write_text(
+            json.dumps({"blocks": [{"type": "port"}]}),
+            encoding="utf-8",
+        )
+
+    monkeypatch.setattr(build_design_and_passive, "compile_design_main", fake_compile)
+    monkeypatch.setattr(
+        build_design_and_passive,
+        "_write_passive",
+        lambda _design_dir, _args: events.append("passive"),
+    )
+    monkeypatch.setattr(
+        build_design_and_passive,
+        "_write_coupler_passive",
+        lambda _design_dir, _args, mode_override=None: events.append("coupler"),
+    )
+
+    result = build_design_and_passive.main([
+        "--design", str(design), "--design-dir", str(output_dir),
+    ])
+
+    assert result == 0
+    assert events == ["passive"]
+
+
+def test_coupler_passive_settings_use_effective_block_override(
+    tmp_path: Path,
+) -> None:
+    resolved = tmp_path / "design_resolved.json"
+    resolved.write_text(
+        json.dumps({
+            "parameters": {
+                "coupling_dB": -14.0,
+                "coupler_freq_hz": 8.0e9,
+                "Z0": 50.0,
+                "cell_length_um": 10.0,
+            },
+            "coupler_settings": {
+                "coupling_dB": -16.0,
+                "coupler_freq_hz": 10.0e9,
+                "Z0": 55.0,
+                "cell_length_um": 12.0,
+            },
+            "coupler_mode": "ideal",
+            "coupler_geometry": {"model": "two_line"},
+        }),
+        encoding="utf-8",
+    )
+
+    settings = build_design_and_passive._coupler_settings(tmp_path)
+
+    assert settings == {
+        "coupling_db": -16.0,
+        "frequency_hz": 10.0e9,
+        "z0_ohm": 55.0,
+        "cell_length_um": 12.0,
+        "mode": "ideal",
+        "model": "two_line",
+    }

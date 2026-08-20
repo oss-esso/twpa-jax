@@ -9,6 +9,15 @@ from typing import Any
 from twpa_solver.design.errors import DesignSchemaError
 
 
+# Technology-backed electrical values accepted as local coupler overrides.
+_COUPLER_PARAMETER_FIELDS = {
+    "coupling_dB",
+    "coupler_freq_hz",
+    "Z0",
+    "cell_length_um",
+}
+
+
 @dataclass(frozen=True)
 class _Line:
     """One ordered physical path from the concise YAML surface."""
@@ -107,6 +116,8 @@ def _normalize_block(
         raise DesignSchemaError(f"{path}.type: expected a non-empty string")
     if not isinstance(name, str) or not name:
         raise DesignSchemaError(f"{path}.name: expected a non-empty string")
+    if kind == "coupler":
+        kind = "directional_coupler"
     if kind == "cpw":
         allowed = {"type", "name", "cells", "L", "C"}
         unknown = set(block) - allowed
@@ -136,17 +147,23 @@ def _normalize_block(
             "type", "name", "cursors", "port_in_signal", "port_in_pump",
             "port_out_signal", "port_out_pump", "port in signal",
             "port in pump", "port out signal", "port out pump",
-        }
+        } | _COUPLER_PARAMETER_FIELDS
         unknown = set(block) - allowed
         if unknown:
             raise DesignSchemaError(
                 f"{path}: unknown directional-coupler fields {sorted(unknown)}"
             )
-        return {
+        result = {
             "type": "directional_coupler",
             "name": name,
             "cursors": _coupler_cursors(block, lines, path),
         }
+        result.update({
+            key: block[key]
+            for key in _COUPLER_PARAMETER_FIELDS
+            if key in block
+        })
+        return result
     if kind in {"input_ports", "output_ports"}:
         allowed = {"type", "name", "resistance"}
         unknown = set(block) - allowed
@@ -291,6 +308,23 @@ def _normalize_lines(items: list[Any]) -> list[dict[str, Any]]:
     unresolved = [
         name for name, block in definitions.items() if block.get("_reference")
     ]
+    # A shared coupler is optional.  If its detailed declaration is
+    # commented out, stale references on the other line are omitted too.
+    # Other unresolved shared blocks remain errors because they are normally
+    # accidental typos or incomplete required topology.
+    omitted_couplers = {
+        name for name in unresolved
+        if _canonical_kind(definitions[name].get("type")) == "directional_coupler"
+    }
+    if omitted_couplers:
+        for sequence in sequences:
+            sequence[:] = [name for name in sequence if name not in omitted_couplers]
+        for name in omitted_couplers:
+            definitions.pop(name, None)
+            definition_paths.pop(name, None)
+            occurrences.pop(name, None)
+            first_seen.pop(name, None)
+        unresolved = [name for name in unresolved if name not in omitted_couplers]
     if unresolved:
         raise DesignSchemaError(
             f"topology: references have no detailed declaration {sorted(unresolved)}"
