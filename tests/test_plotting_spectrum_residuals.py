@@ -1,7 +1,11 @@
 import numpy as np
 
 from twpa_solver.plotting.metrics import SpectrumFit, SpectrumFitMetrics
-from twpa_solver.plotting.spectrum import _fit_error, _symmetric_error_edges
+from twpa_solver.plotting.spectrum import (
+    _fit_error,
+    _symmetric_error_edges,
+    plot_candidate_s21_bandwidth,
+)
 
 
 def test_fit_error_uses_all_finite_signal_samples():
@@ -44,3 +48,21 @@ def test_symmetric_error_edges_use_quarter_db_bins():
     assert np.isclose(edges[0], -0.5)
     assert np.isclose(edges[-1], 0.5)
     assert np.allclose(np.diff(edges), 0.25)
+
+
+def test_candidate_s21_plot_writes_gain_and_ideal_qe_subplots(tmp_path):
+    output = tmp_path / "candidate_s21.png"
+    plot_candidate_s21_bandwidth(
+        np.array([7.5, 8.0, 8.5]),
+        np.array([0.0, 10.0, 0.0]),
+        {"point_index": 0, "pump_power_dbm": -25.0, "pump_freq_ghz": 8.0,
+         "map_gain_db": 10.0},
+        None,
+        output,
+    )
+
+    assert output.exists()
+    from PIL import Image
+
+    with Image.open(output) as image:
+        assert image.height > image.width * 0.75
