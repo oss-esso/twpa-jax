@@ -4,6 +4,12 @@ The probe deliberately uses the JAX backend for both precisions and both
 banded-solve implementations.  It does not modify campaign artifacts unless
 ``--output`` is supplied.  The pump-only observable is reduced with the same
 ``measure_ansatz_validity`` implementation used by the stored corpus.
+
+PAUSED 2026-08-20: this is the physics gate of the GPU-session toolchain, which
+is built and CPU-smoke-tested but has never been run on a GPU.  Its GO/NO-GO
+verdict has therefore never been produced on hardware, and no result in this
+repository depends on it.  Read ``docs/development/gpu_session_runbook.md``
+before reviving it.
 """
 
 from __future__ import annotations

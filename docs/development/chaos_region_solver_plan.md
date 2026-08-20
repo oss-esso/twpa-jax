@@ -283,6 +283,22 @@ recorded in the kernel docstring.
 and both bandwidths, and its own docstring forbids calling it until that
 changes.
 
+**Status 2026-08-20: built, and the GPU half is PAUSED.** The `numba` batch
+backend is complete, tested and the default. The `jax` backend exists behind
+`backend="jax"` with `jax_device` (`auto`/`gpu`/`cpu`), `dtype`
+(`float64`/`float32`) and `solve_kind` (`sequential`/`scan`), all defaulting to
+the CPU-oriented float64 sequential path. A full GPU session toolchain --
+`make_fdtd_reference.py`, `gpu_preflight.py`, `measure_kernel_precision.py`,
+`benchmark_batched_fdtd.py`, `run_gpu_session.ps1` and
+`docs/development/gpu_session_runbook.md` -- is committed and CPU-smoke-tested,
+**but has never been run on a GPU**. No result in this repository depends on
+it. Two questions are therefore open and unmeasured: whether float32 holds the
+observable to `1e-4` (consumer FP64 is 1/32 on Ampere and 1/64 on Ada, so a
+3060 is only at parity with this CPU in float64), and whether the
+`associative_scan` banded solve -- 29x slower than sequential on CPU -- wins on
+an accelerator. Reviving this costs one session on the GPU machine and no
+further development. See the runbook's "Why this is paused".
+
 #### 3. Per-step constant reduction
 
 **File**: `scripts/chaos/run_guarcello_jc_phase5.py`

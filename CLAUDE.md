@@ -1763,6 +1763,70 @@ governing scale may be the fastest mode measured against the **pump** frequency
 rather than against the plasma frequency. Resolving this would replace a
 per-device measurement with a predictive rule. Until then, measure.
 
+## Chaos-region routing and the PAUSED GPU route (2026-08-20)
+
+Plan: `docs/development/chaos_region_solver_plan.md`. The measured ansatz
+corpus splits the pump-power axis into three regimes, two of which already have
+solvers: period-1 (single-tone HB, `pump/hb.py`) and 2-torus
+(`multitone/torus.py`, 2465 lines, the operator that produced the torus onset
+`P_c = -24.2435 dBm`). **Only the broadband regime past the second boundary has
+no method.** Do not rebuild the torus solver; it works.
+
+`src/twpa_solver/chaos/routing.py` classifies and dispatches; driver
+`scripts/chaos/route_column.py`. What auto-detects on a **new circuit** and
+what does not:
+
+| boundary | auto? | why |
+| --- | --- | --- |
+| period-1 -> torus | **yes** | needs only `\|lambda\|` from the circuit's own Hill operator |
+| torus -> broadband | **no** | `classify_from_spectrum` consumes an FDTD spectrum, so no HB-only route reaches it |
+
+`classify_from_multiplier`'s `tolerance = 2e-3` is derived from 2c's measured
+`d|lambda|/dP = 0.019 per dB` (about 0.1 dB of pump power). On another circuit
+that slope differs, so the band spans a different number of dB -- but a wrong
+tolerance yields `UNDECIDED`, never a false regime. `classify_from_spectrum`'s
+`on_lattice < 0.30 -> BROADBAND` is safe anywhere (2c reads `0.056` at
+collapse); its `>= 0.90` + `generator_share >= 0.60 -> TORUS` is 2c-calibrated,
+and the corpus has **no points** between on-lattice `0.4620` and `0.8827`, so
+that gap correctly returns `UNDECIDED`. `probe_multiplier` carries the two
+circuit-independent search facts that were expensive to learn: search **both
+imaginary half-planes**, and track a **named branch by mode overlap** rather
+than taking `max |lambda|` off a dense scan.
+
+**The GPU/JAX route is PAUSED as of 2026-08-20 and was never run on hardware.**
+The `numba` batch backend is complete, tested and the default. The `jax`
+backend exists behind `backend="jax"` with `jax_device`
+(`auto`/`gpu`/`cpu`), `dtype` (`float64`/`float32`) and `solve_kind`
+(`sequential`/`scan`), all defaulting to the CPU float64 sequential path. The
+session toolchain (`make_fdtd_reference.py`, `gpu_preflight.py`,
+`measure_kernel_precision.py`, `benchmark_batched_fdtd.py`,
+`run_gpu_session.ps1`, `docs/development/gpu_session_runbook.md`) is committed
+and CPU-smoke-tested. **No result in this repository depends on any of it**, and
+it was paused in favour of other alternatives, not because anything failed.
+
+Two questions stay open and unmeasured. Spec-based FP64 peak, against the
+development CPU's `0.384 TFLOPS` (6c @4GHz AVX2 FMA):
+
+| part | FP32 | ratio | FP64 | vs CPU |
+| --- | ---: | ---: | ---: | ---: |
+| RTX 3060 laptop (Ampere) | 10.94 | 1/32 | 0.342 | 0.89x |
+| RTX 3060 desktop (Ampere) | 12.74 | 1/32 | 0.398 | 1.04x |
+| RTX 4060 laptop (Ada) | 15.10 | **1/64** | 0.236 | 0.61x |
+
+So in float64 a consumer GPU is at best at parity with the CPU already in use;
+the trip pays only if float32 holds the observable to `1e-4`, which
+`measure_kernel_precision.py` decides and which has never been run. Second,
+`solve_kind="scan"` (associative-scan banded solve, `O(log n)` depth for ~100x
+the arithmetic at bandwidth 5) measures **29x slower than sequential on CPU**;
+whether it wins on an accelerator is what `benchmark_batched_fdtd.py` exists to
+answer.
+
+**Despite the repository name, the production solver contains no JAX.** HB pump
+solve, gain, torus and Hill stability are NumPy/SciPy sparse plus numba with
+PARDISO; `pump/backends/jvp_backends.py` holds only a `jax_available()` feature
+flag, since the pump JVP is derived analytically. JAX's sole role is the paused
+FDTD batch backend.
+
 ## graphify
 
 This project has a knowledge graph at graphify-out/ with god nodes, community structure, and cross-file relationships.

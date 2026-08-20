@@ -1,4 +1,12 @@
-"""Run the resumable batched-FDTD benchmark matrix on the GPU session host."""
+"""Run the resumable batched-FDTD benchmark matrix on the GPU session host.
+
+PAUSED 2026-08-20: this is part of the GPU-session toolchain, which is built
+and CPU-smoke-tested but has never been run on a GPU.  No result in this
+repository depends on it.  Read
+``docs/development/gpu_session_runbook.md`` before reviving it -- in
+particular, consumer FP64 is 1/32 (Ampere) or 1/64 (Ada) of FP32, so the
+float32 precision gate decides whether an accelerator helps at all.
+"""
 
 from __future__ import annotations
 

@@ -1,7 +1,57 @@
 # GPU session runbook
 
-This runbook is for the RTX 4060 laptop. The repository must be on `dev` at
-the commit that contains the committed fixture and session scripts.
+> **PAUSED 2026-08-20 — never executed.** The toolchain below is built,
+> CPU-smoke-tested and committed, but no GPU session was ever run, so **no
+> measurement in this repository depends on it**. The route was paused in
+> favour of other alternatives, not because anything here failed. See
+> "Why this is paused" before reviving it.
+
+This runbook targets the available GPU machine, an **RTX 3060 laptop**
+(Ampere GA106; an earlier draft said RTX 4060 and that was wrong -- see the
+throughput note below, the two parts differ by a factor of two in FP64). The
+repository must be on `dev` at the commit that contains the committed fixture
+and session scripts.
+
+## Why this is paused
+
+The kernel runs `jax_enable_x64=True` throughout, and consumer NVIDIA parts
+cripple FP64. Spec-based peak, against this development machine's CPU:
+
+| part | FP32 | FP64 ratio | FP64 | vs CPU |
+| --- | ---: | ---: | ---: | ---: |
+| dev CPU, 6c @4GHz AVX2 FMA | -- | -- | 0.384 TFLOPS | 1.00x |
+| RTX 3060 laptop (Ampere) | 10.94 | 1/32 | 0.342 | 0.89x |
+| RTX 3060 desktop (Ampere) | 12.74 | 1/32 | 0.398 | 1.04x |
+| RTX 4060 laptop (Ada) | 15.10 | **1/64** | 0.236 | 0.61x |
+
+So in float64 a 3060 is **at parity** with the CPU already in use -- the trip
+only pays if float32 is adequate, which would buy 28-33x. That is what
+`measure_kernel_precision.py` decides, and it has never been run on hardware.
+
+The second unmeasured question is whether `solve_kind="scan"` wins at all. The
+associative-scan banded solve trades `O(n)` depth for `O(log n)` at roughly
+100x the arithmetic (bandwidth 5 gives 10x10 transfer matrices), and it
+measures **29x slower than sequential on CPU**. Whether the depth reduction
+pays on a GPU is exactly what `benchmark_batched_fdtd.py` exists to answer.
+
+**Nothing here is known to be broken.** The paused state is "built and
+untested on target hardware", not "tried and failed".
+
+## Reviving this
+
+1. Run the commands below on the GPU box. `run_gpu_session.ps1` is
+   self-validating: preflight hard-fails rather than degrading, and the
+   precision study prints its own GO/NO-GO.
+2. Read `precision.json` first. A `NO_GO` means float32 misses the `1e-4`
+   observable tolerance, and the honest conclusion is that a consumer GPU does
+   not help this problem -- record it and stop.
+3. `nvidia-smi` before the CUDA install, to confirm the driver is visible and
+   to read the actual VRAM (3060 laptop is commonly 6 GB, desktop 12 GB).
+   After the chunked-scan fix outputs are 5 MB/lane, so batch 64 needs only
+   0.32 GB and VRAM is not expected to bind.
+4. On a laptop part, watch for thermal throttling: the benchmark excludes
+   warm-up from timing, so throttling shows as declining throughput at a fixed
+   configuration rather than as an error.
 
 ## Install and run
 

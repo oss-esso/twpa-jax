@@ -1,3 +1,14 @@
+# PAUSED 2026-08-20 -- this session has never been run on a GPU.
+#
+# The toolchain it drives is built, CPU-smoke-tested and committed, but no
+# measurement in this repository depends on it.  The route was paused in favour
+# of other alternatives, not because anything here failed.  Consumer FP64 is
+# 1/32 of FP32 on Ampere and 1/64 on Ada, so an RTX 3060 is only at parity with
+# the development CPU in float64; whether an accelerator helps at all is what
+# the precision stage decides, and it has never produced a verdict on hardware.
+#
+# Read docs/development/gpu_session_runbook.md before running this.
+
 param(
     [switch]$Force,
     [string]$OutputDir = ""
