@@ -34,6 +34,13 @@ outputs/my_gain_map/             gain-map data and plots
 Use `designs/` for files that a person edits. Use `outputs/` for generated
 files. A generated directory can be deleted and rebuilt from its YAML.
 
+**No circuit directory is checked in.** `designs/` tracks YAML designs,
+`designs/python/`, and `designs/technology/` only. Every command below that
+takes a circuit directory takes one you built yourself, normally under
+`outputs/`. A `designs/ipm_2c_fixed` present on a machine is a local, ignored
+build artifact whose contents depend on the coupler mode it was built with;
+see [`circuit_builders.md`](circuit_builders.md#two-2c-builds).
+
 Do not edit `C.npz`, `G.npz`, `K.npz`, `Bphi.npz`, `arrays.npz`, or generated
 CSV/JSON files by hand.
 
@@ -60,12 +67,20 @@ python workflows/build_design_and_passive.py `
   --design-dir outputs/passive_batch
 ```
 
-For an already generated circuit directory, omit `--design`:
+Omitting `--design` selects the **legacy IPM builder** instead of the
+declarative compiler. This does not read an existing directory: it builds a
+fresh IPM design from `IPMParams` defaults plus any legacy override flags, and
+writes it into `--design-dir`.
 
 ```powershell
 python workflows/build_design_and_passive.py `
-  --design-dir designs/ipm_2c_fixed
+  --design-dir outputs/ipm_2c_legacy `
+  --coupler-mode auto
 ```
+
+Which parser receives the unrecognised options depends entirely on this choice.
+See [Forwarded options](#forwarded-options) below; the two flag sets are
+disjoint and mixing them raises.
 
 For a Python Circuit design, import the design module and compile the returned
 `Circuit` directly. For example, the technology-driven IPM entry point is
@@ -78,7 +93,7 @@ indices must remain stable.
 | Option | Default | Meaning |
 | --- | ---: | --- |
 | `--design PATH [PATH ...]` | none | One or more declarative YAML sources. Use together with `--design-dir`; with multiple inputs, that path is the output root. |
-| `--design-dir PATH` | none | Output directory, or an existing generated circuit directory. Required. |
+| `--design-dir PATH` | none | Output directory for the generated circuit. Required whenever `--design` is given; one of the two must always be supplied. |
 | `--passive-start-ghz VALUE` | `4.0` | First passive-response frequency. |
 | `--passive-stop-ghz VALUE` | `11.0` | Last passive-response frequency. |
 | `--passive-points INT` | `1401` | Number of passive frequency points. Must be at least 2. |
@@ -87,47 +102,77 @@ indices must remain stable.
 The passive frequency grid uses the old standard of 1,401 points unless you
 change `--passive-points`.
 
-### Options forwarded to the declarative compiler
+<a id="forwarded-options"></a>
+### Forwarded options
 
-These options are useful when a YAML design must be compiled with a temporary
-override. Put them after the workflow options.
+Unrecognised options are forwarded, but **not always to the same program**:
+
+| Invocation | Options go to |
+| --- | --- |
+| with `--design` (YAML) | the declarative compiler, `python -m twpa_solver.design` |
+| without `--design` | the legacy IPM builder, `twpa_solver.builders.ipm` |
+
+The two flag sets are disjoint. Passing a builder flag on the YAML path, or a
+compiler flag on the builder path, is an argument error rather than a silent
+no-op. Put the forwarded options after the workflow options.
+
+#### With `--design`: declarative compiler
+
+This is the complete set the compiler accepts.
 
 | Option | Meaning |
 | --- | --- |
 | `--write-matrices` | Enabled by this workflow. Writes solver matrices. |
-| `--coupler-mode auto` | Select the coupler model automatically. Recommended. |
-| `--coupler-mode ideal` | Use the ideal coupler model. |
-| `--coupler-mode optimize` | Recalculate coupler geometry. |
-| `--draw` | Write the optional builder geometry drawing. |
+| `--coupler-mode auto\|ideal\|optimize` | Override the YAML/technology coupler mode. `auto` is recommended. |
 | `--overwrite` | Replace files in a non-empty generated directory. |
-| `--strict` | Enable strict design validation. Recommended. |
-| `--start-node-top INT`, `--start-node-bot INT` | Legacy starting node numbers. |
-| `--ground INT` | Legacy ground node number. YAML `ground` is preferred. |
-| `--jtl-cells-per-array INT`, `--jtl-row-count INT`, `--jtl-rows-per-coupler INT` | JTL cell, row, and coupler spacing values. The old flags remain accepted as aliases. |
-| `--inter-array-cpw-cells INT`, `--signal-inter-coupler-cpw-cells INT`, `--pump-inter-coupler-cpw-cells INT` | CPW routing lengths in cells. |
-| `--signal-input-cpw-cells INT`, `--signal-output-cpw-cells INT`, `--pump-input-cpw-cells INT`, `--pump-output-cpw-cells INT` | Signal and pump input/output CPW lengths. The old `--len1`–`--len4` flags remain accepted as aliases. |
-| `--coupling-db VALUE`, `--z0-ohm VALUE`, `--coupler-freq-ghz VALUE` | Legacy coupler target, impedance, and design frequency. |
-| `--lj-ph VALUE`, `--cj-ff VALUE`, `--cg-ff VALUE` | Legacy junction and ground values. |
-| `--cl-per-um-ff VALUE`, `--ll-per-um-ph VALUE`, `--cell-length-um VALUE` | Legacy transmission-line constants. |
-| `--rleft-ohm VALUE`, `--rright-ohm VALUE`, `--rm-ohm VALUE` | Legacy termination resistances. |
+| `--strict` | Additionally require that every declared `parameters` entry is referenced. Recommended — it catches a typo in a parameter name. Schema validation itself always runs. |
 | `--profile-json PATH` | Legacy profile file. Prefer YAML `profiles`. |
 | `--lj-profile TEXT` | Legacy Lj profile override; repeatable. |
 | `--cg-profile TEXT` | Legacy Cg profile override; repeatable. |
-| `--lj-scatter-sigma VALUE` | Legacy multiplicative Lj scatter. |
-| `--cj-scatter-sigma VALUE` | Legacy Cj scatter. |
+| `--lj-scatter-sigma VALUE` | Multiplicative Lj scatter. |
+| `--cj-scatter-sigma VALUE` | Cj scatter. |
 | `--cj-scatter-mode independent\|plasma_locked` | Cj scatter rule. |
-| `--cg-scatter-sigma VALUE` | Legacy Cg scatter. |
-| `--scatter-distribution normal\|uniform` | Legacy scatter distribution. |
+| `--cg-scatter-sigma VALUE` | Cg scatter. |
 | `--scatter-seed INT` | Reproducible scatter seed. |
-| `--lj-scatter-seed INT` | Legacy Lj-only scatter seed. |
-| `--lj-scatter-clip-min VALUE`, `--lj-scatter-clip-max VALUE` | Legacy Lj scatter limits. |
-| `--cj-scatter-clip-min VALUE`, `--cj-scatter-clip-max VALUE` | Legacy Cj scatter limits. |
-| `--cg-scatter-clip-min VALUE`, `--cg-scatter-clip-max VALUE` | Legacy Cg scatter limits. |
 | `--tan-delta VALUE` | Global dielectric loss tangent. |
 | `--tan-delta-role ROLE=VALUE` | Role-specific loss tangent; repeatable. |
 
+Geometry, node numbering, and nominal component values are **not** overridable
+here. Set them in the YAML design or its technology preset. There is no
+`--draw`, `--lj-ph`, `--ground`, or `--len1` on this path.
+
+#### Without `--design`: legacy IPM builder
+
+| Option | Meaning |
+| --- | --- |
+| `--write-matrices` | Enabled by this workflow. Writes solver matrices. |
+| `--coupler-mode auto\|ideal\|optimize` | Coupler model selection. |
+| `--draw` | Write the optional builder geometry drawing. |
+| `--start-node-top INT`, `--start-node-bot INT` | Starting node numbers. |
+| `--ground INT` | Ground node number. |
+| `--jtl-cells-per-array INT`, `--jtl-row-count INT`, `--jtl-rows-per-coupler INT` | JTL cell, row, and coupler spacing values. `--array-length`, `--num-rows`, and `--arrays-per-dc` remain accepted as aliases. |
+| `--inter-array-cpw-cells INT`, `--signal-inter-coupler-cpw-cells INT`, `--pump-inter-coupler-cpw-cells INT` | CPW routing lengths in cells. `--length-of-short-tl`, `--length-of-long-tl`, and `--coupler-section-length` remain accepted as aliases, in that order. |
+| `--signal-input-cpw-cells INT`, `--signal-output-cpw-cells INT`, `--pump-input-cpw-cells INT`, `--pump-output-cpw-cells INT` | Signal and pump input/output CPW lengths. `--len1`–`--len4` remain accepted as aliases, in that order. |
+| `--coupling-db VALUE`, `--z0-ohm VALUE`, `--coupler-freq-ghz VALUE` | Coupler target, impedance, and design frequency. |
+| `--lj-ph VALUE`, `--cj-ff VALUE`, `--cg-ff VALUE` | Junction and ground values. |
+| `--cl-per-um-ff VALUE`, `--ll-per-um-ph VALUE`, `--cell-length-um VALUE` | Transmission-line constants. |
+| `--rleft-ohm VALUE`, `--rright-ohm VALUE`, `--rm-ohm VALUE` | Termination resistances. |
+| `--profile-json PATH`, `--lj-profile TEXT`, `--cg-profile TEXT` | Profile inputs; the two shorthand flags are repeatable. |
+| `--lj-scatter-sigma VALUE`, `--cj-scatter-sigma VALUE`, `--cg-scatter-sigma VALUE` | Per-component scatter. |
+| `--cj-scatter-mode independent\|plasma_locked` | Cj scatter rule. |
+| `--scatter-distribution normal\|uniform` | Scatter distribution. |
+| `--scatter-seed INT` | Reproducible master scatter seed. |
+| `--lj-scatter-seed INT` | Deprecated Lj-only alias for `--scatter-seed`. |
+| `--lj-scatter-clip-min VALUE`, `--lj-scatter-clip-max VALUE` | Lj scatter limits. |
+| `--cj-scatter-clip-min VALUE`, `--cj-scatter-clip-max VALUE` | Cj scatter limits. |
+| `--cg-scatter-clip-min VALUE`, `--cg-scatter-clip-max VALUE` | Cg scatter limits. |
+| `--tan-delta VALUE`, `--tan-delta-role ROLE=VALUE` | Dielectric loss tangent, global and per role. |
+
+This path has no `--overwrite` and no `--strict`.
+
 For normal fab work, put nominal values, profiles, and intentional scatter in
-the YAML. Use command-line overrides only for a temporary comparison.
+the YAML and use the `--design` path. Use command-line overrides only for a
+temporary comparison.
 
 ### Passive output files
 
@@ -184,8 +229,48 @@ python workflows/run_gain_map_and_plots.py `
   --run-dir outputs/gain_batch
 ```
 
-The wrapper supplies the normal fast settings. The supplied flags are
-forwarded to `scripts/run_gain_map.py`.
+Your flags are forwarded to `scripts/run_gain_map.py`.
+
+### What `--fast` sets for you
+
+The wrapper prepends the production engine settings below to every run. Each
+is applied **only if you did not pass that flag yourself**, so any single one
+can still be overridden on the command line. These are not the
+`run_gain_map.py` parser defaults; the table gives both so the difference is
+visible.
+
+| Injected flag | `run_gain_map.py` default | Effect |
+| --- | --- | --- |
+| `--inproc-fail-fast` | off | **changes behaviour** — stop a bad cell instead of grinding |
+| `--fold-skip-patience 2` | `0` | **changes behaviour** — enables fold-skip counting |
+| `--signal-detuning-mhz 150` | `100` | **changes results** — wider signal offset |
+| `--no-signal-spectrum` | spectrum **on** | **changes cost** — the default sweeps signal frequency at *every* grid point and dominates wall time |
+| `--log-level INFO` | `DEBUG` | **changes cost** — DEBUG logs are enormous on a 400-point map |
+| `--mode warmstart` | `warmstart` | explicit only |
+| `--inproc-pump-backend schur_cpu_mt` | `schur_cpu_mt` | explicit only |
+| `--inproc-preconditioner real_coupled_fast` | `real_coupled_fast` | explicit only |
+| `--inproc-fold-predictor secant` | `secant` | explicit only |
+| `--pump-current-jc-scale 1.0` | `1.0` | explicit only; `2.0` would be a 6 dB error |
+
+Only the first five change anything. The rest restate the parser default and
+are pinned so a later default change cannot move a production map silently.
+Note that the `--help` text for `--inproc-preconditioner` and
+`--inproc-pump-backend` still names the *old* defaults (`mean_tangent`,
+`full`); read the table above, not that help string.
+
+The wrapper additionally forces `--no-compact-output` so per-point pump
+solutions survive until plotting finishes, then deletes them itself.
+
+`--frequency-workers` and `--frequency-chunk-size` are sized automatically
+when you do not pass them: the worker count is derived from the measured
+per-worker footprint of this circuit against half of currently free physical
+RAM, then capped by CPU count and by `--n-frequency`. The chosen values are
+printed as a `fast-map worker sizing:` line. Passing `--frequency-workers`
+explicitly disables the estimate and pins the chunk size to it.
+
+**`--fold-skip-patience 2` has previously culled the 2c broadband operating
+region into a needle-only map when skip counting false-tripped.** Check the
+PASS coverage of a sparse map before quoting it.
 
 ### Port selection
 

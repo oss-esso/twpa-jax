@@ -14,7 +14,10 @@ Python Circuit design -> compile -> Element[] / matrices -> workflow
                  optional YAML adapter
 ```
 
-Use Python designs under ``designs/python/`` for new circuits. Existing YAML
+Use Python designs under ``designs/python/`` for new circuits — the checked-in
+examples are ``ipm_2c.py``, ``ipm_v2.py``, and ``ipm_v3.py``, and the API
+itself is documented in
+[`development/circuit_api.md`](development/circuit_api.md). Existing YAML
 designs remain supported through ``compile_design``, which translates the YAML
 blocks into calls to the same public ``Circuit`` builders. The YAML compiler
 is therefore an adapter, not a second circuit-generation implementation.
@@ -145,30 +148,84 @@ Set a preset with:
 technology: ipm_default
 ```
 
-The preset is stored in `designs/technology/ipm_default.yaml`. It contains
-values normally shared by a fabrication platform:
+Presets live in `designs/technology/`. The checked-in ones are
+`ipm_default.yaml` and `qanova_ipm_v1.yaml`. A preset contains values normally
+shared by a fabrication platform.
 
-| Preset parameter | Unit | Meaning |
-| --- | --- | --- |
-| `Ll` | H | Inductance of one linear transmission-line cell. |
-| `Cl` | F | Capacitance of one linear transmission-line cell. |
-| `coupling_dB` | dB | Coupler target coupling. |
-| `Z0` | ohm | Nominal line and port impedance. |
-| `coupler_freq_hz` | Hz | Frequency used for coupler design. |
-| `jtl_cells_per_array` | cells | Josephson cells in each JTL array. |
-| `jtl_row_count` | count | Total number of JTL rows. |
-| `jtl_rows_per_coupler` | count | JTL rows before each intermediate coupler. |
-| `inter_array_cpw_cells` | cells | CPW cells between adjacent JTL arrays. |
-| `signal_inter_coupler_cpw_cells` | cells | Signal CPW cells before the next coupler. |
-| `pump_inter_coupler_cpw_cells` | cells | Pump CPW cells between couplers. |
-| `signal_input_cpw_cells`, `signal_output_cpw_cells` | cells | Signal input/output CPW lengths. |
-| `pump_input_cpw_cells`, `pump_output_cpw_cells` | cells | Pump input/output CPW lengths. |
-| `Rleft`, `Rright`, `Rm` | ohm | Signal and pump termination resistances. |
-| `jtl_row_count` | count | Default number of IPM rows. |
-| `jtl_rows_per_coupler` | count | Rows before an intermediate coupler. |
-| `cursors.signal` | node | Starting signal cursor. |
-| `cursors.pump` | node | Starting pump cursor. |
-| `ground` | node | Ground node number. |
+A preset file separates **electrical component values** from **architecture**,
+and carries a few top-level keys:
+
+```yaml
+name: ipm_default
+coupler_mode: auto
+components:
+  Ll: 4.24e-12
+  Cl: 1.695e-15
+  Lj: 123.9e-12
+  Cj: 145.0e-15
+  Cg: 66.0e-15
+  coupling_dB: -14.0
+  Z0: 50.0
+  coupler_freq_hz: 8.0e9
+  cell_length_um: 10.0
+  Rleft: 50.0
+  Rright: 50.0
+  Rm: 50.0
+architecture:
+  jtl_cells_per_array: 418
+  jtl_row_count: 6
+  jtl_rows_per_coupler: 3
+  inter_array_cpw_cells: 90
+  signal_inter_coupler_cpw_cells: 900
+  pump_inter_coupler_cpw_cells: 800
+  signal_input_cpw_cells: 0
+  signal_output_cpw_cells: 50
+  pump_input_cpw_cells: 0
+  pump_output_cpw_cells: 0
+cursors:
+  signal: 1
+  pump: 10000
+ground: 0
+```
+
+| Section | Key | Unit | Meaning |
+| --- | --- | --- | --- |
+| top level | `name` | — | Preset name. |
+| top level | `coupler_mode` | — | Default coupler model: `auto`, `ideal`, or `optimize`. |
+| `components` | `Ll` | H | Inductance of one linear transmission-line cell. |
+| `components` | `Cl` | F | Capacitance of one linear transmission-line cell. |
+| `components` | `Lj`, `Cj`, `Cg` | H, F, F | Nominal junction and ground values. |
+| `components` | `coupling_dB` | dB | Coupler target coupling. |
+| `components` | `Z0` | ohm | Nominal line and port impedance. |
+| `components` | `coupler_freq_hz` | Hz | Frequency used for coupler design. |
+| `components` | `cell_length_um` | µm | Physical length of one transmission-line cell. |
+| `components` | `Rleft`, `Rright`, `Rm` | ohm | Signal and pump termination resistances. |
+| `architecture` | `jtl_cells_per_array` | cells | Josephson cells in each JTL array. |
+| `architecture` | `jtl_row_count` | count | Total number of JTL rows. |
+| `architecture` | `jtl_rows_per_coupler` | count | JTL rows before each intermediate coupler. |
+| `architecture` | `inter_array_cpw_cells` | cells | CPW cells between adjacent JTL arrays. |
+| `architecture` | `signal_inter_coupler_cpw_cells` | cells | Signal CPW cells before the next coupler. |
+| `architecture` | `pump_inter_coupler_cpw_cells` | cells | Pump CPW cells between couplers. |
+| `architecture` | `signal_input_cpw_cells`, `signal_output_cpw_cells` | cells | Signal input/output CPW lengths. |
+| `architecture` | `pump_input_cpw_cells`, `pump_output_cpw_cells` | cells | Pump input/output CPW lengths. |
+| top level | `cursors.signal`, `cursors.pump` | node | Starting cursor for each physical line. |
+| top level | `ground` | node | Ground node number. |
+
+A **legacy flat `parameters:` mapping** is still accepted in place of
+`components:`/`architecture:`, and `qanova_ipm_v1.yaml` still uses it. The two
+are merged, with `components:` winning on a key present in both. Use the split
+form in new presets.
+
+Resolution order for any one parameter is deterministic:
+
+```text
+explicit call argument
+    -> design-level override
+    -> technology components:
+    -> technology architecture:
+    -> builder default
+    -> error naming the parameter and path
+```
 
 A design value overrides the preset value:
 
@@ -220,14 +277,22 @@ Use a block name once only.
 
 ### 5.1 Composite IPM blocks
 
+`name` is required on every block and must be unique within its topology list.
+An unknown field is rejected, so the optional column is exhaustive.
+
 | Type | Required fields | Optional fields | Meaning |
 | --- | --- | --- | --- |
-| `input_ports` | `name` | none | Standard signal and pump input ports, terminations, and input lines. |
-| `output_ports` | `name` | none | Standard signal and pump output ports, terminations, and output lines. |
-| `directional_coupler` | `name` | none | Coupler between the signal and pump cursors. |
-| `ipm_line` | `name`, `cursor`, one of `rows`/`arrays` | `cells`, `Lj`, `Cj`, `Cg`, `between`, `trailing_signal_cpw_cells`, `trailing_pump_cpw_cells`, `end_coupler` | Nonlinear rows followed by the signal and pump routing to the next coupler. |
-| `ipm_tail` | `name`, `rows` | `cursor`, `cells`, `Lj`, `Cj`, `Cg`, `between`, `final_array` | Final nonlinear rows without a trailing coupler section. Set `final_array: true`. |
+| `input_ports` | `name` | `cursor`, `port`, `resistance` | Standard signal and pump input ports, terminations, and input lines. |
+| `output_ports` | `name` | `cursor`, `port`, `resistance` | Standard signal and pump output ports, terminations, and output lines. |
+| `directional_coupler` | `name` | `cursors` | Coupler between the signal and pump cursors. |
+| `coupler` | `name`, `cursors` | none | Explicit-cursor form of the same block. |
+| `ipm_line` | `name`, one of `rows`/`arrays` | `cursor`, `cells`, `Lj`, `Cj`, `Cg`, `between`, `trailing_signal_cpw_cells`, `trailing_pump_cpw_cells`, `end_coupler` | Nonlinear rows followed by the signal and pump routing to the next coupler. |
+| `ipm_tail` | `name`, `rows` | `cursor`, `cells`, `Lj`, `Cj`, `Cg`, `between`, `final_array` | Final nonlinear rows without a trailing coupler section. `final_array` may only be `true`. |
 | `ipm_row` | `name`, `cursor`, `cells`, `Lj`, `Cj`, `Cg` | none | One explicit nonlinear row. |
+
+An omitted optional component value is resolved through the technology preset
+chain in §3 rather than defaulting to zero. `ipm_row` is the explicit form and
+takes all five values.
 
 Example:
 
@@ -290,11 +355,17 @@ routing, and 0.50 mm at the signal output.
 
 ### 5.2 Reusable line and RF-SQUID blocks
 
-| Type | Required fields | Meaning |
-| --- | --- | --- |
-| `jj_line` | `name`, `cursor`, `cells`, `Lj`, `Cj`, `Cg` | Series Josephson-junction line with ground capacitance. |
-| `transmission_line` | `name`, `cursor`, `cells`, `L`, `C` | Linear transmission-line ladder. |
-| `rf_squid_line` | `name`, `cursor`, `cells`, `Ic`, `Lm`, `Lw`, `Lpar`, `Cj` | Biased RF-SQUID line. |
+| Type | Required fields | Optional fields | Meaning |
+| --- | --- | --- | --- |
+| `jj_line` | `name`, `cursor`, `cells` | `Lj`, `Cj`, `Cg` | Series Josephson-junction line with ground capacitance. |
+| `transmission_line` | `name`, `cursor`, `cells` | `L`, `C` | Linear transmission-line ladder. |
+| `rf_squid_line` | `name`, `cursor`, `cells`, `Ic`, `Lm`, `Lw`, `Lpar`, `Cj` | `Lj`, `Cg`, `Cg_pattern`, `Cg_pattern_counts` | Biased RF-SQUID line. |
+| `jtl` | `name`, `cursor`, `rows`, `cells` | `Lj`, `Cj`, `Cg`, `join_cursors` | `rows` copies of `jj_line`. In the line-scoped surface (§2.1) `cursor` comes from `line`, and `cells` may be spelled `jj_number` or `jj number`. |
+
+`jj_line` and `transmission_line` fall back to the technology preset for the
+component values they omit; only the geometry (`cursor`, `cells`) is
+mandatory. In the line-scoped surface, `cpw` is an accepted alias for
+`transmission_line` and `coupler` for `directional_coupler`.
 
 An RF-SQUID line may use either one ground value or a repeating pattern:
 
@@ -320,13 +391,62 @@ An RF-SQUID line may use either one ground value or a repeating pattern:
 | `signal_port` | `name`, `port` | Add a signal port using the signal cursor. |
 | `pump_port` | `name`, `port` | Add a pump port using the pump cursor. |
 | `resistor` | `name`, `cursor`, `value` | Add a resistor from the cursor to ground. |
-| `capacitor` | `name`, `nodes`, `C` | Add a capacitor between two nodes. |
-| `inductor` | `name`, `nodes`, `L` | Add a linear inductor between two nodes. |
+| `capacitor` | `name`, `nodes`, `C` | Add a capacitor between exactly two nodes. |
+| `inductor` | `name`, `nodes`, `L` | Add a linear inductor between exactly two nodes. |
 | `raw_element` | `name`, `nodes`, `value`, `kind` | Add a supported low-level element. |
 
 The supported raw `kind` values are `capacitor`, `coupling_capacitor`,
 `linear_inductor`, `josephson_inductor`, `mutual_inductor_k`, `resistor`, and
 `port`.
+
+### 5.4 Repeating a group of blocks
+
+A topology item may be a `repeat` instead of a block. It emits its own
+`topology` list `count` times, in order, at the position where it appears.
+
+```yaml
+topology:
+  - type: signal_port
+    name: p_in
+    port: 1
+
+  - repeat:
+      name: stage
+      count: 3
+      topology:
+        - {type: jj_line, name: jj, cursor: signal, cells: 5}
+        - {type: transmission_line, name: cpw, cursor: signal, cells: 4}
+
+  - type: signal_port
+    name: p_out
+    port: 2
+```
+
+| Key | Required | Meaning |
+| --- | --- | --- |
+| `count` | yes | Non-negative integer. `0` emits nothing. |
+| `topology` | yes | Ordered list of blocks, actions, or one further `repeat`. |
+| `name` | no | Occurrence label used in generated paths. Defaults to `repeat`. |
+
+Each occurrence is path-qualified as `<name>[<occurrence>]`, so the example
+above produces `stage[0].jj`, `stage[1].jj`, and `stage[2].jj`, and reaches
+individual cells as `stage[0].cpw.cell[0].left`. Use those qualified paths in
+hierarchical references (§6).
+
+Block names must be unique **within one topology list**, and a `repeat` body
+is its own list. Reusing `jj` across the three occurrences above is therefore
+correct, not a duplicate-name error.
+
+**Composite blocks cannot appear inside a `repeat`.** Composite expansion runs
+over the top-level topology only, so `input_ports`, `output_ports`,
+`ipm_line`, `ipm_tail`, `ipm_row`, and `jtl` reach the emitter unexpanded and
+raise `unknown block type`. What a `repeat` body may contain is the primitive
+set: `jj_line`, `transmission_line`, `rf_squid_line`, `directional_coupler`,
+`coupler`, `port`, `signal_port`, `pump_port`, `resistor`, `capacitor`,
+`inductor`, `raw_element`, and `set`/`remove` actions.
+
+**Nesting is limited to two levels.** A `repeat` may contain a `repeat`; a
+third level raises `repeat nesting deeper than 2 is unsupported`.
 
 ## 6. Hierarchical node and element references
 
@@ -403,14 +523,49 @@ profiles:
     domain: per_row
 ```
 
+**`start` and `stop` are both required, for every type including `constant`.**
+`end` is accepted as a spelling of `stop`. Omitting either is a build error.
+
 Supported profile types are:
 
-| Type | Meaning |
-| --- | --- |
-| `constant` | One value over the selected cells. |
-| `linear` | Linear change from `start` to `stop`. |
-| `half_sine` | Smooth change using the standard half-sine shape. |
-| `custom` | Advanced expression form; use only when a named type is not sufficient. |
+| Type | Shape `s(t)` on `t` in `[0,1]` | Shape parameter | Meaning |
+| --- | --- | --- | --- |
+| `constant` | — | — | One value over the selected cells. `const` is the same type. |
+| `linear` | `t` | — | Linear change from `start` to `stop`. |
+| `power` | `t**p` | `p` > 0, default 1 | Anchored power law. |
+| `parabola` | `((t-v)²-v²)/((1-v)²-v²)` | `v` in `[0,1]`, not 0.5, default 0 | Anchored parabola; `v=0` is plain `t²`. |
+| `half_cosine` | `(1-cos(pi t))/2` | — | Anchored and smooth at both ends. |
+| `half_sine` | `sin(pi t / 2)` | — | Convenience alias compiled to `custom`. |
+| `tanh` | normalized `tanh(k(2t-1))` | `k` > 0, default 1 | Anchored sigmoid. |
+| `sine` | `(1+sin(2 pi f t + phi))/2` | `periods` default 1, `phase` default 0 | **Envelope**, see below. |
+| `cosine` | `(1+cos(2 pi f t + phi))/2` | `periods` default 1, `phase` default 0 | **Envelope**, see below. |
+| `custom` | user `expression` in `t` | `expression` | Use only when a named type is not sufficient. |
+
+The emitted value is `start + (stop - start) * s(t)`, so every anchored shape
+hits `start` at the first selected cell and `stop` at the last.
+
+**Shape parameters are not reachable from the mapping form above.** The
+mapping form sets only shape, endpoints, domain, target, and `expression`; a
+`p`, `v`, `k`, `periods`, or `phase` key written there is ignored and the
+default in the table applies. To set one, give the entry as a shorthand
+string instead, which the list form also accepts:
+
+```yaml
+profiles:
+  Lj:
+    - "rows=3-5:tanh:120p->140p:k=4,domain=per_row"
+    - "rows=0-2:power:120p->140p:p=2"
+```
+
+**`sine` and `cosine` do not.** Periodic and endpoint-anchored are mutually
+exclusive, so for those two `start`/`stop` bound the oscillation envelope
+(mean `(start+stop)/2`, amplitude `(stop-start)/2`) rather than giving the
+first and last values.
+
+`custom` expressions are restricted to an allowlist checked before evaluation.
+The full shape catalogue, the allowlist, and the `Cg` boundary-halving rule
+are in
+[`component_profiles_and_scatter.md`](component_profiles_and_scatter.md).
 
 Supported current domains are `selection` and `per_row`. The normal IPM
 profile uses `per_row`. `target: all` selects all compatible rows. A named
@@ -474,7 +629,7 @@ Compiler flags:
 | `--write-matrices` | Write `C.npz`, `G.npz`, `K.npz`, `Bphi.npz`, and arrays. Use this for workflows. |
 | `--coupler-mode auto\|ideal\|optimize` | Override the YAML/technology coupler mode. |
 | `--overwrite` | Allow writing into a non-empty output directory. |
-| `--strict` | Enable strict compiler validation. |
+| `--strict` | Additionally require that every declared `parameters` entry is actually referenced. Schema validation itself always runs. |
 | `--profile-json PATH` | Legacy profile input. Prefer YAML `profiles`. |
 | `--lj-profile TEXT` | Legacy Lj profile override; repeatable. |
 | `--cg-profile TEXT` | Legacy Cg profile override; repeatable. |
