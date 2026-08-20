@@ -30,7 +30,6 @@ from scripts.chaos.run_guarcello_jc_phase5 import (
     load_jc_device,
     resolve_pump_frequency,
 )
-from scripts.chaos.run_phaseB_pump_only import _spectrum
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -42,6 +41,23 @@ SIGNAL_CURRENT_A = 0.0
 DEFAULT_TRAJECTORY_STEPS = (600, 6_000, 60_000)
 DEFAULT_OBSERVABLE_STEPS = 6_271_516
 
+def _spectrum(
+    t: np.ndarray, v: np.ndarray, pump_hz: float,
+) -> tuple[np.ndarray, np.ndarray, float]:
+    """Return the windowed spectrum normalized to the pump bin."""
+    centered = v - np.mean(v)
+    window = np.hanning(v.size)
+    amplitude = (
+        2.0 * np.abs(np.fft.rfft(centered * window))
+        / max(np.sum(window), 1.0e-30)
+    )
+    frequencies = np.fft.rfftfreq(v.size, np.mean(np.diff(t)))
+    pump_index = int(np.argmin(np.abs(frequencies - pump_hz)))
+    pump_amplitude = max(float(amplitude[pump_index]), np.finfo(float).tiny)
+    spectrum_db = 20.0 * np.log10(
+        np.maximum(amplitude, np.finfo(float).tiny) / pump_amplitude
+    )
+    return frequencies, spectrum_db, pump_amplitude
 
 def _relative_difference(first: np.ndarray, second: np.ndarray) -> float:
     """Return a norm-relative difference, handling two zero arrays."""

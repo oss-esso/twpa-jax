@@ -42,6 +42,8 @@ from typing import Any
 
 import numpy as np
 
+__all__ = ["BAND_HIGH_MULTIPLE", "BAND_LOW_FRACTION", "_reduce_lattice"]
+
 # Devices whose campaign records predate the recorded ``signal_hz`` field.
 # The values are ``derive_device_spec``'s, in GHz.
 LEGACY_SIGNAL_GHZ = {"jc_jtwpa": 6.62, "jc_fqjtwpa": 7.40, "ipm_2c_fixed": 7.40}
