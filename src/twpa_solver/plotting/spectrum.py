@@ -9,6 +9,7 @@ import numpy as np
 
 from twpa_solver.plotting.metrics import SpectrumFit
 from twpa_solver.plotting.style import THESIS_FIGSIZE_SPECTRUM, save_figure
+from twpa_solver.signal.quantum_efficiency import calc_qe_ideal
 
 ERROR_BIN_WIDTH_DB = 0.25
 
@@ -44,13 +45,24 @@ def plot_candidate_s21_bandwidth(
     save_pdf: bool = False,
     save_svg: bool = False,
 ) -> None:
-    """Plot a candidate's swept S21 with its -3 dB band and pump condition.
+    """Plot swept S21 and the ideal quantum-efficiency trace.
 
     ``band`` is the dict from ``metrics.minus3db_band`` (or None). The annotation
     reports the map's own trailing gain (``meta['map_gain_db']``) next to the
     swept peak so a needle that the sweep under-resolves is still obvious.
+
+    The generic gain-map sweep stores the scalar S21 response, rather than the
+    full photon-ladder scattering row required by ``calc_qe``. The lower panel
+    therefore shows ``calc_qe_ideal`` evaluated from S21 and labels it as the
+    ideal quantum-efficiency limit.
     """
-    fig, ax = plt.subplots(figsize=THESIS_FIGSIZE_SPECTRUM)
+    fig, (ax, ax_qe) = plt.subplots(
+        2,
+        1,
+        figsize=(THESIS_FIGSIZE_SPECTRUM[0], THESIS_FIGSIZE_SPECTRUM[1] * 1.35),
+        sharex=True,
+        gridspec_kw={"height_ratios": (3.0, 1.25)},
+    )
     raw_lw = 1.0 if (band is not None and band.get("smoothed")) else 1.6
     ax.plot(freq_ghz, gain_db, color="#1f77b4", lw=raw_lw,
             alpha=0.55 if raw_lw == 1.0 else 1.0, label="S21 gain")
@@ -78,7 +90,6 @@ def plot_candidate_s21_bandwidth(
             ax.plot([band["window_max_freq_ghz"]], [wmax], "x", color="#7f7f7f",
                     ms=7, mew=2, label="window peak (needle, off-band)")
 
-    ax.set_xlabel(r"Signal Frequency $f_s$ (GHz)")
     ax.set_ylabel("Gain (dB)")
     ax.set_title(title or f"Candidate point {meta.get('point_index')}")
     ax.minorticks_on()
@@ -116,6 +127,18 @@ def plot_candidate_s21_bandwidth(
             lines.append("  (near-fold needle, off operating point)")
     ax.text(0.03, 0.97, "\n".join(lines), transform=ax.transAxes, va="top", ha="left",
             fontsize=9, bbox={"boxstyle": "round,pad=0.35", "fc": "white", "alpha": 0.85})
+
+    gain_amplitude = np.power(10.0, np.asarray(gain_db, dtype=float) / 20.0)
+    qe_ideal = np.asarray(calc_qe_ideal(gain_amplitude), dtype=float)
+    ax_qe.plot(freq_ghz, qe_ideal, color="#2ca25f", lw=1.6,
+               label="Ideal quantum efficiency")
+    ax_qe.set_xlabel(r"Signal Frequency $f_s$ (GHz)")
+    ax_qe.set_ylabel("Ideal QE")
+    ax_qe.set_ylim(0.0, 1.05)
+    ax_qe.minorticks_on()
+    ax_qe.grid(which="major", alpha=0.5, linewidth=1.2)
+    ax_qe.grid(which="minor", alpha=0.25, linewidth=0.6)
+    ax_qe.legend(loc="best")
     save_figure(fig, outpath, save_pdf=save_pdf, save_svg=save_svg)
 
 
