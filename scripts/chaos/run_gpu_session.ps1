@@ -7,6 +7,36 @@ $scriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $repoRoot = Split-Path -Parent (Split-Path -Parent $scriptRoot)
 Set-Location $repoRoot
 
+# Native Windows JAX is CPU-only. Prefer the project-local WSL2 environment
+# when it is available so this entry point can still launch the CUDA session.
+$wslDistribution = "Ubuntu-22.04"
+$wslPython = "/home/edo/twpa_jax_venv/bin/python"
+$useWsl = $false
+if ($env:OS -eq "Windows_NT") {
+    & wsl -d $wslDistribution -- test -x $wslPython 2>$null
+    $useWsl = ($LASTEXITCODE -eq 0)
+}
+
+function Convert-ToSessionPath([string]$Path) {
+    if (-not $useWsl) {
+        return $Path
+    }
+    $normalized = $Path -replace "\\", "/"
+    if ($normalized -notmatch "^([A-Za-z]):/(.*)$") {
+        throw "Unable to convert path for WSL2: $Path"
+    }
+    return ("/mnt/{0}/{1}" -f $matches[1].ToLowerInvariant(), $matches[2])
+}
+
+function Invoke-SessionPython([string]$Module, [string[]]$Arguments) {
+    if ($useWsl) {
+        & wsl -d $wslDistribution -- $wslPython -m $Module @Arguments
+    } else {
+        & python -m $Module @Arguments
+    }
+    $script:LastSessionPythonExitCode = [int]$LASTEXITCODE
+}
+
 if ([string]::IsNullOrWhiteSpace($OutputDir)) {
     $stamp = Get-Date -Format "yyyyMMdd_HHmmss"
     $runDir = Join-Path $repoRoot (Join-Path "outputs\chaos\gpu_sessions" ("gpu_" + $stamp))
@@ -19,15 +49,27 @@ $preflightPath = Join-Path $runDir "preflight.json"
 $precisionPath = Join-Path $runDir "precision.json"
 $benchmarkPath = Join-Path $runDir "benchmark.csv"
 $summaryPath = Join-Path $runDir "summary.txt"
+$fixturePath = Join-Path $repoRoot "tests\data\fdtd_reference\ipm_2c_7p9.npz"
+
+$fixtureSessionPath = Convert-ToSessionPath $fixturePath
+$preflightSessionPath = Convert-ToSessionPath $preflightPath
+$precisionSessionPath = Convert-ToSessionPath $precisionPath
+$benchmarkSessionPath = Convert-ToSessionPath $benchmarkPath
 
 Write-Host ("GPU session output: " + $runDir)
+if ($useWsl) {
+    Write-Host ("[runtime] using WSL2 " + $wslDistribution + " CUDA environment")
+} else {
+    Write-Host "[runtime] using native Windows Python"
+}
 
 if ($Force -or -not (Test-Path -LiteralPath $preflightPath)) {
     Write-Host "[preflight] running"
-    & python -m scripts.chaos.gpu_preflight `
-        --fixture (Join-Path $repoRoot "tests\data\fdtd_reference\ipm_2c_7p9.npz") `
-        --output $preflightPath
-    $stageCode = $LASTEXITCODE
+    Invoke-SessionPython "scripts.chaos.gpu_preflight" @(
+        "--fixture", $fixtureSessionPath,
+        "--output", $preflightSessionPath
+    )
+    $stageCode = $script:LastSessionPythonExitCode
     if ($stageCode -ne 0) {
         Write-Host ("[preflight] FAILED with exit code " + $stageCode)
         exit $stageCode
@@ -44,10 +86,11 @@ if ($preflight.status -ne "PASS") {
 
 if ($Force -or -not (Test-Path -LiteralPath $precisionPath)) {
     Write-Host "[precision] running"
-    & python -m scripts.chaos.measure_kernel_precision `
-        --jax-device gpu `
-        --output $precisionPath
-    $stageCode = $LASTEXITCODE
+    Invoke-SessionPython "scripts.chaos.measure_kernel_precision" @(
+        "--jax-device", "gpu",
+        "--output", $precisionSessionPath
+    )
+    $stageCode = $script:LastSessionPythonExitCode
     if ($stageCode -ne 0) {
         Write-Host ("[precision] FAILED with exit code " + $stageCode)
         exit $stageCode
@@ -64,9 +107,10 @@ if ($precision.verdict -ne "GO") {
 
 if ($Force -or -not (Test-Path -LiteralPath $benchmarkPath)) {
     Write-Host "[benchmark] running"
-    & python -m scripts.chaos.benchmark_batched_fdtd `
-        --output $benchmarkPath
-    $stageCode = $LASTEXITCODE
+    Invoke-SessionPython "scripts.chaos.benchmark_batched_fdtd" @(
+        "--output", $benchmarkSessionPath
+    )
+    $stageCode = $script:LastSessionPythonExitCode
     if ($stageCode -ne 0) {
         Write-Host ("[benchmark] FAILED with exit code " + $stageCode)
         exit $stageCode
