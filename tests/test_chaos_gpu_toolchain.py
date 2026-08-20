@@ -16,6 +16,17 @@ from scripts.chaos.run_guarcello_jc_phase5 import (
 
 ROOT = Path(__file__).resolve().parents[1]
 
+def test_gpu_session_modules_are_importable() -> None:
+    from scripts.chaos import (
+        benchmark_batched_fdtd,
+        gpu_preflight,
+        measure_kernel_precision,
+    )
+
+    assert benchmark_batched_fdtd is not None
+    assert gpu_preflight is not None
+    assert measure_kernel_precision is not None
+
 
 def _relative(first: np.ndarray, second: np.ndarray) -> float:
     numerator = float(np.linalg.norm(np.asarray(first) - np.asarray(second)))
