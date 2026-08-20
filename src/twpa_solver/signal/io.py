@@ -100,6 +100,11 @@ def csv_header() -> list[str]:
         "vout_on_imag",
         "vout_off_real",
         "vout_off_imag",
+        "qe_signal",
+        "qe_ideal_signal",
+        "qe_ratio",
+        "qe_unitarity_residual",
+        "qe_sidebands_summed",
     ]
 
 
@@ -121,6 +126,11 @@ def result_to_csv_row(r: GainResult) -> list[Any]:
         r.vout_on.imag,
         r.vout_off.real,
         r.vout_off.imag,
+        r.qe_signal,
+        r.qe_ideal_signal,
+        r.qe_ratio,
+        r.qe_unitarity_residual,
+        r.qe_sidebands_summed,
     ]
 
 

@@ -42,19 +42,23 @@ def plot_candidate_s21_bandwidth(
     title: str | None = None,
     *,
     drop_db: float = 3.0,
+    qe_ratio: np.ndarray | None = None,
     save_pdf: bool = False,
     save_svg: bool = False,
 ) -> None:
-    """Plot swept S21 and the ideal quantum-efficiency trace.
+    """Plot swept S21 and the quantum-efficiency trace.
 
     ``band`` is the dict from ``metrics.minus3db_band`` (or None). The annotation
     reports the map's own trailing gain (``meta['map_gain_db']``) next to the
     swept peak so a needle that the sweep under-resolves is still obvious.
 
-    The generic gain-map sweep stores the scalar S21 response, rather than the
-    full photon-ladder scattering row required by ``calc_qe``. The lower panel
-    therefore shows ``calc_qe_ideal`` evaluated from S21 and labels it as the
-    ideal quantum-efficiency limit.
+    ``qe_ratio`` is ``qe_signal / qe_ideal_signal`` per frequency, produced by
+    ``run_gain_sweep(quantum_efficiency=True)``. Computing it needs the full
+    photon-ladder scattering row, so a sweep run without that flag stores only
+    the scalar S21 response; the panel then falls back to ``calc_qe_ideal``
+    evaluated from S21 and says so in the legend. The two are not the same
+    quantity: ``calc_qe_ideal`` is an upper bound fixed by \\|S21\\| alone,
+    while the ratio measures how close the design sits to that bound.
     """
     fig, (ax, ax_qe) = plt.subplots(
         2,
@@ -128,13 +132,24 @@ def plot_candidate_s21_bandwidth(
     ax.text(0.03, 0.97, "\n".join(lines), transform=ax.transAxes, va="top", ha="left",
             fontsize=9, bbox={"boxstyle": "round,pad=0.35", "fc": "white", "alpha": 0.85})
 
-    gain_amplitude = np.power(10.0, np.asarray(gain_db, dtype=float) / 20.0)
-    qe_ideal = np.asarray(calc_qe_ideal(gain_amplitude), dtype=float)
-    ax_qe.plot(freq_ghz, qe_ideal, color="#2ca25f", lw=1.6,
-               label="Ideal quantum efficiency")
+    if qe_ratio is not None and np.any(np.isfinite(qe_ratio)):
+        qe_ratio = np.asarray(qe_ratio, dtype=float)
+        ax_qe.plot(freq_ghz, qe_ratio, color="#2ca25f", lw=1.6,
+                   label=r"QE / QE$_{\mathrm{ideal}}$")
+        ax_qe.axhline(1.0, color="#7f7f7f", ls="--", lw=1.0, alpha=0.8)
+        ax_qe.set_ylabel(r"QE / QE$_{\mathrm{ideal}}$")
+        # The ratio exceeds 1 exactly when the solved row carries less idler
+        # than unitarity requires, so the axis must not clip that away.
+        top = max(1.05, float(np.nanmax(qe_ratio)) * 1.05)
+        ax_qe.set_ylim(0.0, top)
+    else:
+        gain_amplitude = np.power(10.0, np.asarray(gain_db, dtype=float) / 20.0)
+        qe_ideal = np.asarray(calc_qe_ideal(gain_amplitude), dtype=float)
+        ax_qe.plot(freq_ghz, qe_ideal, color="#2ca25f", lw=1.6,
+                   label="Ideal quantum efficiency (no full-row QE in sweep)")
+        ax_qe.set_ylabel("Ideal QE")
+        ax_qe.set_ylim(0.0, 1.05)
     ax_qe.set_xlabel(r"Signal Frequency $f_s$ (GHz)")
-    ax_qe.set_ylabel("Ideal QE")
-    ax_qe.set_ylim(0.0, 1.05)
     ax_qe.minorticks_on()
     ax_qe.grid(which="major", alpha=0.5, linewidth=1.2)
     ax_qe.grid(which="minor", alpha=0.25, linewidth=0.6)

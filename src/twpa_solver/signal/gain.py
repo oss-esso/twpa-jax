@@ -50,3 +50,14 @@ class GainResult:
     gain_vs_pumpdiag_db: float
     idler_power_rel_to_signal_off: float | None
     idler_power_rel_to_signal_off_db: float | None
+
+    # Full-row quantum efficiency, populated only when the sweep is asked for
+    # it (it costs one extra Schur solve per sideband). ``qe_ratio`` is
+    # qe_signal / qe_ideal_signal; read it together with
+    # ``qe_unitarity_residual``, which is 1.0 for a lossless non-degenerate
+    # amplifier and whose excess is what drives the ratio above one.
+    qe_signal: float | None = None
+    qe_ideal_signal: float | None = None
+    qe_ratio: float | None = None
+    qe_unitarity_residual: float | None = None
+    qe_sidebands_summed: int | None = None

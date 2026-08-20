@@ -53,15 +53,13 @@ import numpy as np
 import scipy.sparse as sp
 
 from twpa_solver.core.circuit import load_circuit
-from twpa_solver.core.linear import port_s_from_unit_current_response
 from twpa_solver.signal.gamma import build_khat, compute_gamma_hat
-from twpa_solver.signal.floquet import (
-    build_signal_schur_partition,
-    sideband_list,
-    solve_gain_one_schur,
-)
+from twpa_solver.signal.floquet import sideband_list
 from twpa_solver.signal.io import load_pump
-from twpa_solver.signal.quantum_efficiency import calc_qe, calc_qe_ideal
+from twpa_solver.signal.qe_row import (
+    build_full_signal_row as build_signal_row_ladder,
+    reduce_signal_row,
+)
 
 OUTDIR = Path("outputs/exp19_calcqe_validation")
 
@@ -129,6 +127,10 @@ def build_full_signal_row(case: DesignCase) -> tuple[list[int], np.ndarray]:
     S_classical[n] = response at signal output from excitation at sideband n.
     Converted to the ladder basis via Manley-Rowe reweighting relative to the
     signal frequency: S_ladder[n] = S_classical[n] * sqrt(freq[n]/freq_signal).
+
+    The construction itself now lives in ``twpa_solver.signal.qe_row`` so the
+    production sweep and this experiment cannot drift apart; this function only
+    loads the case and forwards it.
     """
     circuit = load_circuit(case.circuit_dir)
     pump = load_pump(case.pump_dir, fallback_pump_freq_ghz=case.pump_freq_ghz)
@@ -144,75 +146,38 @@ def build_full_signal_row(case: DesignCase) -> tuple[list[int], np.ndarray]:
         circuit.Bphi @ sp.diags(gamma_off, offsets=0, format="csr") @ circuit.Bphi.T
     ).astype(np.complex128).tocsr()
 
-    source_index = circuit.port_to_index[case.source_port]
-    out_index = circuit.port_to_index[case.out_port]
-
-    schur_part = build_signal_schur_partition(
-        circuit, pump.omega_p, case.signal_ghz, case.sidebands,
-        source_index, out_index, loss_model="current_complex_c",
+    return build_signal_row_ladder(
+        circuit=circuit, khat=khat, khat_off_0=khat_off_0,
+        omega_p=pump.omega_p, pump_freq_ghz=case.pump_freq_ghz,
+        signal_ghz=case.signal_ghz, sidebands=case.sidebands,
+        signal_m=case.signal_m,
+        source_index=circuit.port_to_index[case.source_port],
+        out_index=circuit.port_to_index[case.out_port],
+        source_port=case.source_port, out_port=case.out_port,
+        z0_ohm=case.z0_ohm,
     )
-
-    def s_entry(v_out: complex) -> complex:
-        return port_s_from_unit_current_response(
-            v_out, source_port=case.source_port, out_port=case.out_port,
-            z0_ohm=case.z0_ohm,
-        )
-
-    other_m = next(m for m in ms if m != case.signal_m)
-    s_classical = np.zeros(len(ms), dtype=np.complex128)
-    for i, n in enumerate(ms):
-        if n == case.signal_m:
-            r = solve_gain_one_schur(
-                circuit=circuit, khat=khat, khat_off_0=khat_off_0,
-                omega_p=pump.omega_p, signal_ghz=case.signal_ghz,
-                sidebands=case.sidebands, signal_m=n, idler_m=other_m,
-                source_index=source_index, out_index=out_index,
-                source_current_a=1.0, source_port=case.source_port,
-                out_port=case.out_port, z0_ohm=case.z0_ohm,
-                include_baselines=False, schur_part=schur_part,
-            )
-            s_classical[i] = s_entry(r.vout_on)
-        else:
-            r = solve_gain_one_schur(
-                circuit=circuit, khat=khat, khat_off_0=khat_off_0,
-                omega_p=pump.omega_p, signal_ghz=case.signal_ghz,
-                sidebands=case.sidebands, signal_m=n, idler_m=case.signal_m,
-                source_index=source_index, out_index=out_index,
-                source_current_a=1.0, source_port=case.source_port,
-                out_port=case.out_port, z0_ohm=case.z0_ohm,
-                include_baselines=False, schur_part=schur_part,
-            )
-            s_classical[i] = s_entry(r.vout_idler)
-
-    freq_signal = case.signal_ghz
-    freqs_in = np.array(
-        [abs(case.signal_ghz + n * case.pump_freq_ghz) for n in ms]
-    )
-    s_ladder = s_classical * np.sqrt(freqs_in / freq_signal)
-    return ms, s_ladder
 
 
 def validate_case(case: DesignCase) -> dict[str, object]:
     ms, s_row = build_full_signal_row(case)
-    sig_idx = ms.index(case.signal_m)
-
-    qe_row = calc_qe(s_row.reshape(1, -1))[0]
-    qe_signal = float(qe_row[sig_idx])
-    qe_ideal_signal = float(
-        calc_qe_ideal(np.array([[s_row[sig_idx]]]))[0, 0]
+    reduced = reduce_signal_row(
+        ms, s_row, signal_m=case.signal_m, idler_m=case.idler_m,
     )
-    efficiency = qe_signal / qe_ideal_signal if qe_ideal_signal > 0 else float("nan")
-
     return {
         "case": case.name,
         "signal_ghz": case.signal_ghz,
-        "n_sidebands_summed": len(ms),
-        "s_ss_abs": float(abs(s_row[sig_idx])),
-        "gain_db_signal": float(20.0 * np.log10(max(abs(s_row[sig_idx]), 1e-300))),
-        "qe_signal": qe_signal,
-        "qe_ideal_signal": qe_ideal_signal,
-        "efficiency_qe_over_ideal": efficiency,
-        "qe_signal_leq_ideal": bool(qe_signal <= qe_ideal_signal + 1e-9),
+        "n_sidebands_summed": reduced.sidebands_summed,
+        "s_ss_abs": reduced.s_ss_abs,
+        "gain_db_signal": float(
+            20.0 * np.log10(max(reduced.s_ss_abs, 1e-300))
+        ),
+        "qe_signal": reduced.qe_signal,
+        "qe_ideal_signal": reduced.qe_ideal_signal,
+        "efficiency_qe_over_ideal": reduced.qe_ratio,
+        "unitarity_residual": reduced.unitarity_residual,
+        "qe_signal_leq_ideal": bool(
+            reduced.qe_signal <= reduced.qe_ideal_signal + 1e-9
+        ),
     }
 
 

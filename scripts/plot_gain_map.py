@@ -90,6 +90,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--out-port", type=int, default=2)
     parser.add_argument("--sidebands", type=int, default=6)
     parser.add_argument("--gamma-nt", type=int, default=96)
+    parser.add_argument(
+        "--no-quantum-efficiency", action="store_true",
+        help="Skip the full-row QE/QE_ideal trace on candidate S21 plots. The "
+             "ratio needs one extra Schur solve per sideband at every sweep "
+             "point; without it the panel falls back to the QE_ideal bound.",
+    )
     parser.add_argument("--overwrite-sweeps", action="store_true",
                         help="Re-run candidate sweeps even if gain_sweep.csv exists.")
     return parser
@@ -173,6 +179,7 @@ def _run_candidate_sweep(
             source_port=args.source_port,
             out_port=args.out_port,
             include_baselines=False,
+            quantum_efficiency=not args.no_quantum_efficiency,
         )
     except Exception as exc:
         print(f"  sweep failed for point {int(row['point_index'])}: {exc}")
@@ -183,15 +190,27 @@ def _run_candidate_sweep(
     return csv_out
 
 
-def _load_sweep(path: Path) -> tuple[np.ndarray, np.ndarray]:
+def _load_sweep(path: Path) -> tuple[np.ndarray, np.ndarray, np.ndarray | None]:
+    """Return solved sweep frequencies, S21 gain, and the QE ratio if present.
+
+    ``qe_ratio`` is only written by ``run_gain_sweep(quantum_efficiency=True)``,
+    so sweeps produced before that flag existed return None for it.
+    """
     freqs: list[float] = []
     gains: list[float] = []
+    ratios: list[float] = []
     with path.open(encoding="utf-8") as handle:
         for record in csv.DictReader(handle):
-            if record.get("status") == "VALID_SOLVED":
-                freqs.append(float(record["signal_ghz"]))
-                gains.append(float(record["gain_db"]))
-    return np.asarray(freqs, dtype=float), np.asarray(gains, dtype=float)
+            if record.get("status") != "VALID_SOLVED":
+                continue
+            freqs.append(float(record["signal_ghz"]))
+            gains.append(float(record["gain_db"]))
+            raw = record.get("qe_ratio")
+            ratios.append(float(raw) if raw not in (None, "") else float("nan"))
+    ratio_array = np.asarray(ratios, dtype=float)
+    if not np.any(np.isfinite(ratio_array)):
+        ratio_array = None
+    return np.asarray(freqs, dtype=float), np.asarray(gains, dtype=float), ratio_array
 
 
 def fit_gain_candidates(
@@ -231,7 +250,7 @@ def fit_gain_candidates(
         csv_out = _run_candidate_sweep(row, args, sweep_dir, center_ghz=fp)
         if csv_out is None:
             continue
-        freq, gain = _load_sweep(csv_out)
+        freq, gain, qe_ratio = _load_sweep(csv_out)
         if freq.size < 2:
             print(f"  skip {label}: <2 solved sweep points")
             continue
@@ -248,7 +267,7 @@ def fit_gain_candidates(
             freq, gain, meta, band,
             candidates_dir / f"candidate_{label}_s21.png",
             title=f"Signal Gain S21",
-            drop_db=config.operation_drop_db, **save_kwargs,
+            drop_db=config.operation_drop_db, qe_ratio=qe_ratio, **save_kwargs,
         )
         if band is None:
             print(f"  {label}: Pp={pp:.3f} dBm fp={fp:.4f} GHz | band undefined")
