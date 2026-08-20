@@ -35,7 +35,7 @@ contains the legacy `Element` IR, matrix assembly, and coupler physics that
 `Circuit` composes; it is not the primary design-authoring surface.
 
 The legacy builder layer remains documented below because it is still used by
-solver-facing compatibility workflows. There are four builders and two
+solver-facing compatibility workflows. There are six circuit builders and two
 shared support modules.
 
 | Module | Produces | Devices |
@@ -43,9 +43,17 @@ shared support modules.
 | `ipm.py` | on-disk artifact directory | IPM / 2c / 3c / 7c coupled-line JTWPA |
 | `jc_doc.py` | on-disk artifact directory | JPA, DPJPA, FXJPA, JTWPA, FQJTWPA, FQJTWPA_diss, FXJTWPA |
 | `le_gal_2025.py` | in-memory `CircuitMatrices` | effective-SNAIL line (Le Gal 2025 benchmark) |
+| `kimpa.py` | in-memory `CircuitMatrices` | lumped KIMPA reflection-amplifier fixtures |
+| `complexity_ladder.py` | in-memory `CircuitMatrices`, optional directory | controlled ablation rungs (`linear`, `single_jj`, `jtl`, `ipm_section`) |
 | `scattered.py` | on-disk artifact directory | copy of an existing 2c/3c design with Lj scatter |
 | `profiles.py` | per-cell value arrays | support module, no circuit knowledge |
 | `scatter.py` | per-cell multiplicative factors | support module, no circuit knowledge |
+
+The remaining modules in `src/twpa_solver/builders/` are shared machinery
+rather than device builders: `blocks.py`, `primitives.py`, and `registry.py`
+supply the generic topology-block boundary used by the declarative compiler,
+`coupler.py` and `cpw_coupler.py` hold the directional-coupler physics, and
+`matrices.py` re-exports the stamping entry point.
 
 ## The matrix convention every builder targets
 
@@ -83,14 +91,27 @@ must be applied at netlist level before the stamp.
 `load_circuit` reads arrays by name and ignores unknown keys, so builders may
 add fields without breaking existing consumers.
 
+The declarative compiler writes the same directory under generic names
+(`elements.csv`, `ports.csv`, `arrays.npz`, `design_resolved.json`,
+`design_summary.json`), and also emits `ipm_arrays.npz` for compatibility.
+`load_circuit` accepts either spelling.
+
 ```python
 from twpa_solver.core import load_circuit
 
-circuit = load_circuit("designs/ipm_2c_fixed")
-circuit.node_count      # 6136
+# Any directory produced by a builder or by `python -m twpa_solver.design`.
+circuit = load_circuit("outputs/ipm_2c_passive")
+circuit.node_count      # 6096
 circuit.branch_count    # 2508
 circuit.port_to_index   # {1: ..., 2: ..., 3: ..., 4: ...}
 ```
+
+**`designs/` is source-only in the tracked tree.** It holds YAML sources,
+`designs/python/`, and `designs/technology/`, and no circuit directories are
+checked in. Build into `outputs/` and load from there. A `designs/ipm_2c_fixed`
+or `designs/ipm_3c_fixed` on a local machine is an untracked build artifact
+(`.gitignore`), so its contents depend on who built it and with which coupler
+mode — see [Two 2c builds](#two-2c-builds) below before comparing against one.
 
 ---
 
@@ -147,6 +168,11 @@ available for compatibility and controlled comparisons.
 
 `ideal` still produces a *distributed* coupler (many short cells), so it stays
 broadband, unlike a single lumped cell that only matches at one frequency.
+
+**The modes differ in coupler length, not only in component values.** Measured
+on `IPMParams()`, `auto` and `ideal` both emit 740 coupler sections while
+`optimize` emits 760, which changes the node and element count of the whole
+device. See [Two 2c builds](#two-2c-builds).
 
 ## Per-cell profiles
 
@@ -358,11 +384,15 @@ from twpa_solver.builders.profiles import parse_profile_shorthand as shorthand
 from twpa_solver.builders.scatter import ScatterSpec
 
 build_variant_design(
-    "designs/ipm_2c_fixed", "outputs/ipm_2c_variant",
+    "outputs/ipm_2c", "outputs/ipm_2c_variant",
     lj_segments=[shorthand("all:linear:123.9p->140p")],
     lj_scatter=ScatterSpec(0.01), seed=3, overwrite=True,
 )
 ```
+
+The source must be an `ipm.py` artifact directory: the rebuild reads
+`ipm_summary.json["params"]` and gates against `ipm_elements.csv`. Declarative
+compiler output does not carry those two files and is not a valid source.
 
 `assert_source_topology` gates this. It runs on a **nominal** rebuild —
 comparing the profiled netlist against the source would reject every real
@@ -372,9 +402,78 @@ mismatch means the stored parameters do not describe the artifact.
 
 The coupler mode is not recorded in the summary, so `coupler_mode="auto"`
 (default) tries `auto`, `ideal`, `optimize` in turn and records the winner as
-`source_coupler_mode`. All eight directories under `designs/` currently pass;
-`ipm_2c_fixed` matches at 16312/16312 elements with `C/G/K/Bphi` maxdiff 0.0,
-under `auto`. Passing an explicit wrong mode still raises.
+`source_coupler_mode`. Passing an explicit wrong mode still raises. Check a
+newly generated source directory before relying on it as a variant base.
+
+<a id="two-2c-builds"></a>
+## The current 2c build, and the retired one
+
+A 2c design built today — from `designs/ipm_2c_line_scoped.yaml` through the
+declarative compiler, or from `IPMParams()` through `ipm.py` — has:
+
+| quantity | value |
+| --- | ---: |
+| nodes | 6096 |
+| elements | 16192 |
+| Josephson branches | 2508 |
+| `jtl_cg` ground capacitors | 2514 |
+| coupler sections | 740 |
+| ports | 1, 2, 3, 4 |
+
+`tests/data/ipm_2c_reference/` is that build and is the tracked parity
+reference. The declarative compiler and the legacy `ipm.py` builder reproduce
+it element for element: 16192 elements with identical names, nodes, and kinds,
+and `C`/`G`/`K`/`Bphi` agreeing bit for bit between the two authoring routes.
+
+One caveat on the stored reference. `tests/test_design_compiler.py::
+test_ipm_yaml_matrices_match_legacy_and_stored_structure` compares the rebuilt
+matrices against the stored `.npz` with exact inequality
+(`(right != stored).nnz == 0`), and `--coupler-mode auto` reaches its coupler
+geometry through an L-BFGS-B search whose last bits are not reproducible across
+SciPy and BLAS builds. On a machine where the optimizer lands differently the
+gate fails on round-off alone: measured here at `2.4e-11` worst relative
+deviation on one `mutual_inductor_k` value, `2.4e-14` relative on `C` and
+`8.3e-12` relative on `K`, with **zero** structural differences. Read a failure
+of that assertion as an optimizer-reproducibility question and check the
+magnitude before treating it as a circuit change.
+
+Documentation and session notes written before this describe a **6136-node /
+16312-element** build with 760 coupler sections. **That build is the
+`--coupler-mode optimize` build**, and it is still reproducible today. The
+coupler mode alone decides which one you get, measured on `IPMParams()`:
+
+| `--coupler-mode` | nodes | elements | coupler sections | `mutual_k` |
+| --- | ---: | ---: | ---: | ---: |
+| `auto` | 6096 | 16192 | 740 | 738 |
+| `ideal` | 6096 | 16192 | 740 | 738 |
+| `optimize` | **6136** | **16312** | **760** | 758 |
+
+So `auto` and `optimize` do not merely realize the coupler differently — they
+produce couplers of **different length**, and therefore different node and
+element counts. `auto` and `ideal` agree on structure and differ only in
+component values.
+
+Older notes attribute the 6136 build to a `--coupler-mode cached` path. That
+mode is indeed gone (`make_coupler_discrete` raises on it, and `COUPLER_MODES`
+is `("auto", "ideal", "optimize")`), but its structure is what `optimize`
+emits. Value-level identity against the original artifact cannot be checked,
+because that artifact is no longer on disk.
+
+The difference between the two builds is a 20-cell-shorter directional
+coupler; the JJ array, ports, and drive topology are identical, and pump-off
+S-parameters agree to about 1% of input power. Treat them as the same device.
+**Quote 6096 / 16192, and record the coupler mode alongside any result.**
+
+`tests/test_ipm_role_tags.py` and `tests/test_variant_design.py` gate against a
+local `designs/ipm_2c_fixed`, which is gitignored. On a checkout without it,
+`test_ipm_role_tags.py` **skips all eleven tests** rather than failing — do not
+read that green run as a passed byte-identity gate. On a checkout that has it,
+both files compare element values with exact equality and will fail on the
+optimizer round-off described above unless the directory was built by the same
+SciPy/BLAS stack. `assert_source_topology` reports this as `source topology
+mismatch`, with an `auto` reason differing in the twelfth significant digit;
+check the magnitude in the message before concluding the stored parameters are
+wrong.
 
 ---
 
@@ -488,7 +587,60 @@ that path was biased by 12.041 dB.
 
 ---
 
-# 4. `scattered.py` — legacy Lj-only artifact copy
+# 4. `kimpa.py` — lumped KIMPA reflection fixtures
+
+Returns a `CircuitMatrices` directly; no artifact directory. This is the
+builder behind `workflows/run_kimpa_gain_map_and_plots.py`.
+
+```python
+from twpa_solver.builders.kimpa import KIMPA_FIXTURES, build_kimpa
+
+circuit = build_kimpa(fixture="kimpa_fabricated_nominal")
+sorted(KIMPA_FIXTURES)
+# ['kimpa_fabricated_nominal', 'kimpa_hung_2025',
+#  'kimpa_ideal_synthesis', 'kimpa_measured_seed']
+```
+
+Each fixture fixes a kinetic inductance `Lk`, a geometric inductance `Lg`, and
+the three transmission-line sections that set the resonance. An unknown
+fixture name raises and lists the valid ones.
+
+`add_transmission_line_ladder` builds one symmetric Pi-discretized section and
+is reusable outside KIMPA.
+
+The current fabricated fixture is a **one-port reflection** device, so it has
+`S11` and no `S21`. The KIMPA workflow reports its pump axis as peak total
+branch current over critical current rather than dBm, because the external
+pump-line attenuation is unknown.
+
+---
+
+# 5. `complexity_ladder.py` — controlled ablation rungs
+
+Small circuits that deliberately reuse the production netlist and stamping
+path, for isolating high-drive Josephson behaviour from device complexity.
+
+| rung | builder | contents |
+| --- | --- | --- |
+| `linear` | `build_linear_fixture` | linear, with an explicit `Lj` in `K` |
+| `single_jj` | `build_single_jj` | one nonlinear branch |
+| `jtl` | `build_uniform_jtl(n_cells)` | uniform Josephson transmission line |
+| `ipm_section` | `build_ipm_single_nonlinear_section` | one IPM nonlinear section |
+
+```python
+from twpa_solver.builders.complexity_ladder import build_and_save_ladder
+
+circuit = build_and_save_ladder("outputs/ladder_jtl", "jtl", n_cells=64)
+```
+
+`n_cells` is required for `jtl` and optional for `ipm_section`. Rung 0 is the
+only one that stamps a Josephson inductance into `K`; every nonlinear rung
+stamps `Cj` only and lets the loaded `JosephsonBranchLaw` supply `Ic sin(phi)`,
+exactly as the production builders do.
+
+---
+
+# 6. `scattered.py` — legacy Lj-only artifact copy
 
 Copies an existing design directory and applies multiplicative Gaussian scatter
 to `Lj` only, editing `ipm_arrays.npz` and `ipm_elements.csv` in place. At
@@ -549,14 +701,23 @@ meta["factor_std"], meta["clip_hits"], meta["factor_digest"]
 - Real IPM / 2c hardware, or anything needing per-cell control → `ipm.py`
 - Regression fixtures and compression-campaign devices → `jc_doc.py`
 - Le Gal benchmark → `le_gal_2025.py`
+- KIMPA reflection fixtures → `kimpa.py`
+- Isolating a high-drive effect from device complexity → `complexity_ladder.py`
 - Reproducing an old Lj-scatter map exactly → `scattered.py`
 
 ## Cautions
 
-- **Live designs are `designs/*`.** Circuit directories under `outputs/` are
-  stale; all of exp20–exp31 compression ran on a stale 2c circuit.
+- **`designs/` is source-only; build into `outputs/`.** The tracked tree holds
+  YAML sources, `designs/python/`, and `designs/technology/` — no circuit
+  directories. A circuit directory is a build artifact, so record which build
+  produced any result: exp20–exp31 compression ran on a 2c circuit that is not
+  the current one.
+- **Always record the coupler mode with a 2c result.** `auto` and `ideal` give
+  6096 nodes / 16192 elements; `optimize` gives 6136 / 16312, which is what the
+  6136 figures in older notes refer to.
 - **Coupler modes are not interchangeable.** `auto`, `ideal`, and `optimize`
-  produce different coupler realizations when explicitly selected.
+  produce different coupler realizations, and `optimize` produces a coupler of
+  different *length* — so it changes the node and element count too.
 - **Pump injection is port 4** for the gain-map 2c wiring, while signal
   scattering is 1 → 2.
 - **JC is not a physical reference** — see the `jc_doc.py` section.
@@ -570,7 +731,7 @@ meta["factor_std"], meta["clip_hits"], meta["factor_digest"]
 | --- | --- |
 | `tests/test_component_profiles.py` | shape kernels, selectors, domain, AST allowlist, serialization |
 | `tests/test_component_scatter.py` | determinism, stream independence, legacy parity, relative semantics |
-| `tests/test_ipm_role_tags.py` | role counts, cell ordering, byte identity vs `designs/ipm_2c_fixed` |
+| `tests/test_ipm_role_tags.py` | role counts, cell ordering, byte identity vs a local `designs/ipm_2c_fixed` — **all eleven skip when that directory is absent**, which is the normal state of a fresh checkout |
 | `tests/test_ipm_component_plan.py` | plasma frequency, Cg mapping, block profiles, back-compat |
 | `tests/test_variant_design.py` | topology gate, coupler-mode detection, regenerability |
 | `tests/test_builder_imports.py` | import surface |

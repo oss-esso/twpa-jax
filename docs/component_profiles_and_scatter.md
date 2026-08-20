@@ -46,11 +46,11 @@ matching them exactly.
 
 `custom` expressions are parsed with `ast` and checked against an allowlist
 before evaluation: arithmetic operators, `t`, `pi`, `e`, and direct calls to a
-fixed set of numpy functions (`sin`, `cos`, `tan`, `tanh`, `exp`, `log`,
-`sqrt`, `abs`, `floor`, `ceil`, `sign`, `minimum`, `maximum`, and the inverse
-trigonometric functions). Attribute access, subscripting, comprehensions,
-keyword arguments, and any other name are rejected. Evaluation runs with empty
-builtins.
+fixed set of nineteen numpy functions — `sin`, `cos`, `tan`, `tanh`, `sinh`,
+`cosh`, `arcsin`, `arccos`, `arctan`, `exp`, `log`, `log10`, `sqrt`, `abs`,
+`sign`, `floor`, `ceil`, `minimum`, `maximum`. Attribute access, subscripting,
+comprehensions, keyword arguments, and any other name are rejected. Evaluation
+runs with empty builtins.
 
 ## Specifying a profile
 
@@ -142,7 +142,9 @@ Newly generated variant sources should be checked before use; explicit
 
 `tests/test_component_profiles.py`, `tests/test_component_scatter.py`,
 `tests/test_ipm_role_tags.py`, `tests/test_ipm_component_plan.py`,
-`tests/test_variant_design.py` (95 tests). Each gate was verified by mutation:
+`tests/test_variant_design.py` (97 tests; the eleven in `test_ipm_role_tags.py`
+skip unless a local `designs/ipm_2c_fixed` is present). Each gate was verified
+by mutation:
 removing the `Cg` halving, making `Cj` constant, giving `Cj`/`Cg` one stream,
 breaking endpoint anchoring to `i/N`, and running the variant gate on the
 variant netlist all turn the suite red.

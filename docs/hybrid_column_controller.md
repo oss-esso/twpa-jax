@@ -20,9 +20,12 @@ TD results remain distinct.
 
 The controller stores compact records and writes one JSON summary. H1 writes
 periodic restart checkpoints and only the projected TD seed for a successful
-PERIOD_1 transfer. Defaults are two TD bridges, three future boundary
-refinements, and 200 TD periods per bridge. The validation CLI is intentionally
-separate from the overnight map and does not launch it automatically.
+PERIOD_1 transfer. `HybridColumnBudget` defaults are two TD bridges
+(`max_td_bridges`), three future boundary refinements
+(`max_boundary_refinements`), and **200 TD periods for the whole column**
+(`max_td_periods`) — that budget is accumulated across bridges, not granted
+per bridge. The validation CLI is intentionally separate from the overnight
+map and does not launch it automatically.
 
 ## Verification
 
@@ -30,9 +33,15 @@ The controller unit tests cover direct HB progression, TD-to-HB restart,
 persistent physical-boundary stopping, and unresolved-budget handling. The
 production smoke command is:
 
-```text
-python scripts/run_hybrid_column.py --freq-ghz 7.7 --outdir outputs/hybrid_77
+```powershell
+python scripts/run_hybrid_column.py --freq-ghz 7.7 `
+  --circuit-dir outputs/ipm_2c_passive --outdir outputs/hybrid_77
 ```
+
+`--circuit-dir` still defaults to `designs/ipm_2c_fixed`, which is a gitignored
+local artifact and is absent from a fresh checkout. Pass a directory you built
+yourself — see [`workflows.md`](workflows.md) §2 — rather than relying on that
+default.
 
 The full 7.0/7.7 validation campaign remains a separate run; no overnight map
 is started by this implementation.

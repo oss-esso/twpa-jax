@@ -105,6 +105,28 @@ Continuation exists because a cold Newton solve at full pump power usually
 diverges. The solver walks the source amplitude up from zero, warm-starting
 each step.
 
+`solve_arclength` normalizes its tangent with a state-scale-derived metric.
+An unscaled Euclidean metric mixing node flux (order `1e-13` Wb on a real
+device) with the dimensionless source scale makes the state's contribution
+negligible, which silently degrades the method to natural-parameter
+continuation and makes fold detection structurally impossible. Pass
+`rescale_every` on a stiff device so the metric tracks the branch.
+
+`pump/singularity.py` holds the fold instrumentation that reads out of a
+continuation run: `jacobian_min_eigenvalue` (shift-invert Arnoldi around the
+exact real-packed Jacobian), `jacobian_det_signature`, and
+`bordered_conditioning`, which discriminates a fold from a branch point —
+a fold leaves the bordered system well conditioned even though `J` is
+singular, a rank-2 branch point does not. `solve_arclength`'s `on_step` hook
+feeds all three at every accepted step; a single endpoint measurement cannot
+detect a fold and must not be used.
+
+Related modules not covered here: `pump/bifurcation.py`,
+`pump/neimark_sacker.py`, and `pump/periodic_branch.py` carry the
+bifurcation-tracking and period-N scaffolding, and `stability/` holds the
+time-domain monodromy route. `core/rcsj.py` and `core/kinetic.py` hold
+alternative branch physics.
+
 ### Preconditioners
 
 Set through `NewtonKrylovSettings.preconditioner`. The block-diagonal modes are
@@ -280,4 +302,6 @@ script. The workflows are thin on purpose.
 - [`circuit_builders.md`](circuit_builders.md) — every builder in detail
 - [`component_profiles_and_scatter.md`](component_profiles_and_scatter.md) — per-cell parameter control
 - [`workflows.md`](workflows.md) — the end-to-end entry points
-- [`pump_current_conversions.tex`](pump_current_conversions.tex) — the two pump-current conventions
+- [`design_format.md`](design_format.md) — the declarative YAML adapter
+- [`development/circuit_api.md`](development/circuit_api.md) — the Python `Circuit` authoring API
+- [`development/pump_current_conversions.tex`](development/pump_current_conversions.tex) — the two pump-current conventions
